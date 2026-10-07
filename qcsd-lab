@@ -5694,6 +5694,7 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
   fi
   parallel_authority="$(realpath -e -- "$2")"
   parallel_output="$(realpath -e -- "$3")"
+  parallel_fast_container_env=()
   if [[ -L "$2" || -L "$3" || ! -f "${parallel_authority}" ||
         ! -d "${parallel_output}" ||
         "${parallel_output}" != "${ROOT}/results/"* ]]; then
@@ -5729,11 +5730,27 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
     echo "parallel formal lifecycle: recovery complete; validating scientific inputs" >&2
   fi
   if (( parallel_formal )); then
-    if ! parallel_formal_first_inputs="$(parallel_python formal-entry-inputs --authority "${parallel_authority}")"; then
+    unset QCSD_RAPID_FAST_CERTIFICATE_PATH QCSD_RAPID_FAST_CERTIFICATE_SHA256
+    if ! parallel_formal_first_inputs="$(parallel_python formal-entry-inputs --authority "${parallel_authority}" --output "${parallel_output}")"; then
       echo "parallel formal worker input validation failed before image preflight or worker birth" >&2
       exit 1
     fi
     parallel_first_campaign="$(builtin printf '%s' "${parallel_formal_first_inputs}" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["campaign_path"])')" || exit 1
+    mapfile -t parallel_fast_certificate_rows < <(builtin printf '%s' "${parallel_formal_first_inputs}" | /usr/bin/python3 -I -c '
+import json,sys
+from pathlib import Path
+value=json.load(sys.stdin)
+print(value.get("fast_launch_certificate_path", "-"))
+print(value.get("fast_launch_certificate_sha256", "-"))
+')
+    if [[ "${parallel_fast_certificate_rows[0]}" != "-" || "${parallel_fast_certificate_rows[1]}" != "-" ]]; then
+      [[ "${parallel_fast_certificate_rows[0]}" == "${parallel_output}/fast-launch-certificate.json" &&
+         "${parallel_fast_certificate_rows[1]}" =~ ^[0-9a-f]{64}$ ]] || exit 1
+      export QCSD_RAPID_FAST_CERTIFICATE_PATH="${parallel_fast_certificate_rows[0]}"
+      export QCSD_RAPID_FAST_CERTIFICATE_SHA256="${parallel_fast_certificate_rows[1]}"
+      parallel_fast_container_env=(--env "QCSD_RAPID_FAST_CERTIFICATE_PATH=${QCSD_RAPID_FAST_CERTIFICATE_PATH}"
+        --env "QCSD_RAPID_FAST_CERTIFICATE_SHA256=${QCSD_RAPID_FAST_CERTIFICATE_SHA256}")
+    fi
   elif ! parallel_first_campaign="$(parallel_python select --authority "${parallel_authority}" --output "${ROOT}")"; then
     echo "parallel campaign selection failed before image preflight or worker birth" >&2
     exit 1
@@ -7988,10 +8005,19 @@ for path in campaign_roots(root, sys.argv[2], Path(sys.argv[3])):
         rapid_scheduling_python="$(parallel_select_host_python)" || exit 1
       fi
       rapid_compatibility_rows="$("${rapid_scheduling_python}" -I -B -c '
-import json,sys
+import json,os,sys
 from pathlib import Path
 path=Path(sys.argv[1]); value=json.loads(path.read_bytes())
 sys.path.insert(0,value["runtime"]["module_root"]+"/src")
+if os.environ.get("QCSD_RAPID_FAST_CERTIFICATE_SHA256"):
+    from qcsd_lab.rapid_formal_parallel import certified_mount_roots
+    schedule,roots=certified_mount_roots(Path(sys.argv[4]),Path(sys.argv[5]),
+        os.environ["QCSD_RAPID_FAST_CERTIFICATE_SHA256"],sys.argv[3])
+    if schedule!=str(path) or value["runtime"]["execution_root"]!=sys.argv[2]:
+        raise SystemExit("fast launch schedule names another current flight")
+    print("rolling-scheduling"); print(path); print("-")
+    for root in roots: print(root)
+    sys.exit(0)
 from qcsd_lab import rapid_rolling_schedule as s
 from qcsd_lab.rapid_rolling_capture import _ref
 from qcsd_lab.rapid_operation_facts import OperationFacts
@@ -8006,7 +8032,7 @@ with context.scope():
     context.check()
 print("rolling-scheduling"); print(path); print("-")
 for root in roots: print(root)
-' "${rapid_compatibility_host}" "${ROOT}" "${image_id}")" || exit 1
+' "${rapid_compatibility_host}" "${ROOT}" "${image_id}" "${parallel_authority}" "${parallel_output}")" || exit 1
     else
     rapid_compatibility_rows="$(/usr/bin/python3 -I -c '
 import json
@@ -8276,19 +8302,28 @@ for root in sorted(roots):
       --env "QCSD_LAB_ROOT=${rapid_epoch_runtime_host}" \
       --env "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" \
       --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+      "${parallel_fast_container_env[@]}" \
       "${rapid_compatibility_args[@]}" \
       --volume "${ROOT}:/lab:ro" \
       "${rapid_epoch_mount_args[@]}" \
       --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -c '
 import json
 import sys
+from pathlib import Path
 if sys.argv[4] == "v6":
-    from qcsd_lab.rapid_rolling_capture import validate_host_launch
-    validate_host_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2], actual_image=sys.argv[3])
+    import os
+    if os.environ.get("QCSD_RAPID_FAST_CERTIFICATE_SHA256"):
+        from qcsd_lab.rapid_formal_parallel import certified_epoch_preflight
+        certified_epoch_preflight(Path(sys.argv[5]),Path(sys.argv[6]),
+            os.environ["QCSD_RAPID_FAST_CERTIFICATE_SHA256"],json.loads(sys.argv[1]),
+            sys.argv[2],sys.argv[3])
+    else:
+        from qcsd_lab.rapid_rolling_capture import validate_host_launch
+        validate_host_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2], actual_image=sys.argv[3])
 else:
     from qcsd_lab.rapid_class_epochs import validate_host_epoch_launch
     validate_host_epoch_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2], actual_image=sys.argv[3])
-' "${rapid_epoch_input}" "${rapid_capture_name}" "${image_id}" "${rapid_capture_version}"
+' "${rapid_epoch_input}" "${rapid_capture_name}" "${image_id}" "${rapid_capture_version}" "${parallel_authority}" "${parallel_output}"
   fi
   # Docker's isolated client bridge cannot forward public DNS through its
   # embedded resolver. Resolve every approved origin on a disposable ordinary
@@ -11445,6 +11480,7 @@ for root in sorted(roots): print(root)
     --env "QCSD_LAB_ROOT=${parallel_runtime_rows[0]}" \
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
     --env "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" \
+    "${parallel_fast_container_env[@]}" \
     "${parallel_mounts[@]}" --entrypoint /opt/qcsd-venv/bin/python3 \
     "${image_id}" -I -m qcsd_lab.rapid_parallel_capture preflight \
     --authority /parallel-authority.json --sha256 "${parallel_authority_sha256}"
@@ -11466,6 +11502,7 @@ put(Path(sys.argv[2])/"image-preflight.json",json.load(sys.stdin))
       --env "QCSD_LAB_ROOT=${parallel_runtime_rows[0]}" \
       --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
       --env "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" \
+      "${parallel_fast_container_env[@]}" \
       "${parallel_mounts[@]}" --entrypoint /opt/qcsd-venv/bin/python3 \
       "${image_id}" -I -m qcsd_lab.rapid_parallel_capture formal-dns \
       --authority /parallel-authority.json --index 1
@@ -11591,6 +11628,10 @@ for pair in x["pairs"]:
     replace_container_environment QCSD_CAPTURE_CLIENT_CPU "${parallel_cpu_rows[1 + parallel_index * 3]}"
     replace_container_environment QCSD_CAPTURE_ORCHESTRATOR_CPU "${parallel_cpu_rows[2 + parallel_index * 3]}"
     if (( parallel_formal )); then
+      if [[ -n "${QCSD_RAPID_FAST_CERTIFICATE_SHA256:-}" ]]; then
+        replace_container_environment QCSD_RAPID_FAST_CERTIFICATE_PATH "${QCSD_RAPID_FAST_CERTIFICATE_PATH}"
+        replace_container_environment QCSD_RAPID_FAST_CERTIFICATE_SHA256 "${QCSD_RAPID_FAST_CERTIFICATE_SHA256}"
+      fi
       parallel_prepared_arguments=()
       if [[ -n "${parallel_prepared_sha256}" ]]; then
         parallel_prepared_arguments=(--output "${parallel_output}" --prepared-sha256 "${parallel_prepared_sha256}")

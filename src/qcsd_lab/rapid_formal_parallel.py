@@ -23,6 +23,7 @@ START_TYPE = "qcsd-rapid-v5-parallel-worker-start"
 PROCESS_TYPE = "qcsd-rapid-v5-parallel-worker-process"
 RETIREMENT_TYPE = "qcsd-rapid-v5-parallel-worker-retirement"
 ACTUATOR = "parallel-formal-worker"
+FAST_CERTIFICATE_TYPE = "qcsd-formal-fast-launch-certificate-v2"
 
 
 def _index(index: int) -> None:
@@ -502,9 +503,11 @@ def resolve_dns(path: Path, index: int, *, _context=None) -> dict[str, Any]:
     """Executed in the immutable collection image for this worker's full graph."""
     from .class_acquisition import public_origin_ip_pins
     from .orchestrator import load_campaign
-    value, facts = _audit(path, _context=_context)
+    fast = _active_fast_certificate(path)
+    value, facts = _audit(path, _context=_context) if fast is None else fast[:2]
     spec, _, _, _, _, lane, _ = facts[index]
-    with _worker_context(value, index, facts[index]), shared._execution_parameter_context(value):
+    environment = None if fast is None else fast[2]["worker_inputs"][index]["environment"]
+    with _worker_context(value, index, facts[index], _environment=environment), shared._execution_parameter_context(value):
         campaign = load_campaign(spec.campaign_dir / f"{lane.campaign_name}.yml")
     origins = sorted({origin for workload in campaign.workloads
                       for origin in workload.data["preparation"]["approved_origins"]})
@@ -529,8 +532,10 @@ def image_preflight(path: Path, expected_sha: str, *, _context=None) -> dict[str
     from .rapid_operation_facts import OperationFacts
     _context = OperationFacts() if _context is None else _context
     _context.begin_action()
-    value, facts = _audit(path, _context=_context)
-    environments = [worker_environment(value, index, fact=facts[index], _context=_context) for index in range(2)]
+    fast = _active_fast_certificate(path)
+    value, facts = _audit(path, _context=_context) if fast is None else fast[:2]
+    environments = ([worker_environment(value, index, fact=facts[index], _context=_context) for index in range(2)]
+                    if fast is None else [row["environment"] for row in fast[2]["worker_inputs"]])
     spec = _effective_runtime(facts[0])
     proofs = []
     epoch_proofs = []
@@ -542,9 +547,10 @@ def image_preflight(path: Path, expected_sha: str, *, _context=None) -> dict[str
                 from . import rapid_runtime_epochs as epochs
                 from . import rapid_class_epochs as classes
                 runtime = _effective_runtime(facts[index])
-                epochs.validate_host_launch(json.loads(worker_environment(value, index, fact=facts[index])[
-                    "QCSD_RAPID_EPOCH_LAUNCH_INPUT"]), expected_campaign=lane.campaign_name,
-                    actual_image=runtime.collection_image_digest)
+                if fast is None:
+                    epochs.validate_host_launch(json.loads(worker_environment(value, index, fact=facts[index])[
+                        "QCSD_RAPID_EPOCH_LAUNCH_INPUT"]), expected_campaign=lane.campaign_name,
+                        actual_image=runtime.collection_image_digest)
                 _, proposal, _ = epochs.verify_activation(worker_spec, root, classes._child(root, intent["runtime_epoch"]))
                 proof = proposal["original_block_check"]["proof"]["base_proof"]
                 epoch_proof = None
@@ -602,15 +608,27 @@ def image_preflight(path: Path, expected_sha: str, *, _context=None) -> dict[str
     return {"authority_sha256": expected_sha, "runtime": runtime_proofs[0], "worker_plan_proofs": proofs,
             "worker_epoch_proofs": epoch_proofs, "worker_runtime_proofs": runtime_proofs, "python_runtime_receipt": installed,
             "input_files": files, "campaigns": campaigns, "approved_hostnames": sorted(hosts),
-            "formal_accepted_trace_count": 0, "scientific_credit": False}
+            "formal_accepted_trace_count": 0, "scientific_credit": False,
+            **({"fast_launch_certificate_sha256": os.environ["QCSD_RAPID_FAST_CERTIFICATE_SHA256"]}
+               if fast is not None else {})}
 
 
-def _preflight(value, output, expected_sha, *, facts=None, _context=None):
+def _preflight(value, output, expected_sha, *, facts=None, _context=None, fast=None):
     proof = shared.reopen_preflight(output, expected_sha)
     if (len(proof["worker_plan_proofs"]) != 2 or len(proof["worker_epoch_proofs"]) != 2
         or len(proof["worker_runtime_proofs"]) != 2
         or proof["worker_runtime_proofs"] != [proof["runtime"], proof["runtime"]]):
         raise ValueError("formal per-worker image plan proofs differ")
+    if fast is not None:
+        if (proof.get("fast_launch_certificate_sha256") != os.environ["QCSD_RAPID_FAST_CERTIFICATE_SHA256"]
+            or proof["authority_sha256"] != fast[2]["authority_sha256"]
+            or proof.get("scientific_credit") is not False
+            or proof.get("formal_accepted_trace_count") != 0):
+            raise ValueError("formal installed proof differs from this certified flight")
+        for index, fact in enumerate(facts):
+            if proof["worker_plan_proofs"][index] != fact[4]["image_check"]["proof"]:
+                raise ValueError("formal installed plan differs from the fully audited sealed plan")
+        return proof
     for index in range(2):
         spec, root, _, intent, _, _, _ = facts[index] if facts is not None else _lane(value, index)
         ordinary._validate_image_proof(proof["worker_plan_proofs"][index], spec, _context=_context)
@@ -659,11 +677,12 @@ def initialize(path: Path, output: Path, expected_sha: str, available: list[int]
     from .rapid_operation_facts import OperationFacts
     _context = OperationFacts() if _context is None else _context
     _context.begin_action()
-    value, facts = _audit(path, _context=_context)
+    fast = _active_fast_certificate(path)
+    value, facts = _audit(path, _context=_context) if fast is None else fast[:2]
     if shared.sha(shared.read(path)) != expected_sha:
         raise ValueError("formal authority changed before initialization")
     output = shared.regular_dir(output)
-    preflight = _preflight(value, output, expected_sha, facts=facts, _context=_context)
+    preflight = _preflight(value, output, expected_sha, facts=facts, _context=_context, fast=fast)
     dns = _dns_bindings(value, facts=facts)
     cpu = shared.select_pairs(available)
     # Validate both destinations before allocating either canonical namespace.
@@ -684,14 +703,14 @@ def initialize(path: Path, output: Path, expected_sha: str, available: list[int]
     return cpu
 
 
-def _reopen_intent(path, output, value, *, facts=None, _context=None):
+def _reopen_intent(path, output, value, *, facts=None, _context=None, fast=None):
     intent = shared.load(output / "batch-intent.json")
     if (intent["authority_sha256"] != shared.sha(shared.read(path)) or intent["authority"] != value
         or intent["authority_path"] != str(path.absolute())
         or intent["image_preflight_sha256"] != shared.sha(shared.read(output / "image-preflight.json"))
         or intent["dns_pins"] != _dns_bindings(value, facts=facts)):
         raise ValueError("formal batch input or independent DNS binding changed")
-    _preflight(value, output, intent["authority_sha256"], facts=facts, _context=_context)
+    _preflight(value, output, intent["authority_sha256"], facts=facts, _context=_context, fast=fast)
     return intent
 
 
@@ -763,12 +782,12 @@ def _worker_inputs_actual(value, output, index, actual, *, fact=None, _environme
     return shared.sha(shared.read(output / f"lane-{index+1}" / "worker-argv.json"))
 
 
-def _release_fence(path, value, facts, preflight):
+def _release_fence(path, value, facts, preflight, *, include_dns=True):
     """Finite immutable inputs checked before birth, excluding live results.
 
     This hashes bytes and membership, not scientific summaries. The full
-    validators run before it is minted and still run in each installed worker
-    and ordinary deep verifier. No frame survives a public operation.
+    validators run before it is minted; every certified consumer reopens this
+    byte/mode/member fence. Full verification still runs before trace credit.
     """
     from . import rapid_rolling_readiness as evidence
     from . import rapid_rolling_capture as rolling
@@ -776,7 +795,7 @@ def _release_fence(path, value, facts, preflight):
     import stat as permissions
     from . import rapid_target_parallel_schedule as target_workers
     from . import rapid_epoch_target_parallel_schedule as epoch_workers
-    full_modes = any(ordinary_parallel.is_payload(fact[4]["image_check"]["proof"]["plan_payload"])
+    full_modes = not include_dns or any(ordinary_parallel.is_payload(fact[4]["image_check"]["proof"]["plan_payload"])
         or epoch_workers.is_payload(fact[4]["image_check"]["proof"]["plan_payload"])
         or target_workers.is_payload(fact[4]["image_check"]["proof"]["plan_payload"]) for fact in facts)
     files, trees, documents, runtimes = {}, {}, set(), set()
@@ -888,7 +907,8 @@ def _release_fence(path, value, facts, preflight):
             file(getattr(spec, name))
         file(intent_path)
         file(intent_path.parent / "lineage.json")
-        file(intent_path.parent / "dns.json")
+        if include_dns:
+            file(intent_path.parent / "dns.json")
         key = shared.sha(ordinary._json(spec.serializable()))
         if key not in seen_specs:
             seen_specs.add(key)
@@ -1059,12 +1079,12 @@ def _release_fence(path, value, facts, preflight):
     return {"files": files, "trees": trees}
 
 
-def _check_release_fence(fence, path, value, facts, preflight):
+def _check_release_fence(fence, path, value, facts, preflight, *, include_dns=True):
     if not isinstance(fence, dict) or set(fence) != {"files", "trees"}:
         raise ValueError("prepared release lacks its exact immutable input fence")
-    # release() authenticates the complete frame against the independently
-    # carried pre-birth digest before reaching this check. Close that finite
-    # observation without rerunning scientific validators after worker birth.
+    # The caller authenticates the complete frame against the launcher-held
+    # digest before reaching this check. Reopen every raw dependency without
+    # rerunning historical scientific validators.
     import stat as permissions
     files, trees = fence["files"], fence["trees"]
     if not isinstance(files, dict) or not isinstance(trees, dict):
@@ -1077,7 +1097,9 @@ def _check_release_fence(fence, path, value, facts, preflight):
             "source_manifest", "client_binary", "base_launcher", "host_launcher",
             "qualification_spec", "plan_receipt", "cohort"))
         required.update(str(item.absolute()) for item in (
-            intent_path, intent_path.parent / "lineage.json", intent_path.parent / "dns.json"))
+            intent_path, intent_path.parent / "lineage.json"))
+        if include_dns:
+            required.add(str((intent_path.parent / "dns.json").absolute()))
     if not required <= files.keys():
         raise ValueError("prepared release input bytes or inventory changed")
 
@@ -1133,21 +1155,264 @@ def _check_release_fence(fence, path, value, facts, preflight):
             raise ValueError("prepared release input bytes or inventory changed")
 
 
+def issue_fast_certificate(path: Path, output: Path, audited, worker_inputs, *, _context=None) -> str:
+    """Record one genuine full audit for this flight before any worker exists."""
+    value, facts = audited
+    output = shared.regular_dir(output)
+    if (not output.is_relative_to(Path(value["runtime"]["execution_root"]) / "results")
+        or len(worker_inputs) != 2 or any(fact[5].study_version != 6 for fact in facts)
+        or any((output / name).exists() for name in ("batch-intent.json", "batch-launch.json", "release-prepared.json"))):
+        raise ValueError("fast launch certificate requires a fresh official rolling flight")
+    fence = _release_fence(path, value, facts, {"input_files": {}}, include_dns=False)
+    from . import rapid_rolling_schedule as scheduling
+    schedule_path = worker_inputs[0]["environment"].get("QCSD_RAPID_COLLECTION_COMPATIBILITY")
+    if (not isinstance(schedule_path, str) or schedule_path !=
+        worker_inputs[1]["environment"].get("QCSD_RAPID_COLLECTION_COMPATIBILITY")):
+        raise ValueError("fast launch workers require one common sealed rolling schedule")
+    schedule = {"path": schedule_path, "sha256": shared.sha(shared.read(Path(schedule_path)))}
+    mount_roots = sorted(str(item) for item in scheduling.mount_roots(schedule, _context=_context))
+    rows = [[spec.serializable(), str(root), str(intent_path), intent, lineage, asdict(lane),
+             [asdict(site) for site in sites]]
+            for spec, root, intent_path, intent, lineage, lane, sites in facts]
+    return shared.put(output / "fast-launch-certificate.json", {
+        "schema_version": 2, "artifact_type": FAST_CERTIFICATE_TYPE,
+        "authority_path": str(path.absolute()), "authority_sha256": shared.sha(shared.read(path)),
+        "authority": value, "output_root": str(output),
+        "source_manifest_sha256": shared.sha(shared.read(Path(value["runtime"]["source_manifest"]))),
+        "collection_image_digest": value["runtime"]["collection_image_digest"],
+        "facts": rows, "worker_inputs": worker_inputs, "input_fence": fence,
+        "schedule": schedule, "schedule_mount_roots": mount_roots,
+        "formal_accepted_trace_count": 0, "scientific_credit": False})
+
+
+def _fast_facts(rows):
+    from . import rapid_epoch_target_parallel_schedule as epoch_workers
+    from . import rapid_target_parallel_schedule as target_workers
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if not isinstance(rows, list) or len(rows) != 2:
+        raise ValueError("fast launch certificate requires two exact official workers")
+    facts = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) != 7:
+            raise ValueError("fast launch certificate has malformed worker facts")
+        spec = ordinary.CaptureSpec(**{key: Path(item) if key in ordinary.PATH_KEYS else item
+            for key, item in row[0].items()})
+        payload = row[4]["image_check"]["proof"]["plan_payload"]
+        if epoch_workers.is_payload(payload):
+            lane, sites = epoch_workers.prepared_lane(row[5]), epoch_workers.prepared_sites(payload, row[6])
+        elif target_workers.is_payload(payload):
+            lane, sites = target_workers.prepared_lane(row[5]), target_workers.prepared_sites(payload, row[6])
+        elif ordinary_parallel.is_payload(payload):
+            lane, sites = ordinary_parallel.prepared_lane(row[5]), ordinary_parallel.prepared_sites(payload, row[6])
+        else:
+            lane = ordinary.plan.Lane(**{**row[5], "workload_ids": tuple(row[5]["workload_ids"])})
+            sites = tuple(ordinary.plan.Site(**item) for item in row[6])
+        facts.append((spec, Path(row[1]), Path(row[2]), row[3], row[4], lane, sites))
+    return facts
+
+
+def _fast_sealed_sites(payload, rows):
+    from . import rapid_epoch_target_parallel_schedule as epoch_workers
+    from . import rapid_target_parallel_schedule as target_workers
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    for module in (epoch_workers, target_workers, ordinary_parallel):
+        if module.is_payload(payload):
+            return module.prepared_sites(payload, rows)
+    return tuple(ordinary.plan.Site(**item) for item in rows)
+
+
+def reopen_fast_certificate(path: Path, output: Path, digest: str):
+    """Authenticate a cross-process fact frame through its full raw input fence."""
+    import re
+    import stat as permissions
+    output = shared.regular_dir(output)
+    certificate_path = output / "fast-launch-certificate.json"
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("fast launch certificate requires its exact issued digest")
+    certificate_stat = certificate_path.stat(follow_symlinks=False)
+    if (not permissions.S_ISREG(certificate_stat.st_mode)
+        or permissions.S_IMODE(certificate_stat.st_mode) != 0o600
+        or certificate_stat.st_uid != os.geteuid() or certificate_stat.st_nlink != 1):
+        raise ValueError("fast launch certificate lost its private create-only identity")
+    raw = shared.read(certificate_path)
+    if shared.sha(raw) != digest:
+        raise ValueError("fast launch certificate changed after its full audit")
+    frame = shared.load(certificate_path)
+    if (not isinstance(frame, dict)
+        or set(frame) != {"schema_version", "artifact_type", "authority_path", "authority_sha256",
+            "authority", "output_root", "source_manifest_sha256", "collection_image_digest",
+            "facts", "worker_inputs", "input_fence", "schedule", "schedule_mount_roots",
+            "formal_accepted_trace_count", "scientific_credit"}
+        or type(frame["schema_version"]) is not int or frame["schema_version"] != 2
+        or frame["artifact_type"] != FAST_CERTIFICATE_TYPE
+        or frame["output_root"] != str(output)
+        or not isinstance(frame["authority_path"], str)
+        or not Path(frame["authority_path"]).is_absolute()
+        or ".." in Path(frame["authority_path"]).parts
+        or (frame["authority_path"] != str(path.absolute())
+            and str(path.absolute()) != "/parallel-authority.json")
+        or frame["authority_sha256"] != shared.sha(shared.read(path))
+        or frame["authority_sha256"] != shared.sha(shared.read(Path(frame["authority_path"])))
+        or frame["authority"] != shared.load(path)
+        or frame["source_manifest_sha256"] != shared.sha(shared.read(Path(frame["authority"]["runtime"]["source_manifest"])))
+        or frame["collection_image_digest"] != frame["authority"]["runtime"]["collection_image_digest"]
+        or frame["formal_accepted_trace_count"] != 0 or type(frame["formal_accepted_trace_count"]) is not int
+        or frame["scientific_credit"] is not False
+        or not isinstance(frame["worker_inputs"], list) or len(frame["worker_inputs"]) != 2):
+        raise ValueError("fast launch certificate differs from its authority or source")
+    value = frame["authority"]
+    if (not isinstance(frame["schedule"], dict)
+        or set(frame["schedule"]) != {"path", "sha256"}
+        or frame["schedule"]["path"] != frame["worker_inputs"][0]["environment"].get("QCSD_RAPID_COLLECTION_COMPATIBILITY")
+        or frame["schedule"]["path"] != frame["worker_inputs"][1]["environment"].get("QCSD_RAPID_COLLECTION_COMPATIBILITY")
+        or frame["schedule"]["sha256"] != shared.sha(shared.read(Path(frame["schedule"]["path"])))
+        or not isinstance(frame["schedule_mount_roots"], list)
+        or frame["schedule_mount_roots"] != sorted(set(frame["schedule_mount_roots"]))
+        or any(str(shared.regular_dir(Path(item))) != item for item in frame["schedule_mount_roots"])):
+        raise ValueError("fast launch schedule or portable mounts changed")
+    facts = _fast_facts(frame["facts"])
+    for index, fact in enumerate(facts):
+        spec, root, intent_path, intent, lineage, lane, sites = fact
+        if (spec != ordinary.load_capture_spec(_reference(value["lane_specs"][index]))
+            or root != Path(value["evidence_root"])
+            or intent_path != _reference(value["lane_intents"][index])
+            or intent != ordinary._payload(intent_path, ordinary.INTENT_TYPE)
+            or lineage != ordinary._payload(ordinary.admission._child(root, intent["lineage"]), ordinary.LINEAGE_TYPE)
+            or lane != ordinary._lane(lineage["image_check"]["proof"], intent["campaign_name"])
+            or sites != _fast_sealed_sites(lineage["image_check"]["proof"]["plan_payload"],
+                lineage["image_check"]["proof"]["sites"])):
+            raise ValueError("fast launch facts differ from the exact sealed lane")
+        inputs = frame["worker_inputs"][index]
+        if (not isinstance(inputs, dict)
+            or set(inputs) != {"campaign_path", "campaign_name", "result_namespace", "dns_path", "mount_roots", "environment"}
+            or inputs["campaign_path"] != str(spec.campaign_dir / f"{lane.campaign_name}.yml")
+            or inputs["campaign_name"] != lane.campaign_name
+            or inputs["result_namespace"] != str(spec.execution_root / "results" / lane.campaign_name)
+            or inputs["dns_path"] != str(intent_path.parent / "dns.json")):
+            raise ValueError("fast launch transport differs from its sealed lane")
+        environment = inputs["environment"]
+        if (not isinstance(environment, dict)
+            or set(environment) not in ({"QCSD_RAPID_COLLECTION_COMPATIBILITY", "QCSD_RAPID_ROLLING_LAUNCH_INPUT"},
+                                       {"QCSD_RAPID_COLLECTION_COMPATIBILITY", "QCSD_RAPID_ROLLING_LAUNCH_INPUT",
+                                        "QCSD_RAPID_EPOCH_LAUNCH_INPUT"})
+            or environment["QCSD_RAPID_COLLECTION_COMPATIBILITY"] != frame["schedule"]["path"]):
+            raise ValueError("fast launch worker environment differs from its sealed schedule")
+        launch = json.loads(environment["QCSD_RAPID_ROLLING_LAUNCH_INPUT"])
+        if (not isinstance(launch, dict)
+            or set(launch) != {"spec", "root", "intent", "intent_sha256", "readiness_mount_roots"}
+            or launch["spec"] != spec.serializable()
+            or launch["root"] != str(root) or launch["intent"] != str(intent_path)
+            or launch["intent_sha256"] != shared.sha(shared.read(intent_path))
+            or not isinstance(launch["readiness_mount_roots"], list)
+            or any(not isinstance(item, str) for item in launch["readiness_mount_roots"])):
+            raise ValueError("fast launch worker transport changed its full graph claim")
+        expected_roots = {spec.data_root, root, *(Path(row["path"]).parent for row in value["lane_specs"]),
+                          *(Path(item) for item in launch["readiness_mount_roots"])}
+        if (not isinstance(inputs["mount_roots"], list)
+            or inputs["mount_roots"] != sorted(str(shared.regular_dir(item)) for item in expected_roots)):
+            raise ValueError("fast launch worker mount roots changed")
+        epoch = environment.get("QCSD_RAPID_EPOCH_LAUNCH_INPUT")
+        if ("epoch_declaration" in intent) != (epoch is not None):
+            raise ValueError("fast launch epoch environment differs from its sealed intent")
+        if epoch is not None:
+            epoch_claim = json.loads(epoch)
+            if epoch_claim != {"spec": _effective_runtime(fact).serializable(),
+                               "root": str(root), "intent": str(intent_path),
+                               "intent_sha256": shared.sha(shared.read(intent_path))}:
+                raise ValueError("fast launch epoch transport changed")
+    _check_release_fence(frame["input_fence"], Path(frame["authority_path"]), value, facts,
+                         {"input_files": {}}, include_dns=False)
+    return value, facts, frame
+
+
+def certified_mount_roots(path: Path, output: Path, digest: str, actual_image: str):
+    value, _, frame = reopen_fast_certificate(path, output, digest)
+    if value["runtime"]["collection_image_digest"] != actual_image:
+        raise ValueError("fast launch schedule names another collection image")
+    return frame["schedule"]["path"], frame["schedule_mount_roots"]
+
+
+def certified_epoch_preflight(path: Path, output: Path, digest: str, launch_input,
+                              expected_campaign: str, actual_image: str):
+    """Installed source check plus an exact already audited worker launch claim."""
+    from .runtime_provenance import validate_runtime_receipt
+    value, facts, frame = reopen_fast_certificate(path, output, digest)
+    if value["runtime"]["collection_image_digest"] != actual_image:
+        raise ValueError("fast launch epoch names another collection image")
+    matches = [index for index, row in enumerate(frame["worker_inputs"])
+               if row["campaign_name"] == expected_campaign
+               and json.loads(row["environment"].get("QCSD_RAPID_ROLLING_LAUNCH_INPUT", "null")) == launch_input]
+    if matches != [0] and matches != [1]:
+        raise ValueError("fast launch epoch differs from an exact audited worker")
+    installed = validate_runtime_receipt(required_schema_version=2)
+    source_root = Path(value["runtime"]["runtime_source_root"])
+    for relative, sha256 in installed["source_files"].items():
+        if shared.sha(shared.read(source_root / relative)) != sha256:
+            raise ValueError("fast launch installed source differs from its current image")
+    return {"schema_version": 2, "authority_sha256": frame["authority_sha256"],
+            "collection_image_digest": actual_image, "campaign": facts[matches[0]][5].campaign_name,
+            "formal_accepted_trace_count": 0, "scientific_credit": False}
+
+
+def _active_fast_certificate(path: Path):
+    """Only the launcher supplied exact digest may activate the prospective route."""
+    location = os.environ.get("QCSD_RAPID_FAST_CERTIFICATE_PATH")
+    digest = os.environ.get("QCSD_RAPID_FAST_CERTIFICATE_SHA256")
+    if location is None and digest is None:
+        return None
+    if location is None or digest is None:
+        raise ValueError("fast launch certificate path and digest must travel together")
+    certificate = Path(location)
+    if (not certificate.is_absolute() or ".." in certificate.parts
+        or certificate.name != "fast-launch-certificate.json"):
+        raise ValueError("fast launch certificate path differs from its flight")
+    return reopen_fast_certificate(path, certificate.parent, digest)
+
+
+def _fast_release_fence(fast, path, facts, preflight):
+    """Add only fresh DNS and installed preflight files to the audited fence."""
+    import copy
+    import stat as permissions
+    fence = copy.deepcopy(fast[2]["input_fence"])
+    full_modes = any("mode" in row for row in fence["files"].values())
+    fresh = set(preflight["input_files"])
+    fresh.update(str(fact[2].parent / "dns.json") for fact in facts)
+    for name in fresh:
+        item = Path(name).absolute()
+        raw = shared.read(item)
+        digest = shared.sha(raw)
+        if name in preflight["input_files"] and preflight["input_files"][name] != digest:
+            raise ValueError("fast release preflight input changed")
+        mode = item.stat().st_mode
+        record = {"sha256": digest, "executable": bool(mode & 0o111)}
+        if full_modes:
+            record["mode"] = permissions.S_IMODE(mode)
+        previous = fence["files"].get(str(item))
+        if previous is not None and previous != record:
+            raise ValueError("fast release input changed since full scientific audit")
+        fence["files"][str(item)] = record
+    _check_release_fence(fence, Path(fast[2]["authority_path"]), fast[0], facts, preflight)
+    return fence
+
+
 def prepare_release(path: Path, output: Path, *, _context=None) -> str:
     """Close expensive immutable checks before either worker/router is born."""
     from .rapid_operation_facts import OperationFacts
     context = OperationFacts() if _context is None else _context
-    value, facts = _audit(path, _context=context)
+    fast = _active_fast_certificate(path)
+    value, facts = _audit(path, _context=context) if fast is None else fast[:2]
     if any(fact[5].study_version != 6 for fact in facts):
         raise ValueError("pre-birth release factoring is only the prospective rolling contract")
-    intent = _reopen_intent(path, output, value, facts=facts, _context=context)
+    intent = _reopen_intent(path, output, value, facts=facts, _context=context, fast=fast)
     _operator_start(path, output, value)
     if any((output / name).exists() for name in ("actual-launch.json", "batch-launch.json", "release-prepared.json")):
         raise FileExistsError("pre-birth release preparation must precede actual worker launch")
-    inputs = [worker_inputs(path, index, _audited=(value, facts), _context=context) for index in range(2)]
+    inputs = ([worker_inputs(path, index, _audited=(value, facts), _context=context) for index in range(2)]
+              if fast is None else fast[2]["worker_inputs"])
     environments = [item["environment"] for item in inputs]
     preflight = shared.reopen_preflight(output, intent["authority_sha256"])
-    fence = _release_fence(path, value, facts, preflight)
+    fence = (_release_fence(path, value, facts, preflight) if fast is None
+             else _fast_release_fence(fast, path, facts, preflight))
     context.check()
     return shared.put(output / "release-prepared.json", {"schema_version": 1,
         "artifact_type": "qcsd-formal-pre-birth-release-v1", "prepared_at": shared.now(),

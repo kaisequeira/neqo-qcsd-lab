@@ -238,7 +238,7 @@ def lifecycle_inputs(path: Path, execution_root: Path, expected_sha: str) -> Non
     host_source(value)
 
 
-def formal_entry_inputs(path: Path, *, _context=None) -> dict[str, Any]:
+def formal_entry_inputs(path: Path, output: Path | None = None, *, _context=None) -> dict[str, Any]:
     """One fresh scientific pass for both workers' preflight transport."""
     from . import rapid_formal_parallel as formal
     from .rapid_operation_facts import OperationFacts
@@ -248,7 +248,16 @@ def formal_entry_inputs(path: Path, *, _context=None) -> dict[str, Any]:
     first = formal.worker_inputs(path, 0, _audited=audited, _context=context)
     second = formal.worker_inputs(path, 1, _audited=audited, _context=context)
     context.check()
-    return {**first, "second_worker_inputs": second}
+    result = {**first, "second_worker_inputs": second}
+    if (output is not None and audited[0]["installation"] is None
+        and all("runtime_epoch" not in fact[3] for fact in audited[1])
+        and first["environment"].get("QCSD_RAPID_COLLECTION_COMPATIBILITY") ==
+            second["environment"].get("QCSD_RAPID_COLLECTION_COMPATIBILITY")):
+        digest = formal.issue_fast_certificate(path, output, audited, [first, second], _context=context)
+        context.check()
+        result["fast_launch_certificate_sha256"] = digest
+        result["fast_launch_certificate_path"] = str(output / "fast-launch-certificate.json")
+    return result
 
 
 def _campaigns(value: dict[str, Any]):
@@ -523,7 +532,9 @@ def gate(path: Path, expected_sha: str, index: int, authority_path: Path) -> Non
         with context.scope():
             if load(authority_path).get("artifact_type") != AUTHORITY_TYPE:
                 from . import rapid_formal_parallel as formal
-                inputs, facts = formal._audit(authority_path, _context=context)
+                fast = formal._active_fast_certificate(authority_path)
+                inputs, facts = (formal._audit(authority_path, _context=context)
+                                 if fast is None else fast[:2])
             else:
                 inputs, facts = authority(authority_path), None
             campaign = "/lab/" + str(Path(inputs["campaigns"][index]["path"]).relative_to(inputs["runtime"]["execution_root"]))
@@ -543,7 +554,8 @@ def gate(path: Path, expected_sha: str, index: int, authority_path: Path) -> Non
             environment = {}
             if inputs["artifact_type"] != AUTHORITY_TYPE:
                 from .rapid_formal_parallel import worker_environment
-                environment = worker_environment(inputs, index, fact=facts[index], _context=context)
+                environment = (worker_environment(inputs, index, fact=facts[index], _context=context)
+                               if fast is None else fast[2]["worker_inputs"][index]["environment"])
             context.check()
     os.environ.pop("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", None)
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE"] = str(directory / "host-partition.json")
@@ -921,7 +933,7 @@ def _dispatch(args, *, _context=None):
     if args.action == "lifecycle-inputs":
         lifecycle_inputs(args.authority, args.output, args.sha256)
     elif args.action == "formal-entry-inputs":
-        print(json.dumps(formal_entry_inputs(args.authority, _context=_context), sort_keys=True))
+        print(json.dumps(formal_entry_inputs(args.authority, args.output, _context=_context), sort_keys=True))
     elif args.action in {"formal-inputs", "formal-dns"}:
         from .rapid_formal_parallel import worker_inputs, resolve_dns
         if args.action == "formal-inputs" and args.prepared_sha256 is not None:
