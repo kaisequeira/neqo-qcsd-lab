@@ -109,6 +109,82 @@ def test_defended_configuration_still_requires_exact_set_and_full_manifest(chang
     with pytest.raises(ValueError):
         reader._accepted_subset(value)
 
+
+@pytest.fixture
+def parallel_rows(tmp_path):
+    """Stock current manifest schema and real files; deep authority is synthetic."""
+    from tests.test_rapid_fixed_condition_target import setting, write
+    root=tmp_path/'result';root.mkdir()
+    graph={'resources':[{'id':0,'url':'https://main.example/','headers':[]},
+        {'id':1,'url':'https://cdn.example/asset','headers':[],'dependencies':[0]}],
+        'primary_resource_id':0,'preparation':{'final_url':'https://main.example/',
+        'approved_origins':['https://main.example','https://cdn.example']}}
+    manifest=write(root/'inputs/workloads/whole.json',graph)
+    config,run=setting('undefended')
+    config['limits']={'max_response_bytes':16777216,'capture_megabytes':64,
+        'capture_seconds':180,'max_attempts':3,'per_origin_cooldown_seconds':0,
+        'settle_seconds':2,'timeout_seconds':120}
+    config['workloads']=[{'id':'whole','manifest':'inputs/workloads/whole.json',
+        'sha256':manifest['sha256'],'visits':1,'origin_count':2,'resource_count':2}]
+    run_ref=write(root/'samples/accepted/neqo/run.json',run)
+    source_binding=write(tmp_path/'source-binding.json',{'synthetic':True})
+    source={'binding_reference':source_binding,'binding':{'runtime_identity':{'client_sha256':'c'*64}}}
+    report={'result_root':str(root),'experiment':{'configuration':config,'samples':[
+        {'sample_id':'accepted','workload_id':'whole','path':'samples/accepted',
+        'state':'accepted','eligible':True}]},'read_dependencies':[manifest,run_ref]}
+    facts={'actuator':reader.ACTUATOR,'registered_layout':reader.LAYOUT,
+        'configuration':config,'intent':{'started_at':'2026-10-01T00:00:00+00:00'},
+        'measurement_source':{'lab_commit':'a'*40,'neqo_commit':'818d89398a5b0bc725e424b648d878185d18125d',
+            'neqo_pinned_commit':'818d89398a5b0bc725e424b648d878185d18125d'},
+        'accepted_samples':[{'candidate_id':'candidate','workload_id':'whole','sample_id':'accepted',
+            'logical_visit':3,'actual_local_visit':0,'mode':'undefended','workload_sha256':manifest['sha256']}]}
+    return source,report,facts
+
+
+@pytest.mark.parametrize('layout',['manifest','legacy-path','same-both'])
+def test_parallel_target_rows_use_observed_complete_manifest_and_keep_actual_condition(parallel_rows,layout):
+    source,report,facts=parallel_rows
+    workload=report['experiment']['configuration']['workloads'][0]
+    if layout=='legacy-path':workload['path']=workload.pop('manifest')
+    elif layout=='same-both':workload['path']=workload['manifest']
+    before_source,before_report,before_facts=deepcopy(source),deepcopy(report),deepcopy(facts)
+    rows=target._partial_rows(source,report,facts)
+    assert source==before_source and report==before_report and facts==before_facts
+    assert len(rows)==1 and rows[0]['visit']==rows[0]['logical_visit']==3
+    assert rows[0]['original_graph_sha256']==target.membership.graph_identity(
+        Path(report['result_root'])/'inputs/workloads/whole.json')
+    assert rows[0]['source_binding']==source['binding_reference']
+    assert rows[0]['measurement_source']==facts['measurement_source']
+    assert rows[0]['capture_limits']==facts['configuration']['limits']
+    assert rows[0]['aggregate_status']=='incomplete' and rows[0]['aggregate_formal_credit']==0
+    assert rows[0]['lane_pass_claim'] is False
+
+
+@pytest.mark.parametrize('change',['conflicting-path','missing-manifest','absolute-manifest',
+    'escaping-manifest','unobserved-graph','unobserved-run','graph-hash','graph-mode'])
+def test_parallel_target_rows_refuse_unbound_or_escaping_full_graph(parallel_rows,change):
+    source,report,facts=parallel_rows
+    workload=report['experiment']['configuration']['workloads'][0]
+    if change=='conflicting-path':workload['path']='inputs/workloads/other.json'
+    elif change=='missing-manifest':del workload['manifest']
+    elif change=='absolute-manifest':workload['manifest']=str(Path(report['result_root'])/workload['manifest'])
+    elif change=='escaping-manifest':workload['manifest']='../outside.json'
+    elif change=='unobserved-graph':report['read_dependencies'].pop(0)
+    elif change=='unobserved-run':report['read_dependencies'].pop()
+    elif change=='graph-hash':facts['accepted_samples'][0]['workload_sha256']='f'*64
+    else:
+        path=Path(report['result_root'])/workload['manifest']
+        path.chmod(0o600 if target.reference(path)['mode']!=0o600 else 0o644)
+    with pytest.raises(ValueError):target._partial_rows(source,report,facts)
+
+
+def test_parallel_row_dispatch_projection_keeps_every_old_partial_row_predicate():
+    raw=Path(target.__file__).read_bytes()
+    changed=raw.replace(b"manifest_ref['sha256']!=slot['workload_sha256']",b'False')
+    assert raw!=changed
+    assert target._reader_code_projection(target._parallel_partial_source_projection(raw),'target')!=\
+        target._reader_code_projection(target._parallel_partial_source_projection(changed),'target')
+
 def predecessor_bytes():
     path=Path(__file__).parent/"fixtures/rapid_fixed_condition_target_source58.py.zlib.b85.txt"
     raw=zlib.decompress(base64.b85decode(path.read_bytes().strip()))

@@ -439,6 +439,46 @@ def _bound_measurement_report(report, source):
     return measurement._measurement_binding(report, source)
 
 
+def target_rows(source,report,facts):
+    """Project this separate parallel role using its actual manifest schema.
+
+    Legacy target row code remains exact. Every original run, complete graph,
+    condition, offset, Source and raw read-dependency predicate is retained.
+    """
+    from . import rapid_fixed_condition_target as target
+    from .verification import resolved_sample_directory
+    if facts.get('actuator') != ACTUATOR:
+        raise ValueError('parallel partial row reader received another proof role')
+    observed={r['path']:r for r in report['read_dependencies']}
+    root=target.epoch._path(report['result_root'],directory=True)
+    samples={s['sample_id']:s for s in report['experiment']['samples']}
+    workloads={w['id']:w for w in report['experiment']['configuration']['workloads']};rows=[]
+    for slot in facts['accepted_samples']:
+        sample=samples[slot['sample_id']]
+        run_ref=target.reference(resolved_sample_directory(root,sample)/'neqo/run.json')
+        workload=workloads[slot['workload_id']]
+        relative=workload.get('manifest',workload.get('path'))
+        if ('manifest' in workload and 'path' in workload and workload['manifest']!=workload['path']
+                or not isinstance(relative,str) or not relative or Path(relative).is_absolute()
+                or '..' in Path(relative).parts or any(c in relative for c in '\0\r\n')
+                or not (root/relative).resolve().is_relative_to(root.resolve())):
+            raise ValueError('parallel partial workload manifest is absent, conflicting or escapes its result')
+        manifest_ref=target.reference(root/relative)
+        if observed.get(run_ref['path'])!=run_ref or observed.get(manifest_ref['path'])!=manifest_ref:
+            raise ValueError('target partial trace lost its original deep-observed run or complete graph')
+        if manifest_ref['sha256']!=slot['workload_sha256']:
+            raise ValueError('target partial graph differs from its original frozen workload')
+        run=json.loads(target._open(run_ref).read_bytes())
+        rows.append({**slot,'visit':slot['logical_visit'],
+            'original_graph_sha256':target.membership.graph_identity(Path(manifest_ref['path'])),
+            'result_root':str(root),'run':run_ref,'condition':target.condition_identity(facts['configuration'],run,slot['mode']),
+            'capture_limits':facts['configuration']['limits'],'intent_started_at':facts['intent']['started_at'],
+            'measurement_source':facts['measurement_source'],'client_sha256':source['binding']['runtime_identity']['client_sha256'],
+            'source_binding':source['binding_reference'],'partial_layout':facts['registered_layout'],
+            'aggregate_status':'incomplete','lane_pass_claim':False,'aggregate_formal_credit':0})
+    return rows
+
+
 def _measurement_binding(report, source):
     """Join unadorned installed export metadata to the authenticated capture image.
 

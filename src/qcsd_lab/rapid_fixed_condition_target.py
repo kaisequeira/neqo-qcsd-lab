@@ -311,7 +311,7 @@ def _compatible_code_ref(role, producer, current):
 
 
 def _parallel_partial_source_projection(raw):
-    """Remove only the exact two new-role dispatch seams before old comparison.
+    """Remove only exact new parallel-role dispatch seams before old comparison.
 
     Every old scientific body, including partial joins and target selection,
     remains in the compared AST. The new reader owns a separate bound Source.
@@ -330,6 +330,10 @@ def _parallel_partial_source_projection(raw):
         "    verification=parallel_partial.verify(receipt,audit_root=Path(audit_root))\n"
         "else:\n"
         "    verification=dynamic.verify(receipt,audit_root=Path(audit_root))\n").body[0]
+    rows = ast.parse(
+        "if facts.get('actuator') == 'parallel-formal-worker':\n"
+        "    from . import rapid_parallel_partial_lane as parallel_partial\n"
+        "    return parallel_partial.target_rows(source,report,facts)\n").body[0]
     shape = lambda value: ast.dump(value, include_attributes=False)
     removed = set()
     for node in tree.body:
@@ -347,8 +351,15 @@ def _parallel_partial_source_projection(raw):
                 if matches != [0]:
                     raise ValueError('parallel partial public dispatch moved or duplicated')
                 node.body[0:1] = audit.orelse; removed.add(node.name)
-    if removed and removed != {'_partial_operation', 'audit_partial'}:
-        raise ValueError('parallel partial compatibility has only one dispatch seam')
+        elif node.name == '_partial_rows':
+            matches = [i for i, statement in enumerate(node.body) if shape(statement) == shape(rows)]
+            if matches:
+                if matches != [0]:
+                    raise ValueError('parallel partial row dispatch moved or duplicated')
+                node.body.pop(0); removed.add(node.name)
+    if removed and removed not in ({'_partial_operation', 'audit_partial'},
+            {'_partial_operation', 'audit_partial', '_partial_rows'}):
+        raise ValueError('parallel partial compatibility lacks its paired original dispatch seams')
     return ast.unparse(tree).encode()
 
 
@@ -1594,6 +1605,9 @@ def _partial_operation(operation):
 
 
 def _partial_rows(source,report,facts):
+    if facts.get('actuator') == 'parallel-formal-worker':
+        from . import rapid_parallel_partial_lane as parallel_partial
+        return parallel_partial.target_rows(source,report,facts)
     observed={r['path']:r for r in report['read_dependencies']};root=epoch._path(report['result_root'],directory=True)
     from .verification import resolved_sample_directory
     samples={s['sample_id']:s for s in report['experiment']['samples']}
