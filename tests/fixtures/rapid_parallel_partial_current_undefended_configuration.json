@@ -1,0 +1,71 @@
+{
+  "artifact_type": "host-engineering-saved-current-undefended-configuration-fixture-v1",
+  "source_raw_report_sha256": "04e8a87b400a58f0b4ef95be93c00dde27e43b67ac470c1ffa10a3112822ac6e",
+  "configuration": {
+    "application_body_identity_policy": "complete-current-application-delivery-v1",
+    "campaign_sha256": "5720a3a458deb5b4e665a817e70e3a89ca3211429ce5c7cc348f0c243ac91340",
+    "defenses": [
+      {
+        "baseline": true,
+        "kind": "none",
+        "name": "undefended"
+      }
+    ],
+    "limits": {
+      "capture_megabytes": 64,
+      "capture_seconds": 180,
+      "max_attempts": 3,
+      "max_response_bytes": 16777216,
+      "per_origin_cooldown_seconds": 0,
+      "settle_seconds": 2,
+      "timeout_seconds": 120
+    },
+    "profile": "research-1200",
+    "request_policies": [
+      "as-defined"
+    ],
+    "workloads": [
+      {
+        "id": "static-b474959d4f465f414394405e72d755f01b6e0717d6201d68c7114d448683b607",
+        "manifest": "inputs/workloads/static-b474959d4f465f414394405e72d755f01b6e0717d6201d68c7114d448683b607.json",
+        "origin_count": 3,
+        "resource_count": 70,
+        "sha256": "5d06774a28dc2a373a09604b37b85ba9bc6fd7564e8970c91bbb816ad0de27c4",
+        "visits": 1
+      },
+      {
+        "id": "static-29cb354aea0402f03dc6cf2aae5cc97acc803e09b59c9a4df8a9bc3a994d3c48",
+        "manifest": "inputs/workloads/static-29cb354aea0402f03dc6cf2aae5cc97acc803e09b59c9a4df8a9bc3a994d3c48.json",
+        "origin_count": 2,
+        "resource_count": 13,
+        "sha256": "a4ebd629e842502804dc9c0305b19d48ba91d3a8fe41fce1b440616834465c98",
+        "visits": 1
+      },
+      {
+        "id": "static-349d927123ec6f4cfddd3a68485508b67515d8b160c8386399884a2997d002e5",
+        "manifest": "inputs/workloads/static-349d927123ec6f4cfddd3a68485508b67515d8b160c8386399884a2997d002e5.json",
+        "origin_count": 2,
+        "resource_count": 62,
+        "sha256": "0aeaa9be9f75d38f02f7ca08baab36e11fde15753877592e358bf10cbee1df23",
+        "visits": 1
+      },
+      {
+        "id": "static-18ec1a54505641ce3bd86818611c00ec9b417b1ef933aa1a5ce3362366c40baa",
+        "manifest": "inputs/workloads/static-18ec1a54505641ce3bd86818611c00ec9b417b1ef933aa1a5ce3362366c40baa.json",
+        "origin_count": 3,
+        "resource_count": 143,
+        "sha256": "09853d18b91bc6483e67433b51621cea3f64b1e87d5682045cbe59c1ee637fd2",
+        "visits": 1
+      },
+      {
+        "id": "static-9e93e872180f6492b792e0b487f30c61e6041cb7c02a35814c4aa0cd42579cd2",
+        "manifest": "inputs/workloads/static-9e93e872180f6492b792e0b487f30c61e6041cb7c02a35814c4aa0cd42579cd2.json",
+        "origin_count": 4,
+        "resource_count": 77,
+        "sha256": "8596059b4d4411784359ba92b40a348abee5555a4d9f9278138190d370b7dc17",
+        "visits": 1
+      }
+    ]
+  },
+  "scientific_credit": false
+}

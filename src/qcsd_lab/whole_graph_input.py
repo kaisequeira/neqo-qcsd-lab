@@ -107,6 +107,16 @@ V11_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e
                       "controller.py": "ce6b56a4742f6de047e1daa5d9e7991b7efb64b7471194b8f950a3850864f141"}
 VERSIONS[V11_PLAN_TYPE] = (11, V11_CONTRACT, V11_INPUT_TYPE, V11_PRODUCERS)
 CONTROL_SOURCES[11] = CONTROL_SOURCES[6]
+V12_PLAN_TYPE = "qcsd-external-navigation-seeded-whole-graph-catalogue-plan-v12"
+V12_INPUT_TYPE = "qcsd-external-browser-whole-graph-input-v12"
+V12_CONTRACT = "catalogue-homepage-navigation-seeded-complete-occurrence-graph-input-only-v12"
+# Exact prospective V12 successor pins; V1–V11 registrations retain their bytes.
+V12_PRODUCERS = {"graph_input.py": "e3afa71232eef74dbb560d8c049e10441d1dbb5240108bb04a8c1c5854c8d44e",
+                 "operator.py": "a3ba12b7fba9a33e289085ef9ea4e7de5b7b73ad7db586c5b8125b8a2967acdb"}
+V12_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e633c8561f16f8e09c071f8c309",
+                      "controller.py": "2af7e045140b42b56faedaf63ce6a86e618c4d1a6a39da44902c95bba7f9bf5e"}
+VERSIONS[V12_PLAN_TYPE] = (12, V12_CONTRACT, V12_INPUT_TYPE, V12_PRODUCERS)
+CONTROL_SOURCES[12] = CONTROL_SOURCES[6]
 ZERO = {"scientific_credit": False, "site_credit": 0, "formal_accepted_trace_count": 0}
 RESOURCE_KEYS = {"id", "url", "type", "content_length", "data_length", "chaff_priority",
                  "known_valid", "depends_on", "headers"}
@@ -155,9 +165,10 @@ def _producer(plan: dict[str, Any]) -> Path:
         raise ValueError("whole graph input has an unrecognized discovery producer")
     if version[0] >= 5:
         parent = paths["operator.py"].parent
-        if version[0] in (9, 10, 11):
+        if version[0] in (9, 10, 11, 12):
             action_sources = (V9_ACTION_SOURCES if version[0] == 9 else
-                              V10_ACTION_SOURCES if version[0] == 10 else V11_ACTION_SOURCES)
+                              V10_ACTION_SOURCES if version[0] == 10 else
+                              V11_ACTION_SOURCES if version[0] == 11 else V12_ACTION_SOURCES)
             refs = get._exact(plan.get("action_local_sources"), set(action_sources),
                 f"V{version[0]} action readers")
             for name, digest in action_sources.items():
@@ -203,7 +214,7 @@ def load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("whole graph discovery declaration has another role")
     operator = _producer(value)
     _verify_external(operator, "check", "--plan", path.absolute(),
-        **({"timeout": 240} if value["schema_version"] in (8, 9, 10, 11) else {}))
+        **({"timeout": 240} if value["schema_version"] in (8, 9, 10, 11, 12) else {}))
     return value
 
 
@@ -248,7 +259,7 @@ def load_input(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if VERSIONS[plan["artifact_type"]] != version:
         raise ValueError("whole graph input crosses discovery producer versions")
     _verify_external(operator, "verify-input", "--input", path.absolute(),
-        **({"timeout": 240} if version[0] in (8, 9, 10, 11) else {}))
+        **({"timeout": 240} if version[0] in (8, 9, 10, 11, 12) else {}))
     return value, project(value, get._load(get._read(reopen(value["native_manifest"]))))
 
 
@@ -382,7 +393,7 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
             # The independent verifier authenticates this complete inventory;
             # bind those exact files as well for transport/release fences.
             files.add(source_path)
-        if declaration["schema_version"] in (9, 10, 11):
+        if declaration["schema_version"] in (9, 10, 11, 12):
             # The independent verifier reconstructs the born interruption,
             # exact old raw tree and every completed ordered successor batch.
             # V10 additionally binds the actual prebirth V9 transport refusal.
@@ -402,7 +413,7 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
                         retained_refs(item)
             retained_refs(retained)
             sources.add(Path(retained["original_root"]))
-            if declaration["schema_version"] in (10, 11):
+            if declaration["schema_version"] in (10, 11, 12):
                 # The V8 Root inputs were checked against the original
                 # controller's authorities by the external V10 verifier.
                 # Bind those transitive reviewed files for release transport.

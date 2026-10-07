@@ -173,9 +173,10 @@ _READER_COMPATIBILITY_HELPERS = {
                '_epoch_dynamic_source_projection', '_parallel_facts_source_projection',
                '_portable_dynamic_source_projection',
                '_parallel_schedule_source_projection', '_acquisition_reader_sources',
+               '_v12_input_reader_source_projection',
                '_v11_input_reader_source_projection',
                '_compatible_acquisition_code', '_cohort_acquisition_source_projection',
-               '_membership_additive_reader_roles'),
+               '_membership_additive_reader_roles', '_parallel_partial_source_projection'),
     'dynamic': ('_compatible_reader_sources',),
 }
 _ACTION_LOCAL_SOURCE_FACTS_SHA256 = '34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c'
@@ -272,7 +273,11 @@ def _compatible_code_ref(role, producer, current):
                        '26b41cd9cff02e7dde8b9dbda902fa69d370fe5b242dd075f41c5db39c356b26',
                        '784ceb0f5e5a8cbde41eafdee4bb209781ba2df352cd72a0fbab8f24eacc46cf',
                        '38b58853b7788608ad7601f927a4a924d7257641f1e373d3c288dd228b93b705',
-                       '49ed0ab36f1b9cb1c01375814c57a35a9f186f19020dcf86d5553d5404369b03'})
+                       '49ed0ab36f1b9cb1c01375814c57a35a9f186f19020dcf86d5553d5404369b03',
+                       '76eb0532100db6bfbd247aa9bbac0006902d25502de37ee42d1bb3148659444c',
+                       'd485db59ab1e976382e0e544522ea0f15aa638bbe7ca16b62373b5089528de00',
+                       '1537b2bc43ca527ed8b1c33fcca14e82b3fb468881cc193bad81a012a5815005',
+                       'aef299755e14c577e366fffa8df0f281f5f10bdef0937abb6fea52e51dd4ae90'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -294,14 +299,72 @@ def _compatible_code_ref(role, producer, current):
             old = _epoch_dynamic_source_projection(Path(producer['path']).read_bytes())
             new = _epoch_dynamic_source_projection(Path(current['path']).read_bytes())
         else:
-            old = _reader_code_projection(Path(producer['path']).read_bytes(), role,
+            old_raw = Path(producer['path']).read_bytes()
+            new_raw = Path(current['path']).read_bytes()
+            if role == 'target':
+                old_raw = _parallel_partial_source_projection(old_raw)
+                new_raw = _parallel_partial_source_projection(new_raw)
+            old = _reader_code_projection(old_raw, role,
                                           legacy=not enhanced_target)
-            new = _reader_code_projection(Path(current['path']).read_bytes(), role)
+            new = _reader_code_projection(new_raw, role)
     except (ValueError, SyntaxError) as error:
         raise ValueError('fixed target relevant producer/reader code changed') from error
     if old != new:
         raise ValueError('fixed target relevant producer/reader code changes protected scientific code')
     return True
+
+
+def _parallel_partial_source_projection(raw):
+    """Remove only exact new parallel-role dispatch seams before old comparison.
+
+    Every old scientific body, including partial joins and target selection,
+    remains in the compared AST. The new reader owns a separate bound Source.
+    """
+    import ast
+    tree = ast.parse(raw)
+    seam = ast.parse(
+        "if json.loads(_open(operation['receipt']).read_bytes()).get('artifact_type') == "
+        "'qcsd-original-deep-verified-individual-traces-from-incomplete-parallel-chunk-v1':\n"
+        "    from . import rapid_parallel_partial_lane as parallel_partial\n"
+        "    return parallel_partial.target_operation(operation)\n").body[0]
+    audit = ast.parse(
+        "if json.loads(_open(receipt).read_bytes()).get('artifact_type') == "
+        "'qcsd-original-deep-verified-individual-traces-from-incomplete-parallel-chunk-v1':\n"
+        "    from . import rapid_parallel_partial_lane as parallel_partial\n"
+        "    verification=parallel_partial.verify(receipt,audit_root=Path(audit_root))\n"
+        "else:\n"
+        "    verification=dynamic.verify(receipt,audit_root=Path(audit_root))\n").body[0]
+    rows = ast.parse(
+        "if facts.get('actuator') == 'parallel-formal-worker':\n"
+        "    from . import rapid_parallel_partial_lane as parallel_partial\n"
+        "    return parallel_partial.target_rows(source,report,facts)\n").body[0]
+    shape = lambda value: ast.dump(value, include_attributes=False)
+    removed = set()
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name == '_partial_operation':
+            matches = [i for i, statement in enumerate(node.body) if shape(statement) == shape(seam)]
+            if matches:
+                if matches != [1]:
+                    raise ValueError('parallel partial dispatch moved or duplicated')
+                node.body.pop(1); removed.add(node.name)
+        elif node.name == 'audit_partial':
+            matches = [i for i, statement in enumerate(node.body) if shape(statement) == shape(audit)]
+            if matches:
+                if matches != [0]:
+                    raise ValueError('parallel partial public dispatch moved or duplicated')
+                node.body[0:1] = audit.orelse; removed.add(node.name)
+        elif node.name == '_partial_rows':
+            matches = [i for i, statement in enumerate(node.body) if shape(statement) == shape(rows)]
+            if matches:
+                if matches != [0]:
+                    raise ValueError('parallel partial row dispatch moved or duplicated')
+                node.body.pop(0); removed.add(node.name)
+    if removed and removed not in ({'_partial_operation', 'audit_partial'},
+            {'_partial_operation', 'audit_partial', '_partial_rows'}):
+        raise ValueError('parallel partial compatibility lacks its paired original dispatch seams')
+    return ast.unparse(tree).encode()
 
 
 def _epoch_dynamic_source_projection(raw):
@@ -654,7 +717,7 @@ def _acquisition_reader_sources():
         'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
         'rapid_per_class_selected_enrollment.py': '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0',
-        'whole_graph_input.py': '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf',
+        'whole_graph_input.py': '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',
         'whole_graph_supplement.py': '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7',
         'rapid_supplemental_cohort.py': '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
     }
@@ -669,8 +732,32 @@ def _acquisition_reader_sources():
     return result
 
 
+def _v12_input_reader_source_projection(raw):
+    """Recover every exact V11 reader byte after finite V12 registration."""
+    if hashlib.sha256(raw).hexdigest() != '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
+        raise ValueError('V12 discovery reader is outside its exact reviewed Source')
+    start, end = b'V12_PLAN_TYPE = ', b'ZERO = '
+    if raw.count(start) != 1 or raw.count(end) != 1:
+        raise ValueError('V12 registration block is not unique')
+    projected = raw[:raw.index(start)] + raw[raw.index(end):]
+    replacements = (
+        (b'(9, 10, 11, 12)', b'(9, 10, 11)', 2),
+        (b'(8, 9, 10, 11, 12)', b'(8, 9, 10, 11)', 2),
+        (b'action_sources = (V9_ACTION_SOURCES if version[0] == 9 else\n                              V10_ACTION_SOURCES if version[0] == 10 else\n                              V11_ACTION_SOURCES if version[0] == 11 else V12_ACTION_SOURCES)', b'action_sources = (V9_ACTION_SOURCES if version[0] == 9 else\n                              V10_ACTION_SOURCES if version[0] == 10 else V11_ACTION_SOURCES)', 1),
+        (b'if declaration["schema_version"] in (10, 11, 12):', b'if declaration["schema_version"] in (10, 11):', 1),
+    )
+    for current, original, count in replacements:
+        if projected.count(current) != count:
+            raise ValueError('V12 dispatch changed another original reader unit')
+        projected = projected.replace(current, original)
+    if hashlib.sha256(projected).hexdigest() != '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
+        raise ValueError('V12 reader changes protected historical graph or proof bytes')
+    return projected
+
 def _v11_input_reader_source_projection(raw):
-    """Restore exact Source53 bytes after the one reviewed V11 registration."""
+    """Restore exact Source53 bytes after reviewed V11/V12 registration."""
+    if hashlib.sha256(raw).hexdigest() == '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
+        raw = _v12_input_reader_source_projection(raw)
     if hashlib.sha256(raw).hexdigest() != '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
         raise ValueError('V11 discovery reader is outside its exact reviewed Source')
     start, end = b'V11_PLAN_TYPE = ', b'ZERO = '
@@ -763,10 +850,15 @@ def _compatible_acquisition_code(relative, before, after):
     if before['sha256'] == after['sha256']:
         return True
     if relative == 'src/qcsd_lab/whole_graph_input.py':
-        if (before['sha256'] != '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b'
-                or _v11_input_reader_source_projection(Path(after['path']).read_bytes())
-                != Path(before['path']).read_bytes()):
-            raise ValueError('whole graph reader is outside the exact Source53/V11 registration pair')
+        old_raw, new_raw = Path(before['path']).read_bytes(), Path(after['path']).read_bytes()
+        if before['sha256'] == '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
+            projected = _v12_input_reader_source_projection(new_raw)
+        elif before['sha256'] == '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b':
+            projected = _v11_input_reader_source_projection(new_raw)
+        else:
+            raise ValueError('whole graph reader is outside exact historical/V12 registration pairs')
+        if projected != old_raw:
+            raise ValueError('V12 reader changes protected historical graph or proof bytes')
         return True
     roles = {
         'src/qcsd_lab/rapid_selected_capture_input.py': (
@@ -976,10 +1068,14 @@ def _membership_additive_reader_roles(old_code, new_code):
     """Authenticate the two added readers before comparing an older read set."""
     additions = set(new_code) - set(old_code)
     allowed = {'src/qcsd_lab/whole_graph_input.py',
-               'src/qcsd_lab/rapid_supplemental_cohort.py'}
+               'src/qcsd_lab/rapid_supplemental_cohort.py',
+               'src/qcsd_lab/rapid_parallel_partial_lane.py'}
     if not additions <= allowed:
         return None
     readers = _acquisition_reader_sources()
+    if 'src/qcsd_lab/rapid_parallel_partial_lane.py' in additions:
+        readers['src/qcsd_lab/rapid_parallel_partial_lane.py'] = reference(
+            Path(__file__).with_name('rapid_parallel_partial_lane.py'))
     for relative in additions:
         _open(new_code[relative])
         if not _typed_equal(new_code[relative], readers[relative]):
@@ -1519,6 +1615,9 @@ def audit_complete(*, source_binding, closures, audit_root, output):
 
 def _partial_operation(operation):
     _keys(operation, {'receipt','verification'}, 'target incomplete-lane proof')
+    if json.loads(_open(operation['receipt']).read_bytes()).get('artifact_type') == 'qcsd-original-deep-verified-individual-traces-from-incomplete-parallel-chunk-v1':
+        from . import rapid_parallel_partial_lane as parallel_partial
+        return parallel_partial.target_operation(operation)
     receipt=operation['receipt'];raw=json.loads(_open(receipt).read_bytes())
     if raw.get('artifact_type') not in (dynamic.TYPE,dynamic.FOUR_TYPE):
         raise ValueError('target partial proof has another reader role')
@@ -1560,6 +1659,9 @@ def _partial_operation(operation):
 
 
 def _partial_rows(source,report,facts):
+    if facts.get('actuator') == 'parallel-formal-worker':
+        from . import rapid_parallel_partial_lane as parallel_partial
+        return parallel_partial.target_rows(source,report,facts)
     observed={r['path']:r for r in report['read_dependencies']};root=epoch._path(report['result_root'],directory=True)
     from .verification import resolved_sample_directory
     samples={s['sample_id']:s for s in report['experiment']['samples']}
@@ -1587,7 +1689,11 @@ def _partial_rows(source,report,facts):
 def audit_partial(*, receipt, audit_root, output):
     # The public reader runs a genuinely separate original deep proof here.
     # Reopening this new audit later authenticates both exact original operations.
-    verification=dynamic.verify(receipt,audit_root=Path(audit_root))
+    if json.loads(_open(receipt).read_bytes()).get('artifact_type') == 'qcsd-original-deep-verified-individual-traces-from-incomplete-parallel-chunk-v1':
+        from . import rapid_parallel_partial_lane as parallel_partial
+        verification=parallel_partial.verify(receipt,audit_root=Path(audit_root))
+    else:
+        verification=dynamic.verify(receipt,audit_root=Path(audit_root))
     operation={'receipt':receipt,'verification':verification}
     source,report,facts,dependencies,completed=_partial_operation(operation)
     rows=_partial_rows(source,report,facts)
