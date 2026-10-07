@@ -99,6 +99,7 @@ def _audit(path: Path, *, execution_root: Path | None = None, _context=None):
         else:
             generation = lineage["image_check"]["proof"]["cohort_generation"]
         if lane.study_version == 6:
+            from . import rapid_quick_profile as quick
             from . import rapid_rolling_schedule as scheduling
             if registered or capsule is not None:
                 raise ValueError("rolling parallel workers cannot claim registered epochs or historical installation")
@@ -106,7 +107,9 @@ def _audit(path: Path, *, execution_root: Path | None = None, _context=None):
             from . import rapid_epoch_target_parallel_schedule as epoch_workers
             from . import rapid_target_parallel_schedule as target_workers
             from . import rapid_ordinary_parallel_schedule as ordinary_parallel
-            if epoch_workers.is_payload(stored_plan):
+            if quick.is_payload(stored_plan):
+                quick.require_worker(stored_plan, lane, sites, worker_spec)
+            elif epoch_workers.is_payload(stored_plan):
                 if generation != "rolling-50" or not 1 <= len(sites) <= 5:
                     raise ValueError("epoch target parallel changed its rolling full-graph cohort scope")
                 epoch_workers.require_worker(stored_plan, lane, sites, worker_spec)
@@ -140,6 +143,11 @@ def _audit(path: Path, *, execution_root: Path | None = None, _context=None):
         raise ValueError("formal parallel workers cannot mix study contracts")
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if all(fact[5].study_version == 6 for fact in facts):
+        from . import rapid_quick_profile as quick
+        if any(quick.is_payload(fact[4]["image_check"]["proof"]["plan_payload"]) for fact in facts):
+            if not all(quick.is_payload(fact[4]["image_check"]["proof"]["plan_payload"]) for fact in facts):
+                raise ValueError("quick formal workers cannot mix launch contracts")
+            quick.require_disjoint([(fact[0], fact[4]["image_check"]["proof"]["plan_payload"], fact[5], fact[6]) for fact in facts])
         from . import rapid_epoch_target_parallel_schedule as epoch_workers
         epoch_workers.require_disjoint([(fact[0], fact[4]["image_check"]["proof"]["plan_payload"], fact[5], fact[6])
             for fact in facts])
@@ -225,6 +233,7 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
             raise ValueError("formal parallel preparation requires two distinct lanes under one study contract")
         for worker_spec, check, rows, lane in zip(specs, checks, sites, lanes, strict=True):
             if lane.study_version == 6:
+                from . import rapid_quick_profile as quick
                 from . import rapid_rolling_schedule as scheduling
                 if installed is not None:
                     raise ValueError("rolling scheduling cannot claim historical installation")
@@ -232,7 +241,9 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
                 from . import rapid_epoch_target_parallel_schedule as epoch_workers
                 from . import rapid_target_parallel_schedule as target_workers
                 from . import rapid_ordinary_parallel_schedule as ordinary_parallel
-                if epoch_workers.is_payload(payload):
+                if quick.is_payload(payload):
+                    quick.require_worker(payload, lane, rows, worker_spec)
+                elif epoch_workers.is_payload(payload):
                     if check["proof"]["cohort_generation"] != "rolling-50" or not 1 <= len(rows) <= 5:
                         raise ValueError("epoch target parallel changed its rolling full-graph cohort scope")
                     epoch_workers.require_worker(payload, lane, rows, worker_spec)
@@ -257,6 +268,12 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
                 raise ValueError("formal parallel preparation cannot claim diagnostic lanes")
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
         from . import rapid_epoch_target_parallel_schedule as epoch_workers
+        from . import rapid_quick_profile as quick
+        if any(quick.is_payload(check["proof"]["plan_payload"]) for check in checks):
+            if not all(quick.is_payload(check["proof"]["plan_payload"]) for check in checks):
+                raise ValueError("quick preparation cannot mix launch contracts")
+            quick.require_disjoint([(worker_spec, check["proof"]["plan_payload"], lane, rows)
+                for worker_spec, check, lane, rows in zip(specs, checks, lanes, sites, strict=True)])
         epoch_workers.require_disjoint([(worker_spec, check["proof"]["plan_payload"], lane, rows)
             for worker_spec, check, lane, rows in zip(specs, checks, lanes, sites, strict=True)])
         from . import rapid_target_parallel_schedule as target_workers
@@ -790,6 +807,9 @@ def _release_fence(path, value, facts, preflight, *, include_dns=True):
     byte/mode/member fence. Full verification still runs before trace credit.
     """
     from . import rapid_rolling_readiness as evidence
+    from . import rapid_quick_profile as quick
+    if all(quick.is_payload(fact[4]["image_check"]["proof"]["plan_payload"]) for fact in facts):
+        return quick.release_fence(path, value, facts, preflight, include_dns=include_dns)
     from . import rapid_rolling_capture as rolling
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     import stat as permissions
@@ -1186,6 +1206,7 @@ def issue_fast_certificate(path: Path, output: Path, audited, worker_inputs, *, 
 
 
 def _fast_facts(rows):
+    from . import rapid_quick_profile as quick
     from . import rapid_epoch_target_parallel_schedule as epoch_workers
     from . import rapid_target_parallel_schedule as target_workers
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
@@ -1198,7 +1219,9 @@ def _fast_facts(rows):
         spec = ordinary.CaptureSpec(**{key: Path(item) if key in ordinary.PATH_KEYS else item
             for key, item in row[0].items()})
         payload = row[4]["image_check"]["proof"]["plan_payload"]
-        if epoch_workers.is_payload(payload):
+        if quick.is_payload(payload):
+            lane, sites = quick.prepared_lane(row[5]), quick.prepared_sites(row[6])
+        elif epoch_workers.is_payload(payload):
             lane, sites = epoch_workers.prepared_lane(row[5]), epoch_workers.prepared_sites(payload, row[6])
         elif target_workers.is_payload(payload):
             lane, sites = target_workers.prepared_lane(row[5]), target_workers.prepared_sites(payload, row[6])
@@ -1212,6 +1235,9 @@ def _fast_facts(rows):
 
 
 def _fast_sealed_sites(payload, rows):
+    from . import rapid_quick_profile as quick
+    if quick.is_payload(payload):
+        return quick.prepared_sites(rows)
     from . import rapid_epoch_target_parallel_schedule as epoch_workers
     from . import rapid_target_parallel_schedule as target_workers
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
@@ -1466,13 +1492,16 @@ def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256
         from . import rapid_epoch_target_parallel_schedule as epoch_workers
         from . import rapid_target_parallel_schedule as target_workers
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+        from . import rapid_quick_profile as quick
         facts = [(ordinary.CaptureSpec(**{key: Path(item) if key in ordinary.PATH_KEYS else item
                    for key, item in row[0].items()}), Path(row[1]), Path(row[2]), row[3], row[4],
-                   (epoch_workers.prepared_lane(row[5]) if epoch_workers.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
+                   (quick.prepared_lane(row[5]) if quick.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
+                    else epoch_workers.prepared_lane(row[5]) if epoch_workers.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
                     else target_workers.prepared_lane(row[5]) if target_workers.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
                     else ordinary_parallel.prepared_lane(row[5]) if ordinary_parallel.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
                     else ordinary.plan.Lane(**{**row[5], "workload_ids": tuple(row[5]["workload_ids"])})),
-                   (epoch_workers.prepared_sites(row[4]["image_check"]["proof"]["plan_payload"], row[6])
+                   (quick.prepared_sites(row[6]) if quick.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
+                    else epoch_workers.prepared_sites(row[4]["image_check"]["proof"]["plan_payload"], row[6])
                     if epoch_workers.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
                     else target_workers.prepared_sites(row[4]["image_check"]["proof"]["plan_payload"], row[6])
                     if target_workers.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
@@ -1489,7 +1518,9 @@ def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256
                 or lane_intent != ordinary._payload(intent_path, ordinary.INTENT_TYPE)
                 or lineage != ordinary._payload(ordinary.admission._child(root, lane_intent["lineage"]), ordinary.LINEAGE_TYPE)
                 or lane != ordinary._lane(lineage["image_check"]["proof"], lane_intent["campaign_name"])
-                or sites != (epoch_workers.prepared_sites(lineage["image_check"]["proof"]["plan_payload"], lineage["image_check"]["proof"]["sites"])
+                or sites != (quick.prepared_sites(lineage["image_check"]["proof"]["sites"])
+                    if quick.is_payload(lineage["image_check"]["proof"]["plan_payload"])
+                    else epoch_workers.prepared_sites(lineage["image_check"]["proof"]["plan_payload"], lineage["image_check"]["proof"]["sites"])
                     if epoch_workers.is_payload(lineage["image_check"]["proof"]["plan_payload"])
                     else target_workers.prepared_sites(lineage["image_check"]["proof"]["plan_payload"], lineage["image_check"]["proof"]["sites"])
                     if target_workers.is_payload(lineage["image_check"]["proof"]["plan_payload"])

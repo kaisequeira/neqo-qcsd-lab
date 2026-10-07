@@ -401,12 +401,38 @@ def _epoch_dispatch_source_projection(raw):
     source52 = 'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702'
     source53 = '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739'
     owned_check = 'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'
+    quick_profile = 'b9f316d212cf024e3d09ab4fa1a61035233f68f50f8a7c03c7450495cf81d2b0'
     if digest not in {
             'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
             '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b',
             'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4',
-            source52, source53, owned_check}:
+            source52, source53, owned_check, quick_profile}:
         raise ValueError('rolling epoch dispatch is outside the exact published Source pair')
+    if digest == quick_profile:
+        # The new path is selected only by a quick-profile receipt. Restore
+        # the complete Source57 reader before applying the older projection.
+        additions = (
+            b'    from . import rapid_quick_profile as quick\n'
+            b'    if quick.is_plan(spec.plan_receipt):\n'
+            b'        return quick.verify_plan(spec, _context=_context)\n',
+            b'    from . import rapid_quick_profile as quick\n'
+            b'    if quick.is_payload(payload):\n'
+            b'        quick.require_worker(payload, lane, sites, spec)\n'
+            b'        return payload["scheduling"]\n',
+            b'    from . import rapid_quick_profile as quick\n'
+            b'    if quick.is_plan(spec.plan_receipt):\n'
+            b'        return quick.mount_roots(lanes.plan_payload(lanes._read(spec.plan_receipt))["scheduling"])\n',
+            b'    from . import rapid_quick_profile as quick\n'
+            b'    if quick.is_payload(payload):\n'
+            b'        return quick.mount_roots(payload["scheduling"], _context=_context)\n',
+        )
+        for addition in additions:
+            if raw.count(addition) != 1:
+                raise ValueError('rolling quick dispatch is absent or duplicated')
+            raw = raw.replace(addition, b'', 1)
+        if hashlib.sha256(raw).hexdigest() != owned_check:
+            raise ValueError('rolling quick dispatch changes protected Source bytes')
+        digest = owned_check
     if digest == owned_check:
         def restore_once(changed, predecessor):
             nonlocal raw
@@ -499,7 +525,31 @@ def _epoch_dispatch_source_projection(raw):
 def _parallel_facts_source_projection(raw):
     """Retain every Facts unit except exact reviewed action-local dispatches."""
     import ast
-    if hashlib.sha256(raw).hexdigest() not in {
+    digest = hashlib.sha256(raw).hexdigest()
+    quick_profile = 'b71aeb8ea29056d13c1153ea16cd3d1445d8ca355c7e4e1928df5dfa560449f8'
+    if digest == quick_profile:
+        additions = (
+            b'        from . import rapid_quick_profile as quick\n'
+            b'        if isinstance(item, dict) and item.get("artifact_type") == quick.CAPSULE_TYPE:\n'
+            b'            for reference in item["material_files"]:\n'
+            b'                self._reference(reference)\n'
+            b'            return\n'
+            b'        if isinstance(item, dict) and item.get("receipt_type") == quick.PLAN_TYPE:\n'
+            b'            quick.validate_profile(item["payload"]["scheduling"], _context=self)\n'
+            b'            return\n',
+            b'        from . import rapid_quick_profile as quick\n'
+            b'        if quick.is_plan(spec.plan_receipt):\n'
+            b'            quick.bind(spec, self)\n'
+            b'            return\n',
+        )
+        for addition in additions:
+            if raw.count(addition) != 1:
+                raise ValueError('Facts quick dispatch is absent or duplicated')
+            raw = raw.replace(addition, b'', 1)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != '304a383d7c7cb17cc6dfb4c366e7cb195f9369bd262fdb57dc99a9c64fdce3d6':
+            raise ValueError('Facts quick dispatch changes protected Source bytes')
+    if digest not in {
             'ffd0ce58b57a2a94cd974573e79064fc4c69d62f99b586d5449b1424bc86973d',
             'e667bfab9ef36467211c3d4a9227da0db55264bc262295751b281e0a2f156fe4',
             '304a383d7c7cb17cc6dfb4c366e7cb195f9369bd262fdb57dc99a9c64fdce3d6'}:
@@ -524,7 +574,33 @@ def _parallel_facts_source_projection(raw):
 def _parallel_schedule_source_projection(raw):
     """Retain every scheduling unit except the exact typed adapter dispatches."""
     import ast
-    if hashlib.sha256(raw).hexdigest() not in {
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest == '3563882347e3ddb2df93846538bc8f95c833b158b62435964f35586046d03f5b':
+        additions = (
+            b'    from . import rapid_quick_profile as quick\n'
+            b'    if isinstance(value, dict) and value.get("artifact_type") == quick.CAPSULE_TYPE:\n'
+            b'        return quick.validate_profile(reference, runtime=runtime, before=before, _context=_context)\n',
+            b'    from . import rapid_quick_profile as quick\n'
+            b'    if capsule["artifact_type"] == quick.CAPSULE_TYPE:\n'
+            b'        qualification._validate_implementation_receipt(current_impl, require_current=False)\n'
+            b'        if (actual_image != capsule["runtime"]["collection_image_digest"]\n'
+            b'            or current_impl["source"] != capsule["source"]\n'
+            b'            or old_impl["neqo_qcsd_client"]["sha256"] != capsule["client_sha256"]\n'
+            b'            or current_impl["neqo_qcsd_client"]["sha256"] != capsule["client_sha256"]):\n'
+            b'            raise ValueError("quick setting changed its qualified Native818 client or current installed source")\n'
+            b'        return\n',
+            b'    from . import rapid_quick_profile as quick\n'
+            b'    if capsule["artifact_type"] == quick.CAPSULE_TYPE:\n'
+            b'        return quick.mount_roots(reference, _context=_context)\n',
+        )
+        for addition in additions:
+            if raw.count(addition) != 1:
+                raise ValueError('quick scheduling dispatch is absent or duplicated')
+            raw = raw.replace(addition, b'', 1)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != '15b423aa04fe942fc08b3b61e26973b1cd3473363184e5660c1f02c27b4b5ddb':
+            raise ValueError('quick scheduling dispatch changes protected Source bytes')
+    if digest not in {
             '2137c31db996a12e7269dae82b008982281d118304fe984feb44c5eefdf01d77',
             '15b423aa04fe942fc08b3b61e26973b1cd3473363184e5660c1f02c27b4b5ddb'}:
         raise ValueError('scheduling reader dispatch is outside the exact old/new Source pair')
@@ -845,6 +921,31 @@ def _compatible_sources(producer):
             _compatible_selected_membership_code(
                 'src/qcsd_lab/rapid_per_class_selected_enrollment.py',
                 producer[name], expected)
+        elif name == 'traffic':
+            if producer[name]['mode'] != expected['mode']:
+                raise ValueError('fixed target traffic reader full modes differ')
+            if producer[name]['sha256'] != expected['sha256']:
+                if (producer[name]['sha256'] != '4eb2d2ce5a35005f342befe9fb86dd6dad27980b2635e5372fda227902764542'
+                        or expected['sha256'] != '7210b7da27e5d1129e0a2c754fe903e5f151057b5ff0393f814e0ae311e47082'):
+                    raise ValueError('fixed target traffic reader changed outside the exact quick dispatch pair')
+                raw = Path(expected['path']).read_bytes()
+                addition = (
+                    b'        from . import rapid_quick_profile as quick\n'
+                    b'        if quick.is_payload(payload):\n'
+                    b'            quick.validate_profile(payload["scheduling"])\n'
+                    b'            return value\n'
+                )
+                if raw.count(addition) != 1 or hashlib.sha256(raw.replace(addition, b'', 1)).hexdigest() != producer[name]['sha256']:
+                    raise ValueError('fixed target traffic reader changes protected traffic or deep code')
+                # Facts imports this dispatcher while reading an old enrollment.
+                # Pin its complete Source so a new receipt type cannot alias an
+                # old one while the historical projection is in use.
+                from . import rapid_quick_profile as quick
+                quick_ref = reference(Path(quick.__file__))
+                _open(quick_ref)
+                if (quick_ref['sha256'] != '79a8c80fc8e701e2bd97fd7dd3ddd996dceb2c7145201d1844a0a2b15d11d99e'
+                        or quick_ref['mode'] != 0o644):
+                    raise ValueError('fixed target quick dispatcher Source or full mode changed')
         elif any(producer[name][key] != expected[key] for key in ('sha256', 'mode')):
             raise ValueError('fixed target relevant producer/reader code bytes or modes differ')
     return True
@@ -908,7 +1009,8 @@ def _compatible_membership(producer, current, producer_sources):
             'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4',
             'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702',
             '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739',
-            'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'}
+            'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14',
+            'b9f316d212cf024e3d09ab4fa1a61035233f68f50f8a7c03c7450495cf81d2b0'}
         exact_deep_successor = (
             pair[0] in {'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702',
                         '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739'}

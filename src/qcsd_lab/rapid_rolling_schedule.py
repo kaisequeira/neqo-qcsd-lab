@@ -684,6 +684,9 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
             return validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
+    from . import rapid_quick_profile as quick
+    if isinstance(value, dict) and value.get("artifact_type") == quick.CAPSULE_TYPE:
+        return quick.validate_profile(reference, runtime=runtime, before=before, _context=_context)
     from . import rapid_epoch_target_parallel_schedule as epoch_workers
     if isinstance(value, dict) and value.get("artifact_type") == epoch_workers.CAPSULE_TYPE:
         return epoch_workers.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
@@ -739,6 +742,15 @@ def validate_qualification_reuse(old_impl: Mapping, current_impl: Mapping, refer
                                 *, actual_image: str, before: str | None = None, _context=None) -> None:
     """Typed installed hook: no ambient or source-only qualification exemption."""
     capsule = validate_schedule(reference, before=before, _context=_context)
+    from . import rapid_quick_profile as quick
+    if capsule["artifact_type"] == quick.CAPSULE_TYPE:
+        qualification._validate_implementation_receipt(current_impl, require_current=False)
+        if (actual_image != capsule["runtime"]["collection_image_digest"]
+            or current_impl["source"] != capsule["source"]
+            or old_impl["neqo_qcsd_client"]["sha256"] != capsule["client_sha256"]
+            or current_impl["neqo_qcsd_client"]["sha256"] != capsule["client_sha256"]):
+            raise ValueError("quick setting changed its qualified Native818 client or current installed source")
+        return
     from . import rapid_epoch_target_parallel_schedule as epoch_workers
     if capsule["artifact_type"] == epoch_workers.CAPSULE_TYPE:
         epoch_workers.validate_current_implementation(old_impl, current_impl, reference,
@@ -856,6 +868,9 @@ def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
         with _context.scope():
             return mount_roots(reference, _context=_context)
     capsule = validate_schedule(reference, _context=_context)
+    from . import rapid_quick_profile as quick
+    if capsule["artifact_type"] == quick.CAPSULE_TYPE:
+        return quick.mount_roots(reference, _context=_context)
     from . import rapid_epoch_target_parallel_schedule as epoch_workers
     if capsule["artifact_type"] == epoch_workers.CAPSULE_TYPE:
         return epoch_workers.mount_roots(reference, _context=_context)

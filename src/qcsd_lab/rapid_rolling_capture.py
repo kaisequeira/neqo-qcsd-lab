@@ -1001,6 +1001,9 @@ def _capture_spec_from_enrollment(root: Path, enrollment: Path, qualification_sp
 
 
 def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = False, _context=None) -> tuple[tuple[plan.Site, ...], dict[str, Any]]:
+    from . import rapid_quick_profile as quick
+    if quick.is_plan(spec.plan_receipt):
+        return quick.verify_plan(spec, _context=_context)
     from .rapid_operation_facts import current_context
     _context = current_context() if _context is None else _context
     if _context is not None and current_context() is not _context:
@@ -1212,6 +1215,10 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
         with _context.scope():
             return require_mode_readiness(spec, lane, before=before, _context=_context)
     sites, payload = verify_capture_plan(spec, _context=_context)
+    from . import rapid_quick_profile as quick
+    if quick.is_payload(payload):
+        quick.require_worker(payload, lane, sites, spec)
+        return payload["scheduling"]
     if lane.study_version != 6 or lane.role != "formal":
         raise ValueError("rolling readiness cannot authorize a historical or diagnostic lane")
     if lane.mode not in payload["readiness"]:
@@ -1440,6 +1447,9 @@ print(json.dumps({'receipt':str(receipt),'facts':e.verify_launch_receipt(
 
 
 def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
+    from . import rapid_quick_profile as quick
+    if quick.is_plan(spec.plan_receipt):
+        return quick.mount_roots(lanes.plan_payload(lanes._read(spec.plan_receipt))["scheduling"])
     """Derive transport from sealed policy and enrollment metadata only.
 
     The installed plan check still reopens every terminal and prepared graph.
@@ -1567,6 +1577,9 @@ def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=Non
         with _context.scope():
             return readiness_roots(spec, campaign_name, _context=_context)
     _, payload = verify_capture_plan(spec, _context=_context)
+    from . import rapid_quick_profile as quick
+    if quick.is_payload(payload):
+        return quick.mount_roots(payload["scheduling"], _context=_context)
     proof = {"plan_payload": payload}
     lane = lanes._lane(proof, campaign_name)
     reference = require_mode_readiness(spec, lane, _context=_context)

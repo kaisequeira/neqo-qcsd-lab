@@ -31,6 +31,10 @@ def declared(payload: Mapping[str, Any]) -> str | None:
         or "static_capture_amendment" not in payload):
         raise ValueError("BuFLO200 traffic requires its separate prospective static amendment")
     if "scheduling" in payload:
+        from . import rapid_quick_profile as quick
+        if quick.is_payload(payload):
+            quick.validate_profile(payload["scheduling"])
+            return value
         from . import rapid_static_parallel_schedule as static
         from . import rapid_selected_parallel_schedule as selected
         from . import rapid_target_parallel_schedule as target

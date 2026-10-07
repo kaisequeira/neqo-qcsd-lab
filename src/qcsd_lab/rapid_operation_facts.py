@@ -198,6 +198,14 @@ class OperationFacts:
 
     def _references(self, item, root: Path, seen=None) -> None:
         """Follow authenticated lab receipt references, never webpage bodies."""
+        from . import rapid_quick_profile as quick
+        if isinstance(item, dict) and item.get("artifact_type") == quick.CAPSULE_TYPE:
+            for reference in item["material_files"]:
+                self._reference(reference)
+            return
+        if isinstance(item, dict) and item.get("receipt_type") == quick.PLAN_TYPE:
+            quick.validate_profile(item["payload"]["scheduling"], _context=self)
+            return
         seen = set() if seen is None else seen
         if isinstance(item, dict):
             if item.get("artifact_type") == "qcsd-chaff-qualification-implementation":
@@ -230,6 +238,10 @@ class OperationFacts:
                 self._references(child, root, seen)
 
     def bind_capture(self, spec) -> None:
+        from . import rapid_quick_profile as quick
+        if quick.is_plan(spec.plan_receipt):
+            quick.bind(spec, self)
+            return
         from .rapid_lane_evidence import STUDY_PROFILE_FILE
         from .rapid_capture_traffic import plan_files
         key = ("capture", json.dumps(spec.serializable(), sort_keys=True))
