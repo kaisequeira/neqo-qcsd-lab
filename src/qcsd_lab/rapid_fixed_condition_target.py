@@ -172,6 +172,7 @@ _READER_COMPATIBILITY_HELPERS = {
                '_compatible_selected_membership_code', '_epoch_dispatch_source_projection',
                '_epoch_dynamic_source_projection', '_parallel_facts_source_projection',
                '_parallel_schedule_source_projection', '_acquisition_reader_sources',
+               '_v11_input_reader_source_projection',
                '_compatible_acquisition_code', '_cohort_acquisition_source_projection',
                '_membership_additive_reader_roles'),
     'dynamic': ('_compatible_reader_sources',),
@@ -510,7 +511,7 @@ def _acquisition_reader_sources():
         'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
         'rapid_per_class_selected_enrollment.py': '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0',
-        'whole_graph_input.py': '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b',
+        'whole_graph_input.py': '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf',
         'whole_graph_supplement.py': '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7',
         'rapid_supplemental_cohort.py': '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
     }
@@ -523,6 +524,32 @@ def _acquisition_reader_sources():
             raise ValueError('historical acquisition reader is outside the exact prospective Source set')
         result['src/qcsd_lab/' + name] = item
     return result
+
+
+def _v11_input_reader_source_projection(raw):
+    """Restore exact Source53 bytes after the one reviewed V11 registration."""
+    if hashlib.sha256(raw).hexdigest() != '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
+        raise ValueError('V11 discovery reader is outside its exact reviewed Source')
+    start, end = b'V11_PLAN_TYPE = ', b'ZERO = '
+    if raw.count(start) != 1 or raw.count(end) != 1:
+        raise ValueError('V11 registration block is not unique')
+    projected = raw[:raw.index(start)] + raw[raw.index(end):]
+    replacements = (
+        (b'(9, 10, 11)', b'(9, 10)', 2),
+        (b'(8, 9, 10, 11)', b'(8, 9, 10)', 2),
+        (b'action_sources = (V9_ACTION_SOURCES if version[0] == 9 else\n'
+         b'                              V10_ACTION_SOURCES if version[0] == 10 else V11_ACTION_SOURCES)',
+         b'action_sources = V9_ACTION_SOURCES if version[0] == 9 else V10_ACTION_SOURCES', 1),
+        (b'if declaration["schema_version"] in (10, 11):',
+         b'if declaration["schema_version"] == 10:', 1),
+    )
+    for current, original, count in replacements:
+        if projected.count(current) != count:
+            raise ValueError('V11 dispatch changed another original reader unit')
+        projected = projected.replace(current, original)
+    if hashlib.sha256(projected).hexdigest() != '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b':
+        raise ValueError('V11 reader changes protected historical graph or proof bytes')
+    return projected
 
 
 def _cohort_acquisition_source_projection(raw, relative):
@@ -591,6 +618,12 @@ def _compatible_acquisition_code(relative, before, after):
             before['mode'] != 0o644 or after['mode'] != 0o644):
         raise ValueError('acquisition compatibility changes the reviewed reader or full mode')
     if before['sha256'] == after['sha256']:
+        return True
+    if relative == 'src/qcsd_lab/whole_graph_input.py':
+        if (before['sha256'] != '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b'
+                or _v11_input_reader_source_projection(Path(after['path']).read_bytes())
+                != Path(before['path']).read_bytes()):
+            raise ValueError('whole graph reader is outside the exact Source53/V11 registration pair')
         return True
     roles = {
         'src/qcsd_lab/rapid_selected_capture_input.py': (
@@ -807,6 +840,9 @@ def _compatible_membership(producer, current, producer_sources):
                       'src/qcsd_lab/rapid_per_class_selected_enrollment.py',
                       'src/qcsd_lab/rapid_selected_capture_input.py',
                       'src/qcsd_lab/whole_graph_supplement.py')
+    input_reader = 'src/qcsd_lab/whole_graph_input.py'
+    if input_reader in old_code and input_reader in new_code:
+        _compatible_acquisition_code(input_reader, old_code[input_reader], new_code[input_reader])
     for relative in selected_roles:
         if relative not in old_code and relative not in new_code:
             continue
@@ -867,6 +903,8 @@ def _compatible_membership(producer, current, producer_sources):
                     row['sha256'] = producer_sources['target']['sha256']
                 elif relative in selected_roles:
                     row['sha256'] = old_code[relative]['sha256']
+                elif relative == input_reader and input_reader in old_code and input_reader in new_code:
+                    row['sha256'] = old_code[input_reader]['sha256']
         result['files'].sort(key=lambda row: row['path'])
         result['trees'].sort(key=lambda row: (row['path'], row['ignore_git']))
         return result

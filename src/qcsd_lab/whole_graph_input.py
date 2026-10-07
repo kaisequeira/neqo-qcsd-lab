@@ -96,6 +96,17 @@ V10_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e
 for _type in (V10_PLAN_TYPE, V10_CONTINUATION_PLAN_TYPE):
     VERSIONS[_type] = (10, V10_CONTRACT, V10_INPUT_TYPE, V10_PRODUCERS)
 CONTROL_SOURCES[10] = CONTROL_SOURCES[6]
+V11_PLAN_TYPE = "qcsd-external-navigation-seeded-whole-graph-catalogue-plan-v11"
+V11_INPUT_TYPE = "qcsd-external-browser-whole-graph-input-v11"
+V11_CONTRACT = "catalogue-homepage-navigation-seeded-complete-occurrence-graph-input-only-v11"
+# V11 appends the next frozen catalogue batch after a complete V10/V11 batch.
+# It retains the same V8 interruption and actual V9 prebirth refusal.
+V11_PRODUCERS = {"graph_input.py": "22dbee4fbf05dd01933286f7a2d2127f2e99ea461cbc1f4a908d05c5113be5c3",
+                 "operator.py": "2d08699af3f12428b8551e8f5e6e87ae956ab3a71331519aacbfa0ffd28860bb"}
+V11_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e633c8561f16f8e09c071f8c309",
+                      "controller.py": "ce6b56a4742f6de047e1daa5d9e7991b7efb64b7471194b8f950a3850864f141"}
+VERSIONS[V11_PLAN_TYPE] = (11, V11_CONTRACT, V11_INPUT_TYPE, V11_PRODUCERS)
+CONTROL_SOURCES[11] = CONTROL_SOURCES[6]
 ZERO = {"scientific_credit": False, "site_credit": 0, "formal_accepted_trace_count": 0}
 RESOURCE_KEYS = {"id", "url", "type", "content_length", "data_length", "chaff_priority",
                  "known_valid", "depends_on", "headers"}
@@ -144,8 +155,9 @@ def _producer(plan: dict[str, Any]) -> Path:
         raise ValueError("whole graph input has an unrecognized discovery producer")
     if version[0] >= 5:
         parent = paths["operator.py"].parent
-        if version[0] in (9, 10):
-            action_sources = V9_ACTION_SOURCES if version[0] == 9 else V10_ACTION_SOURCES
+        if version[0] in (9, 10, 11):
+            action_sources = (V9_ACTION_SOURCES if version[0] == 9 else
+                              V10_ACTION_SOURCES if version[0] == 10 else V11_ACTION_SOURCES)
             refs = get._exact(plan.get("action_local_sources"), set(action_sources),
                 f"V{version[0]} action readers")
             for name, digest in action_sources.items():
@@ -191,7 +203,7 @@ def load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("whole graph discovery declaration has another role")
     operator = _producer(value)
     _verify_external(operator, "check", "--plan", path.absolute(),
-        **({"timeout": 240} if value["schema_version"] in (8, 9, 10) else {}))
+        **({"timeout": 240} if value["schema_version"] in (8, 9, 10, 11) else {}))
     return value
 
 
@@ -236,7 +248,7 @@ def load_input(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if VERSIONS[plan["artifact_type"]] != version:
         raise ValueError("whole graph input crosses discovery producer versions")
     _verify_external(operator, "verify-input", "--input", path.absolute(),
-        **({"timeout": 240} if version[0] in (8, 9, 10) else {}))
+        **({"timeout": 240} if version[0] in (8, 9, 10, 11) else {}))
     return value, project(value, get._load(get._read(reopen(value["native_manifest"]))))
 
 
@@ -370,7 +382,7 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
             # The independent verifier authenticates this complete inventory;
             # bind those exact files as well for transport/release fences.
             files.add(source_path)
-        if declaration["schema_version"] in (9, 10):
+        if declaration["schema_version"] in (9, 10, 11):
             # The independent verifier reconstructs the born interruption,
             # exact old raw tree and every completed ordered successor batch.
             # V10 additionally binds the actual prebirth V9 transport refusal.
@@ -390,7 +402,7 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
                         retained_refs(item)
             retained_refs(retained)
             sources.add(Path(retained["original_root"]))
-            if declaration["schema_version"] == 10:
+            if declaration["schema_version"] in (10, 11):
                 # The V8 Root inputs were checked against the original
                 # controller's authorities by the external V10 verifier.
                 # Bind those transitive reviewed files for release transport.
