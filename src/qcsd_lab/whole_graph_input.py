@@ -117,6 +117,14 @@ V12_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e
                       "controller.py": "2af7e045140b42b56faedaf63ce6a86e618c4d1a6a39da44902c95bba7f9bf5e"}
 VERSIONS[V12_PLAN_TYPE] = (12, V12_CONTRACT, V12_INPUT_TYPE, V12_PRODUCERS)
 CONTROL_SOURCES[12] = CONTROL_SOURCES[6]
+V13_PLAN_TYPE = "qcsd-external-canonical-homepage-whole-graph-catalogue-plan-v13"
+V13_INPUT_TYPE = "qcsd-external-browser-whole-graph-input-v13"
+V13_CONTRACT = "prospectively-resolved-canonical-homepage-complete-occurrence-graph-input-only-v13"
+# One tracked producer supports consecutive prospective canonical-homepage batches.
+V13_PRODUCERS = {"graph_input.py": "d12b4278665f5b26a5c927e572254b7dcd8bbd4294811ba57a56c91b05e28ac1",
+                 "operator.py": "5b7f8032fa7329679667b7b83f0904aa8019677ef904995eff94bd2bbca7a5f6",
+                 "canonical_homepage.py": "1683d3bd3ef71a1de62f209ad01c4c860cd57102a0f5fb53890d6e4f81d7314a"}
+VERSIONS[V13_PLAN_TYPE] = (13, V13_CONTRACT, V13_INPUT_TYPE, V13_PRODUCERS)
 ZERO = {"scientific_credit": False, "site_credit": 0, "formal_accepted_trace_count": 0}
 RESOURCE_KEYS = {"id", "url", "type", "content_length", "data_length", "chaff_priority",
                  "known_valid", "depends_on", "headers"}
@@ -163,6 +171,11 @@ def _producer(plan: dict[str, Any]) -> Path:
             or paths["operator.py"].parent != paths["graph_input.py"].parent
             or any(paths[name].name != name for name in PRODUCERS)):
         raise ValueError("whole graph input has an unrecognized discovery producer")
+    if version[0] == 13:
+        if any(paths[name].parent != paths["operator.py"].parent or paths[name].name != name
+                for name in producers):
+            raise ValueError("V13 discovery producer files have another name or location")
+        return paths["operator.py"]
     if version[0] >= 5:
         parent = paths["operator.py"].parent
         if version[0] in (9, 10, 11, 12):
@@ -198,7 +211,7 @@ def _external_control(plan: dict[str, Any], parent: Path) -> None:
             raise ValueError("external discovery control bytes, mode or location changed")
 
 
-def _verify_external(operator: Path, action: str, flag: str, path: Path, *, timeout: int = 60) -> None:
+def _verify_external(operator: Path, action: str, flag: str, path: Path, *, timeout: int | None = 60) -> None:
     # Resolve the running Python portably. Captured producer output may contain
     # resource data; neither it nor exception text is emitted by this API.
     env = {k: v for k, v in os.environ.items() if not k.startswith("QCSD_") and k != "PYTHONPATH"}
@@ -214,7 +227,8 @@ def load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("whole graph discovery declaration has another role")
     operator = _producer(value)
     _verify_external(operator, "check", "--plan", path.absolute(),
-        **({"timeout": 240} if value["schema_version"] in (8, 9, 10, 11, 12) else {}))
+        **({"timeout": None} if value["schema_version"] == 13 else
+           {"timeout": 240} if value["schema_version"] in (8, 9, 10, 11, 12) else {}))
     return value
 
 
@@ -259,7 +273,8 @@ def load_input(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if VERSIONS[plan["artifact_type"]] != version:
         raise ValueError("whole graph input crosses discovery producer versions")
     _verify_external(operator, "verify-input", "--input", path.absolute(),
-        **({"timeout": 240} if version[0] in (8, 9, 10, 11, 12) else {}))
+        **({"timeout": None} if version[0] == 13 else
+           {"timeout": 240} if version[0] in (8, 9, 10, 11, 12) else {}))
     return value, project(value, get._load(get._read(reopen(value["native_manifest"]))))
 
 
@@ -267,6 +282,13 @@ def load_failure(path: Path) -> dict[str, Any]:
     """An operational discovery failure is an accounted attempt, never eligibility."""
     value = get._load(get._read(path))
     plan = load_plan(reopen(value["plan"]))
+    if plan["schema_version"] == 13:
+        if (path.name != "failed.json" or not zero(value)
+                or value.get("candidate") not in plan["candidates"]
+                or value.get("outcome") != "operational-discovery-failure-no-admission"):
+            raise ValueError("V13 discovery failure changes its declared zero-credit role")
+        _verify_external(_producer(plan), "verify-failure", "--failure", path.absolute(), timeout=None)
+        return value
     if plan["schema_version"] >= 4:
         return _controlled_failure(path, value, plan)
     seeded = plan["artifact_type"] in {SEEDED_PLAN_TYPE, CATALOGUE_PLAN_TYPE}
@@ -377,7 +399,7 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
         _producer(declaration)
         for entry in declaration["producer_sources"].values():
             ref(entry)
-        if declaration["schema_version"] >= 5:
+        if declaration["schema_version"] >= 5 and declaration["schema_version"] != 13:
             for entry in declaration["discovery_control"]["sources"].values():
                 ref(entry)
         ref(declaration["catalogue"])
@@ -393,6 +415,17 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
             # The independent verifier authenticates this complete inventory;
             # bind those exact files as well for transport/release fences.
             files.add(source_path)
+        if declaration["schema_version"] == 13:
+            if declaration["previous_plan"] is not None:
+                plan(declaration["previous_plan"])
+                batch = ref(declaration["previous_batch"])
+                sources.add(batch.parent)
+                for item in sorted(batch.parent.rglob("*")):
+                    if item.is_symlink():
+                        raise ValueError("V13 preceding batch has a linked raw member")
+                    if item.is_file():
+                        files.add(item)
+            return
         if declaration["schema_version"] in (9, 10, 11, 12):
             # The independent verifier reconstructs the born interruption,
             # exact old raw tree and every completed ordered successor batch.
@@ -499,6 +532,19 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
     return sorted(files), sorted(sources)
 
 
+def _v13_dependencies(value: Any, ref) -> None:
+    """Retain every explicit resolution and recorded HOST validation reference."""
+    if isinstance(value, dict):
+        if set(value) == {"path", "sha256", "mode"}:
+            ref(value)
+        else:
+            for item in value.values():
+                _v13_dependencies(item, ref)
+    elif isinstance(value, list):
+        for item in value:
+            _v13_dependencies(item, ref)
+
+
 def input_files(path: Path) -> tuple[list[Path], list[Path]]:
     """Finite authenticated raw dependency inventory, including old discovery Source."""
     value, _ = load_input(path)
@@ -515,7 +561,15 @@ def input_files(path: Path) -> tuple[list[Path], list[Path]]:
     for pass_record in value["passes"]:
         for entry in pass_record.values():
             ref(entry)
-    if value["schema_version"] >= 2:
+    if value["schema_version"] == 13:
+        canonical = ref(value["canonical_homepage"])
+        _v13_dependencies(get._load(get._read(canonical)), ref)
+        validation = ref(value["host_validation"])
+        validated = get._load(get._read(validation))
+        _v13_dependencies(validated, ref)
+        sources = sorted({*sources, *(Path(root) for root in validated["dependency_fence"]["trees"])})
+        _v13_dependencies(value["attempt_inventory"], ref)
+    elif value["schema_version"] >= 2:
         for entry in value["navigation"].values():
             ref(entry)
     files.add(path.with_name("image-source-metadata.json").absolute())

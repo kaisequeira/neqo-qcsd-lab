@@ -4,6 +4,8 @@
 for the prospective [50-site study](RAPID-CLASS-STUDY.md). Its formal target is
 **50 websites × five traffic settings × 64 visits = 16,000 accepted traces**.
 The five settings are undefended, FRONT, Tamaraw, BuFLO and CS-BuFLO.
+For later discovery batches, see the prospective
+[canonical homepage policy and portable source bindings](RAPID-CANONICAL-HOMEPAGE.md).
 Prospective **rolling v6** starts eligible sites in batches of one to five,
 under each independently ready setting. It removes the global all-50-sites
 and ten-site shakedown requirements before the first formal recording.

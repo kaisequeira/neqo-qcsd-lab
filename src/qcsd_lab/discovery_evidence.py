@@ -551,6 +551,15 @@ def _validate_source(value: Any) -> tuple[tuple[str, ...], str, int]:
     return tuple(session_path), value["target_id"], value["generation"]
 
 
+def _terminal_diagnostic_fields(value: Mapping[str, Any]) -> bool:
+    """Only absence is accepted; no terminal cause is invented or inferred."""
+    fields = {"error_text", "canceled", "blocked_reason", "cors_error_status_present"}
+    if set(value) == fields:
+        return isinstance(value["error_text"], str) and bool(value["error_text"])
+    return (set(value) == fields | {"error_text_present"}
+            and value["error_text"] is None and value["error_text_present"] is False)
+
+
 def verify_discovery_event_audit(
     value: Any,
     *,
@@ -968,15 +977,7 @@ def verify_discovery_event_audit(
                     event["outcome"] == "failed"
                     and (
                         not isinstance(event["failure"], Mapping)
-                        or set(event["failure"])
-                        != {
-                            "error_text",
-                            "canceled",
-                            "blocked_reason",
-                            "cors_error_status_present",
-                        }
-                        or not isinstance(event["failure"].get("error_text"), str)
-                        or not event["failure"].get("error_text")
+                        or not _terminal_diagnostic_fields(event["failure"])
                         or (
                             event["failure"].get("canceled") is not None
                             and type(event["failure"].get("canceled")) is not bool

@@ -612,8 +612,9 @@ def _terminal_failure_evidence(
     canceled = event.get("canceled")
     blocked_reason = event.get("blockedReason")
     cors_error_status = event.get("corsErrorStatus")
-    if not isinstance(error_text, str) or not error_text:
-        raise DiscoveryIntegrityError("Chromium loading failure omitted its error text")
+    error_text_present = "errorText" in event
+    if error_text_present and (not isinstance(error_text, str) or not error_text):
+        raise DiscoveryIntegrityError("Chromium loading failure error text is malformed")
     if canceled is not None and type(canceled) is not bool:
         raise DiscoveryIntegrityError("Chromium loading failure cancellation flag is malformed")
     if blocked_reason is not None and (
@@ -627,6 +628,7 @@ def _terminal_failure_evidence(
         "canceled": canceled,
         "blocked_reason": blocked_reason,
         "cors_error_status_present": cors_error_status is not None,
+        **({"error_text_present": False} if not error_text_present else {}),
     }
 
 

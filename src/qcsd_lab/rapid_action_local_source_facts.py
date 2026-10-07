@@ -34,10 +34,32 @@ def _reference(context, reference):
 
 
 def _bind_source(context, source):
+    from . import rapid_chunk_partial_lane as dynamic
     binding = source['binding']
-    references = [*source['files'].values(), *binding['read_dependencies'],
+    fields = ('root', 'lab_head', 'native_head', 'files')
+    portable_fields = fields + ('installed_files', 'mode_pairs')
+    if (not isinstance(binding['release'], dict)
+            or set(binding['release']) not in (set(fields), set(portable_fields))):
+        raise ValueError('memoized Source release has another schema')
+    references = [*binding['read_dependencies'],
                   *binding['runtime_operation'].values(), binding['canonical'],
                   *binding['reader_sources'].values()]
+    releases = {}
+    for release in (source, binding['release']):
+        portable = bool(set(release) & {'installed_files', 'mode_pairs'})
+        keys = portable_fields if portable else fields
+        if not set(keys) <= set(release):
+            raise ValueError('memoized portable Source lost a permission role')
+        value = {key: release[key] for key in keys}
+        if portable:
+            # Reopen every exact permission pair, not just its executable class.
+            dynamic._portable_installed_release(value)
+            references.extend(value['installed_files'].values())
+        references.extend(value['files'].values())
+        previous = releases.get(value['root'])
+        if previous is not None and previous != value:
+            raise ValueError('memoized Source release aliases disagree')
+        releases[value['root']] = value
     # Overlay bindings expose both original module and actual runtime closures.
     if 'overlay_registration' in source:
         references.extend(source['overlay_registration']['read_dependencies'])
@@ -51,13 +73,14 @@ def _bind_source(context, source):
         _reference(context, reference)
     for row in binding['directory_dependencies']:
         context.watch_directory(Path(row['path']), expected=row)
-    releases = {}
-    for release in (source, binding['release']):
-        value = {key: release[key] for key in ('root', 'lab_head', 'native_head', 'files')}
-        previous = releases.get(value['root'])
-        if previous is not None and previous != value:
-            raise ValueError('memoized Source release aliases disagree')
-        releases[value['root']] = value
+    installed_root = None
+    if any('installed_files' in release for release in releases.values()):
+        # The binding keeps the original frozen image context, never a current
+        # consumer checkout or a relabelled measurement Source.
+        dynamic._portable_runtime_roles(binding['canonical'], binding['runtime'])
+        installed_root = Path(binding['runtime']['runtime_source_root'])
+        for name in ('src', 'tools'):
+            context.watch_tree(installed_root / name)
     for root_name, release in sorted(releases.items()):
         root = Path(root_name)
         # Source files are individually bound above. Complete import membership
@@ -81,8 +104,12 @@ def _bind_source(context, source):
                 context.watch_tree(path if path.is_absolute() else checkout / path)
         # Tie the first Git-tree observations to the exact original release,
         # including a move between the initial reader and memo registration.
-        from . import rapid_chunk_partial_lane as dynamic
-        if dynamic.release_snapshot(root, release['lab_head'], release['native_head']) != release:
+        if 'installed_files' in release:
+            actual = dynamic.portable_release_snapshot(root, release['lab_head'],
+                release['native_head'], installed_root)
+        else:
+            actual = dynamic.release_snapshot(root, release['lab_head'], release['native_head'])
+        if actual != release:
             raise ValueError('memoized Source release changed before registration')
 
 

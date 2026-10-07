@@ -173,13 +173,15 @@ _READER_COMPATIBILITY_HELPERS = {
                '_epoch_dynamic_source_projection', '_parallel_facts_source_projection',
                '_portable_dynamic_source_projection',
                '_parallel_schedule_source_projection', '_acquisition_reader_sources',
+               '_v13_input_reader_source_projection', '_v13_supplement_reader_source_projection',
+               '_v13_cohort_reader_source_projection',
                '_v12_input_reader_source_projection',
                '_v11_input_reader_source_projection',
                '_compatible_acquisition_code', '_cohort_acquisition_source_projection',
                '_membership_additive_reader_roles', '_parallel_partial_source_projection'),
     'dynamic': ('_compatible_reader_sources',),
 }
-_ACTION_LOCAL_SOURCE_FACTS_SHA256 = '34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c'
+_ACTION_LOCAL_SOURCE_FACTS_SHA256 = '55460a08b99461c5d29d30579605f5f79ce187e69db6657fbdd87399794ed744'
 
 
 def _reader_code_projection(raw, role, *, legacy=False):
@@ -204,7 +206,8 @@ def _reader_code_projection(raw, role, *, legacy=False):
                 and isinstance(node.targets[0], ast.Name)
                 and node.targets[0].id == '_ACTION_LOCAL_SOURCE_FACTS_SHA256'):
             if (legacy or not isinstance(node.value, ast.Constant)
-                    or node.value.value != '34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c'):
+                    or node.value.value not in ('34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c',
+                        '55460a08b99461c5d29d30579605f5f79ce187e69db6657fbdd87399794ed744')):
                 raise ValueError('action-local memo helper is outside the reviewed Source')
             continue
         if role == 'target' and isinstance(node, ast.FunctionDef):
@@ -277,7 +280,8 @@ def _compatible_code_ref(role, producer, current):
                        '76eb0532100db6bfbd247aa9bbac0006902d25502de37ee42d1bb3148659444c',
                        'd485db59ab1e976382e0e544522ea0f15aa638bbe7ca16b62373b5089528de00',
                        '1537b2bc43ca527ed8b1c33fcca14e82b3fb468881cc193bad81a012a5815005',
-                       'aef299755e14c577e366fffa8df0f281f5f10bdef0937abb6fea52e51dd4ae90'})
+                       'aef299755e14c577e366fffa8df0f281f5f10bdef0937abb6fea52e51dd4ae90',
+                       '80783154a4c0097fa8729b69c3ea5dd6ca8f617dd655ce286c7e929874ba8f45'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -717,9 +721,9 @@ def _acquisition_reader_sources():
         'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
         'rapid_per_class_selected_enrollment.py': '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0',
-        'whole_graph_input.py': '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',
-        'whole_graph_supplement.py': '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7',
-        'rapid_supplemental_cohort.py': '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
+        'whole_graph_input.py': '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+        'whole_graph_supplement.py': '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b',
+        'rapid_supplemental_cohort.py': '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
     }
     _open(reference(Path(__file__)))
     result = {}
@@ -732,8 +736,79 @@ def _acquisition_reader_sources():
     return result
 
 
+def _v13_input_reader_source_projection(raw):
+    """Restore every Source62 byte after finite prospective V13 registration."""
+    if hashlib.sha256(raw).hexdigest() != '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa':
+        raise ValueError('V13 discovery reader is outside its exact reviewed Source')
+    start, end = b'V13_PLAN_TYPE = ', b'ZERO = '
+    if raw.count(start) != 1 or raw.count(end) != 1:
+        raise ValueError('V13 registration block is not unique')
+    projected = raw[:raw.index(start)] + raw[raw.index(end):]
+    additions = (
+        b"    if version[0] == 13:\n        if any(paths[name].parent != paths[\"operator.py\"].parent or paths[name].name != name\n                for name in producers):\n            raise ValueError(\"V13 discovery producer files have another name or location\")\n        return paths[\"operator.py\"]\n",
+        b"    if plan[\"schema_version\"] == 13:\n        if (path.name != \"failed.json\" or not zero(value)\n                or value.get(\"candidate\") not in plan[\"candidates\"]\n                or value.get(\"outcome\") != \"operational-discovery-failure-no-admission\"):\n            raise ValueError(\"V13 discovery failure changes its declared zero-credit role\")\n        _verify_external(_producer(plan), \"verify-failure\", \"--failure\", path.absolute(), timeout=None)\n        return value\n",
+        b"        if declaration[\"schema_version\"] == 13:\n            if declaration[\"previous_plan\"] is not None:\n                plan(declaration[\"previous_plan\"])\n                batch = ref(declaration[\"previous_batch\"])\n                sources.add(batch.parent)\n                for item in sorted(batch.parent.rglob(\"*\")):\n                    if item.is_symlink():\n                        raise ValueError(\"V13 preceding batch has a linked raw member\")\n                    if item.is_file():\n                        files.add(item)\n            return\n",
+        b"def _v13_dependencies(value: Any, ref) -> None:\n    \"\"\"Retain every explicit resolution and recorded HOST validation reference.\"\"\"\n    if isinstance(value, dict):\n        if set(value) == {\"path\", \"sha256\", \"mode\"}:\n            ref(value)\n        else:\n            for item in value.values():\n                _v13_dependencies(item, ref)\n    elif isinstance(value, list):\n        for item in value:\n            _v13_dependencies(item, ref)\n\n\n",
+        b"    if value[\"schema_version\"] == 13:\n        canonical = ref(value[\"canonical_homepage\"])\n        _v13_dependencies(get._load(get._read(canonical)), ref)\n        validation = ref(value[\"host_validation\"])\n        validated = get._load(get._read(validation))\n        _v13_dependencies(validated, ref)\n        sources = sorted({*sources, *(Path(root) for root in validated[\"dependency_fence\"][\"trees\"])})\n        _v13_dependencies(value[\"attempt_inventory\"], ref)\n",
+    )
+    for addition in additions:
+        if projected.count(addition) != 1:
+            raise ValueError('V13 registration changed another original reader unit')
+        projected = projected.replace(addition, b'', 1)
+    replacements = (
+        (b"timeout: int | None = 60", b"timeout: int = 60"),
+        (b"**({\"timeout\": None} if value[\"schema_version\"] == 13 else\n           {\"timeout\": 240} if value[\"schema_version\"] in (8, 9, 10, 11, 12) else {}))", b"**({\"timeout\": 240} if value[\"schema_version\"] in (8, 9, 10, 11, 12) else {}))"),
+        (b"**({\"timeout\": None} if version[0] == 13 else\n           {\"timeout\": 240} if version[0] in (8, 9, 10, 11, 12) else {}))", b"**({\"timeout\": 240} if version[0] in (8, 9, 10, 11, 12) else {}))"),
+        (b"if declaration[\"schema_version\"] >= 5 and declaration[\"schema_version\"] != 13:", b"if declaration[\"schema_version\"] >= 5:"),
+        (b"elif value[\"schema_version\"] >= 2:", b"if value[\"schema_version\"] >= 2:"),
+    )
+    for current, original in replacements:
+        if projected.count(current) != 1:
+            raise ValueError('V13 dispatch changed another original reader unit')
+        projected = projected.replace(current, original, 1)
+    if hashlib.sha256(projected).hexdigest() != '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
+        raise ValueError('V13 reader changes protected Source62 graph or proof bytes')
+    return projected
+
+
+def _v13_cohort_reader_source_projection(raw):
+    """Restore exact Source62 bytes after its finite cohort reader recognition."""
+    if hashlib.sha256(raw).hexdigest() != '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029':
+        raise ValueError('V13 cohort reader is outside its exact reviewed Source')
+    start, end = b'def _recognized_reader_sources(', b'def is_context('
+    if raw.count(start) != 1 or raw.count(end) != 1:
+        raise ValueError('Source62 cohort reader recognition is not unique')
+    projected = raw[:raw.index(start)] + raw[raw.index(end):]
+    current = b'or not _recognized_reader_sources(value["reader_sources"])'
+    original = b'or value["reader_sources"] != reader_sources()'
+    if projected.count(current) != 1:
+        raise ValueError('Source62 cohort reader recognition changed another context guard')
+    projected = projected.replace(current, original, 1)
+    if hashlib.sha256(projected).hexdigest() != '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be':
+        raise ValueError('V13 cohort reader changes protected admission or graph bytes')
+    return projected
+
+
+def _v13_supplement_reader_source_projection(raw):
+    """Recover exact Source62 bytes after adding its retained GET context pair."""
+    if hashlib.sha256(raw).hexdigest() != '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b':
+        raise ValueError('V13 supplement reader is outside its exact reviewed Source')
+    addition = (
+        b"            ('5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',\n"
+        b"             '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'),\n"
+    )
+    if raw.count(addition) != 1:
+        raise ValueError('Source62 GET reader pair is not unique')
+    projected = raw.replace(addition, b'', 1)
+    if hashlib.sha256(projected).hexdigest() != '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7':
+        raise ValueError('V13 supplement reader changes protected GET or graph bytes')
+    return projected
+
+
 def _v12_input_reader_source_projection(raw):
     """Recover every exact V11 reader byte after finite V12 registration."""
+    if hashlib.sha256(raw).hexdigest() == '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa':
+        raw = _v13_input_reader_source_projection(raw)
     if hashlib.sha256(raw).hexdigest() != '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
         raise ValueError('V12 discovery reader is outside its exact reviewed Source')
     start, end = b'V12_PLAN_TYPE = ', b'ZERO = '
@@ -756,7 +831,9 @@ def _v12_input_reader_source_projection(raw):
 
 def _v11_input_reader_source_projection(raw):
     """Restore exact Source53 bytes after reviewed V11/V12 registration."""
-    if hashlib.sha256(raw).hexdigest() == '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
+    if hashlib.sha256(raw).hexdigest() in (
+            '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+            '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5'):
         raw = _v12_input_reader_source_projection(raw)
     if hashlib.sha256(raw).hexdigest() != '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
         raise ValueError('V11 discovery reader is outside its exact reviewed Source')
@@ -788,7 +865,7 @@ def _cohort_acquisition_source_projection(raw, relative):
     import_sha = 'f2a706dd23b2283470da2476cf29e830c18e1433543e5b72f09e1106c356aaaa'
     order_sha = '2051f49616452fcfdc2829e49f13928271d068877a5dc1e9bc4867cd07fd17a0'
     if relative == 'src/qcsd_lab/whole_graph_supplement.py':
-        expected_sha = '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'
+        expected_sha = '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b'
         hooks = {
             'load_context': ((0, import_sha), (1, '06b7c22232f3786dd56d2e1e93c034061ac244cabc0ed10147deacffa5ec6a77')),
             'is_context': ((0, import_sha), (1, '0a81ca9efc243020b02578740d82f06c7d8317af09a4f42f63a752cd939219a6')),
@@ -849,16 +926,28 @@ def _compatible_acquisition_code(relative, before, after):
         raise ValueError('acquisition compatibility changes the reviewed reader or full mode')
     if before['sha256'] == after['sha256']:
         return True
+    if (relative == 'src/qcsd_lab/rapid_supplemental_cohort.py'
+            and before['sha256'] == '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be'):
+        if _v13_cohort_reader_source_projection(Path(after['path']).read_bytes()) != Path(before['path']).read_bytes():
+            raise ValueError('V13 cohort reader changes protected Source62 admission or graph bytes')
+        return True
+    if (relative == 'src/qcsd_lab/whole_graph_supplement.py'
+            and before['sha256'] == '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'):
+        if _v13_supplement_reader_source_projection(Path(after['path']).read_bytes()) != Path(before['path']).read_bytes():
+            raise ValueError('V13 supplement reader changes protected Source62 GET or graph bytes')
+        return True
     if relative == 'src/qcsd_lab/whole_graph_input.py':
         old_raw, new_raw = Path(before['path']).read_bytes(), Path(after['path']).read_bytes()
-        if before['sha256'] == '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
+        if before['sha256'] == '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
+            projected = _v13_input_reader_source_projection(new_raw)
+        elif before['sha256'] == '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
             projected = _v12_input_reader_source_projection(new_raw)
         elif before['sha256'] == '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b':
             projected = _v11_input_reader_source_projection(new_raw)
         else:
-            raise ValueError('whole graph reader is outside exact historical/V12 registration pairs')
+            raise ValueError('whole graph reader is outside exact historical/V13 registration pairs')
         if projected != old_raw:
-            raise ValueError('V12 reader changes protected historical graph or proof bytes')
+            raise ValueError('V13 reader changes protected historical graph or proof bytes')
         return True
     roles = {
         'src/qcsd_lab/rapid_selected_capture_input.py': (

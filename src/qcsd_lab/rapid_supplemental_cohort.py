@@ -38,6 +38,36 @@ def reader_sources():
         (inputs, whole, ledger, __import__(__name__, fromlist=["_"]))}
 
 
+def _recognized_reader_sources(value: dict) -> bool:
+    """Reopen the one retained Source62 cohort reader family without new credit."""
+    current = reader_sources()
+    if value == current:
+        return True
+    retained = {
+        "qcsd_lab.whole_graph_input": "5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5",
+        "qcsd_lab.whole_graph_supplement": "164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7",
+        "qcsd_lab.rapid_per_class_selected_enrollment": "4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0",
+        "qcsd_lab.rapid_supplemental_cohort": "12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be",
+    }
+    if not isinstance(value, dict) or set(value) != set(retained):
+        return False
+    paths = {}
+    for name, digest in retained.items():
+        ref = value[name]
+        paths[name] = inputs.reopen(ref)
+        if (ref["sha256"] != digest or ref["mode"] != "0644"
+                or paths[name].name != name.rsplit(".", 1)[1] + ".py"):
+            return False
+    if len({path.parent for path in paths.values()}) != 1:
+        return False
+    from . import rapid_fixed_condition_target as fixed
+    for name, path in paths.items():
+        fixed._compatible_acquisition_code("src/qcsd_lab/" + path.name,
+                                          fixed.reference(path),
+                                          fixed.reference(inputs.reopen(current[name])))
+    return True
+
+
 def is_context(root: Path) -> bool:
     return get._load(get._read(root / "provenance.json")).get("receipt_type") == CONTEXT_TYPE
 
@@ -128,7 +158,7 @@ def load_context(root: Path) -> whole.Context:
     get._exact(value, FIELDS, "independent supplemental cohort")
     if (value["contract"] != CONTRACT or value["data_role"] != whole.ROLE
             or not inputs.zero(value) or value["parent_context"] is not None
-            or value["inherited_terminals"] != [] or value["reader_sources"] != reader_sources()
+            or value["inherited_terminals"] != [] or not _recognized_reader_sources(value["reader_sources"])
             or get._time(value["declared_at"]) > get._time(receipts._now())):
         raise ValueError("supplement cohort changed its reader, prospective role or cut")
     for ref in value["reader_sources"].values(): inputs.reopen(ref)
