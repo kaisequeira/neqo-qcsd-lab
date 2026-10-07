@@ -473,6 +473,41 @@ def test_two_complete_workers_publish_two_ordinary_twenty_slot_receipts(formal_s
         assert evidence._load(Path(row["launch_receipt"]).read_bytes())["receipt_type"] == evidence.COMPLETE_TYPE
 
 
+def test_final_verifier_reuses_one_fresh_audit_context_through_both_lane_receipts(formal_setup, monkeypatch):
+    batch = _complete_pair(formal_setup)
+    original = formal._audit
+    contexts = []
+
+    def observed(path, *, execution_root=None, _context=None):
+        contexts.append(_context)
+        return original(path, execution_root=execution_root, _context=_context)
+
+    monkeypatch.setattr(formal, "_audit", observed)
+    report = formal.verify_results(batch.path, batch.output)
+    assert report["valid"] is True and report["formal_accepted_trace_count"] == 40
+    assert len(contexts) > 1 and contexts[0] is not None
+    assert all(context is contexts[0] for context in contexts)
+
+
+def test_final_verifier_rejects_dependency_changed_after_its_cached_first_start(formal_setup, monkeypatch):
+    batch = _complete_pair(formal_setup)
+    original = formal.verified_worker_start
+    changed = []
+
+    def mutate_after_start(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if not changed:
+            launcher = formal_setup.spec.host_launcher
+            launcher.write_bytes(launcher.read_bytes() + b"changed during final verification\n")
+            changed.append(launcher)
+        return result
+
+    monkeypatch.setattr(formal, "verified_worker_start", mutate_after_start)
+    with pytest.raises(ValueError):
+        formal.verify_results(batch.path, batch.output)
+    assert changed
+
+
 @pytest.mark.parametrize("mutation", ["missing", "duplicate", "wrong-visit", "rejected"])
 def test_resealed_partial_or_wrong_slot_vector_cannot_complete(formal_setup, mutation):
     batch = _release(_initialize(_prepare(formal_setup)))

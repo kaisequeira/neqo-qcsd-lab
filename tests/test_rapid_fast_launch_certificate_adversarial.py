@@ -195,3 +195,91 @@ def test_final_formal_verifier_still_requires_full_audit(issued):
     issued.fixture.monkeypatch.setattr(formal, "_audit", full_audit_required)
     with pytest.raises(RuntimeError, match="full formal verification entered"):
         formal.verify_results(issued.fixture.path, issued.output)
+
+
+def _retirement_ready(issued, monkeypatch):
+    """Add the later preflight/release fence after the public certificate."""
+    fixture, output = issued.fixture, issued.output
+    parallel.put(output / "batch-intent.json", {"authority_path": str(fixture.path)})
+    preflight = parallel.load(fixture.output / "image-preflight.json")
+    later = fixture.output / "installed-preflight-only.json"
+    later.write_bytes(b'{"image":"checked after certificate"}\n')
+    preflight["input_files"][str(later)] = parallel.sha(later.read_bytes())
+    parallel.put(output / "image-preflight.json", preflight)
+    fast = formal.reopen_fast_certificate(fixture.path, output, issued.digest)
+    prepared = {"authority_sha256": fast[2]["authority_sha256"],
+        "authority": fixture.value,
+        "batch_intent_sha256": parallel.sha((output / "batch-intent.json").read_bytes()),
+        "input_fence": formal._fast_release_fence(fast, fixture.path, fast[1], preflight)}
+    prepared_digest = parallel.put(output / "release-prepared.json", prepared)
+    actual_workers = [{"id": "1" * 64}, {"id": "2" * 64}]
+    inspected = [{"Id": row["id"], "Config": {"Labels": {
+        "org.qcsd.release-preparation-sha256": prepared_digest}}} for row in actual_workers]
+    launch = {"authority_sha256": fast[2]["authority_sha256"],
+              "actual": {"workers": actual_workers, "inspected_containers": inspected}}
+    monkeypatch.setattr(parallel, "_verify_retirement_actual", lambda *_args: launch)
+    monkeypatch.setenv("QCSD_RAPID_FAST_CERTIFICATE_PATH", str(issued.certificate))
+    monkeypatch.setenv("QCSD_RAPID_FAST_CERTIFICATE_SHA256", issued.digest)
+    intent = fixture.facts[0][2]
+    (intent.parent / "host-start.json").write_bytes(b"retained actual birth fixture\n")
+    (output / "lane-1").mkdir()
+    return later
+
+
+def test_fast_retirement_reaches_write_only_after_both_fences(issued, monkeypatch):
+    later = _retirement_ready(issued, monkeypatch)
+    assert str(later) not in parallel.load(issued.certificate)["input_fence"]["files"]
+    assert str(later) in parallel.load(issued.output / "release-prepared.json")["input_fence"]["files"]
+
+    class ReachedRetirementWrite(Exception):
+        pass
+
+    monkeypatch.setattr(formal, "_audit", lambda *_args, **_kwargs:
+        pytest.fail("fast retirement replayed full scientific audit"))
+    def checked_start(*_args, **kwargs):
+        assert kwargs["fast"][2]["output_root"] == str(issued.output)
+        assert kwargs["_context"] is not None
+        return {}
+
+    monkeypatch.setattr(formal, "verified_worker_start", checked_start)
+    monkeypatch.setattr(parallel, "put", lambda *_args, **_kwargs: (_ for _ in ()).throw(ReachedRetirementWrite))
+    with pytest.raises(ReachedRetirementWrite):
+        formal.retire_lane(issued.output, 0, {})
+
+
+@pytest.mark.parametrize("change", ["later-mode", "source-after-start", "wrong-flight"])
+def test_fast_retirement_rejects_changed_inputs_before_writing(issued, monkeypatch, change):
+    later = _retirement_ready(issued, monkeypatch)
+    output = issued.output
+    if change == "later-mode":
+        later.chmod(0o600 if later.stat().st_mode & 0o777 != 0o600 else 0o644)
+    if change == "wrong-flight":
+        output = output.with_name("other-retirement-flight")
+        output.mkdir()
+        parallel.put(output / "batch-intent.json", {"authority_path": str(issued.fixture.path)})
+
+    def checked_start(*_args, **kwargs):
+        assert kwargs["fast"][2]["output_root"] == str(issued.output)
+        if change == "source-after-start":
+            source = issued.fixture.source_file
+            source.write_bytes(source.read_bytes() + b"changed after initial fence\n")
+        return {}
+
+    monkeypatch.setattr(formal, "verified_worker_start", checked_start)
+    monkeypatch.setattr(parallel, "put", lambda *_args, **_kwargs:
+        pytest.fail("retirement wrote before rejecting changed evidence"))
+    with pytest.raises(ValueError):
+        formal.retire_lane(output, 0, {})
+
+
+def test_fast_retirement_still_rejects_wrong_actual_absence(issued, monkeypatch):
+    original = parallel._verify_retirement_actual
+    _retirement_ready(issued, monkeypatch)
+    monkeypatch.setattr(parallel, "_verify_retirement_actual", original)
+    parallel.put(issued.output / "batch-launch.json", {"actual": {
+        "workers": [{"id": "1" * 64}, {"id": "2" * 64}],
+        "lane_resources": [{"router_id": "3" * 64, "network_id": "4" * 64},
+                           {"router_id": "5" * 64, "network_id": "6" * 64}]}})
+    with pytest.raises(ValueError, match="terminal/absence"):
+        formal.retire_lane(issued.output, 0, {"absent_ids": [], "worker_exit_code": 0})
+    assert not (issued.output / "lane-1/retirement.json").exists()

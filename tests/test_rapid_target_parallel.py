@@ -167,7 +167,7 @@ def test_failed_worker_retains_accepted_peer_and_successor_target_offsets(pair, 
         intent.with_name('host-process.json').write_bytes(lanes._json({'returncode': 1 if index == 0 else 0}))
         intent.with_name('complete.json').write_bytes(lanes._json({'accepted': lane.sample_count}))
         facts.append((spec, case.current.root, intent, {}, {}, lane, sites))
-    monkeypatch.setattr(formal, '_audit', lambda path: ({'runtime': {}}, facts))
+    monkeypatch.setattr(formal, '_audit', lambda path, **_options: ({'runtime': {}}, facts))
     monkeypatch.setattr(shared, 'verify_operator_closure', lambda *a: None)
     monkeypatch.setattr(formal, 'reopen_launch', lambda *a, **kw: None)
     monkeypatch.setattr(lanes, '_verified_host_process', lambda raw, *a: json.loads(raw))

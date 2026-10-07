@@ -30,6 +30,7 @@ from qcsd_lab import rapid_parallel_capture as shared
 from qcsd_lab import rapid_additive_static_enrollment as additive
 from qcsd_lab import rapid_per_class_selected_enrollment as per_class
 from qcsd_lab import rapid_selected_capture_input as selected
+from qcsd_lab import rapid_site_admission as receipts
 from qcsd_lab import verification
 from qcsd_lab.rapid_operation_facts import OperationFacts
 from tests.test_rapid_undefended_capture import fixtures, encoded, ROOT
@@ -38,6 +39,21 @@ from tests.test_rapid_undefended_capture import fixtures, encoded, ROOT
 @pytest.fixture
 def current(tmp_path, monkeypatch, request):
     enrollment, runtime, batch, classes, policy = fixtures(tmp_path, monkeypatch)
+    # The shared ordinary fixture predates direct selected-receipt traversal.
+    # Give each synthetic workload a typed receipt so this scheduling test
+    # exercises that dependency instead of failing on absent fixture metadata.
+    for row in classes:
+        original = Path(row["prepared_workload"]["path"])
+        receipt_path = original.with_name(original.stem + "-selected-input.json")
+        receipt_path.write_bytes(encoded(receipts._bind(selected.RECEIPT_TYPE, {
+            "direct_validator_sources": {}, "direct_validator_files": {}})))
+        manifest = json.loads(original.read_bytes())
+        manifest["preparation"]["selected_input_evidence"] = {
+            "schema_version": 1, "record_type": selected.RECEIPT_TYPE,
+            "receipt": selected.reference(receipt_path)}
+        original.write_bytes(encoded(manifest))
+        (Path(runtime["workload_root"]) / original.name).write_bytes(original.read_bytes())
+        row["prepared_workload"] = selected.reference(original)
     source = Path(runtime["runtime_source_root"])
     runtime["module_root"] = str(source)
     execution = Path(runtime["execution_root"])
@@ -79,7 +95,8 @@ def current(tmp_path, monkeypatch, request):
     monkeypatch.setattr(additive, "membership_inputs",
         lambda path: {enrollment, Path(batch["policy"]["path"])})
     monkeypatch.setattr(selected, "preparation_inputs",
-        lambda preparation, resources: ({canary_file}, {raw_root}))
+        lambda preparation, resources: ({canary_file,
+            selected.reopen(preparation["selected_input_evidence"]["receipt"])}, {raw_root}))
     inputs = ordinary.publish_inputs(enrollment, runtime, tmp_path / "ordinary-input.json")
     output = rolling.publish_plan(Path(batch["policy"]["path"]).parent, enrollment, inputs,
         tmp_path / "study" / "serial-plan.json", readiness={"undefended": canary}, runtime_inputs=runtime,
@@ -285,7 +302,7 @@ def test_terminal_failed_peer_retains_successful_worker(current, monkeypatch):
         intent.with_name("complete.json").write_bytes(encoded({"accepted": 20}))
         facts.append((spec, current.root, intent, {}, {}, lane, sites))
     value = {"runtime": {}, "engineering_fixture": "terminal operator"}
-    monkeypatch.setattr(formal, "_audit", lambda path: (value, facts))
+    monkeypatch.setattr(formal, "_audit", lambda path, **_options: (value, facts))
     monkeypatch.setattr(shared, "verify_operator_closure", lambda *args: None)
     monkeypatch.setattr(formal, "reopen_launch", lambda *args, **kwargs: None)
     monkeypatch.setattr(lanes, "_verified_host_process", lambda raw, *args: json.loads(raw))

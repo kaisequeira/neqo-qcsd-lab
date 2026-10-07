@@ -1539,8 +1539,8 @@ def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256
             "campaign": "/lab/" + str(Path(value["campaigns"][index]["path"]).relative_to(value["runtime"]["execution_root"]))})
 
 
-def reopen_launch(path: Path, output: Path, value: dict[str, Any], *, facts=None) -> None:
-    intent = _reopen_intent(path, output, value, facts=facts)
+def reopen_launch(path: Path, output: Path, value: dict[str, Any], *, facts=None, _context=None, fast=None) -> None:
+    intent = _reopen_intent(path, output, value, facts=facts, _context=_context, fast=fast)
     launch = shared.load(output / "batch-launch.json")
     actual = shared.load(output / "actual-launch.json")
     start, _ = _operator_start(path, output, value)
@@ -1558,16 +1558,23 @@ def reopen_launch(path: Path, output: Path, value: dict[str, Any], *, facts=None
             "worker_id": actual["workers"][index]["id"],
             "campaign": "/lab/" + str(Path(value["campaigns"][index]["path"]).relative_to(value["runtime"]["execution_root"]))}):
             raise ValueError("formal actual worker gate or peer partition changed")
-        _worker_inputs_actual(value, output, index, actual, fact=facts[index] if facts is not None else None)
+        _worker_inputs_actual(value, output, index, actual, fact=facts[index] if facts is not None else None,
+            _environment=fast[2]["worker_inputs"][index]["environment"] if fast is not None else None,
+            _context=_context)
 
 
-def verified_worker_start(raw: bytes, intent_raw: bytes, campaign_name: str, *, _context=None) -> dict[str, Any]:
+def verified_worker_start(raw: bytes, intent_raw: bytes, campaign_name: str, *, _context=None, fast=None) -> dict[str, Any]:
     value = ordinary.admission._unpack(raw, START_TYPE)
     if set(value) != {"command", "execution_root", "started_at", "intent_sha256", "authority",
                       "batch_root", "worker_index", "batch_launch_sha256", "worker_argv_sha256", "host_partition_sha256"}:
         raise ValueError("formal worker birth fields differ")
     path = _reference(value["authority"])
-    inputs, facts = _audit(path, _context=_context)
+    if _context is None:
+        from .rapid_operation_facts import current_context
+        _context = current_context()
+    inputs, facts = _audit(path, _context=_context) if fast is None else fast[:2]
+    if fast is not None and fast[2]["authority_path"] != str(path.absolute()):
+        raise ValueError("fast launch certificate belongs to another worker authority")
     index = value["worker_index"]
     _index(index)
     spec, root, intent_path, intent, _, lane, _ = facts[index]
@@ -1578,7 +1585,9 @@ def verified_worker_start(raw: bytes, intent_raw: bytes, campaign_name: str, *, 
     output = shared.regular_dir(Path(value["batch_root"]))
     if not output.is_relative_to(spec.execution_root / "results"):
         raise ValueError("formal batch evidence escapes its execution root")
-    reopen_launch(path, output, inputs, facts=facts)
+    if fast is not None and fast[2]["output_root"] != str(output):
+        raise ValueError("fast launch certificate belongs to another worker flight")
+    reopen_launch(path, output, inputs, facts=facts, _context=_context, fast=fast)
     _, command = _operator_start(path, output, inputs)
     launch = shared.load(output / "batch-launch.json")
     if (value["command"] != command or value["started_at"] != launch["started_at"]
@@ -1662,12 +1671,39 @@ def retire_lane(output: Path, index: int, actual: dict[str, Any]) -> None:
     from .rapid_operation_facts import OperationFacts
     context = OperationFacts()
     with context.scope():
-        value, facts = _audit(path, _context=context)
+        fast = _active_fast_certificate(path)
+        if fast is not None and fast[2]["output_root"] != str(output):
+            raise ValueError("fast launch certificate belongs to another worker flight")
+        value, facts = _audit(path, _context=context) if fast is None else fast[:2]
         spec, root, intent_path, intent, _, lane, _ = facts[index]
         start_raw = shared.read(intent_path.parent / "host-start.json")
-        start = verified_worker_start(start_raw, shared.read(intent_path), lane.campaign_name,
-                                      _context=context)
+        if fast is None:
+            start = verified_worker_start(start_raw, shared.read(intent_path), lane.campaign_name,
+                                          _context=context)
+        else:
+            start = verified_worker_start(start_raw, shared.read(intent_path), lane.campaign_name,
+                                          _context=context, fast=fast)
         context.check()
+        if fast is not None:
+            # The certificate predates installed image preflight and DNS. Reopen
+            # both its original fence and the later, labeled release fence.
+            _active_fast_certificate(path)
+            prepared_path = output / "release-prepared.json"
+            prepared_digest = shared.sha(shared.read(prepared_path))
+            prepared = shared.load(prepared_path)
+            if (prepared["authority_sha256"] != fast[2]["authority_sha256"]
+                or prepared["authority"] != value
+                or prepared["batch_intent_sha256"] != shared.sha(shared.read(output / "batch-intent.json"))
+                or prepared["input_fence"]["trees"] != fast[2]["input_fence"]["trees"]
+                or any(prepared["input_fence"]["files"].get(name) != record
+                       for name, record in fast[2]["input_fence"]["files"].items())
+                or any(next(item for item in launch["actual"]["inspected_containers"]
+                            if item["Id"] == worker["id"])["Config"].get("Labels", {}).get(
+                                "org.qcsd.release-preparation-sha256") != prepared_digest
+                       for worker in launch["actual"]["workers"])):
+                raise ValueError("fast retirement differs from its authenticated prepared release")
+            preflight = shared.reopen_preflight(output, prepared["authority_sha256"])
+            _check_release_fence(prepared["input_fence"], path, value, facts, preflight)
     retired_path = output / f"lane-{index+1}" / "retirement.json"
     shared.put(retired_path, {"schema_version": 1, "retired_at": shared.now(), "actual": actual,
         "authority_sha256": launch["authority_sha256"], "formal_accepted_trace_count": 0, "scientific_credit": False})
@@ -1701,48 +1737,52 @@ def retire_lane(output: Path, index: int, actual: dict[str, Any]) -> None:
 
 
 def verify_results(path: Path, output: Path) -> dict[str, Any]:
-    value, facts = _audit(path)
-    shared.verify_operator_closure(path, output, value)
-    reopen_launch(path, output, value, facts=facts)
-    rows = []
-    for index in range(2):
-        spec, root, intent_path, intent, _, lane, _ = facts[index]
-        process = ordinary._verified_host_process(shared.read(intent_path.parent / "host-process.json"),
-                    root, shared.read(intent_path), lane.campaign_name)
-        row = {"campaign": lane.campaign_name, "valid": False, "accepted": 0, "actual_exit_code": process["returncode"]}
-        try:
-            if lane.study_version == 6:
-                from . import rapid_rolling_capture as rolling
-                if type(process["returncode"]) is not int or process["returncode"] != 0:
-                    raise ValueError("rolling worker did not complete successfully; terminal evidence retained")
-                checked_path = output / f"lane-{index+1}" / "installed-deep.json"
-                if checked_path.exists():
-                    reference = shared.load(checked_path)
+    from .rapid_operation_facts import OperationFacts
+    context = OperationFacts()
+    with context.scope():
+        value, facts = _audit(path, _context=context)
+        shared.verify_operator_closure(path, output, value)
+        reopen_launch(path, output, value, facts=facts, _context=context)
+        rows = []
+        for index in range(2):
+            spec, root, intent_path, intent, _, lane, _ = facts[index]
+            process = ordinary._verified_host_process(shared.read(intent_path.parent / "host-process.json"),
+                        root, shared.read(intent_path), lane.campaign_name)
+            row = {"campaign": lane.campaign_name, "valid": False, "accepted": 0, "actual_exit_code": process["returncode"]}
+            try:
+                if lane.study_version == 6:
+                    from . import rapid_rolling_capture as rolling
+                    if type(process["returncode"]) is not int or process["returncode"] != 0:
+                        raise ValueError("rolling worker did not complete successfully; terminal evidence retained")
+                    checked_path = output / f"lane-{index+1}" / "installed-deep.json"
+                    if checked_path.exists():
+                        reference = shared.load(checked_path)
+                    else:
+                        receipt = intent_path.parent / "complete.json"
+                        checked = rolling.check_lane_in_image(spec, root,
+                            receipt if receipt.exists() else intent_path, complete=not receipt.exists())
+                        reference = checked["closure"]
+                        shared.put(checked_path, reference)
+                    checked_spec, receipt, reopened, checked_lane, checked_sites = rolling._reopen_lane_check(reference)
+                    if (checked_spec != spec or receipt != intent_path.parent / "complete.json"
+                        or checked_lane != lane or checked_sites != facts[index][6]):
+                        raise ValueError("installed rolling deep closure belongs to another formal worker")
+                    row["installed_deep"] = reference
+                elif "epoch_declaration" in intent:
+                    from . import rapid_class_epochs as classes
+                    reopened = classes.verify_lane(spec, root, intent_path.parent / "complete.json")
                 else:
-                    receipt = intent_path.parent / "complete.json"
-                    checked = rolling.check_lane_in_image(spec, root,
-                        receipt if receipt.exists() else intent_path, complete=not receipt.exists())
-                    reference = checked["closure"]
-                    shared.put(checked_path, reference)
-                checked_spec, receipt, reopened, checked_lane, checked_sites = rolling._reopen_lane_check(reference)
-                if (checked_spec != spec or receipt != intent_path.parent / "complete.json"
-                    or checked_lane != lane or checked_sites != facts[index][6]):
-                    raise ValueError("installed rolling deep closure belongs to another formal worker")
-                row["installed_deep"] = reference
-            elif "epoch_declaration" in intent:
-                from . import rapid_class_epochs as classes
-                reopened = classes.verify_lane(spec, root, intent_path.parent / "complete.json")
-            else:
-                reopened = ordinary.verify_launch_receipt(intent_path.parent / "complete.json", spec=spec, evidence_root=root)
-            row.update(valid=True, accepted=reopened["accepted"], launch_receipt=str(intent_path.parent / "complete.json"),
-                       launch_receipt_sha256=shared.sha(shared.read(intent_path.parent / "complete.json")),
-                       scientific_credit=reopened["scientific_credit"])
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
-            row["error"] = f"{type(error).__name__}: {error}"
-        rows.append(row)
-    return {"schema_version": 1, "lanes": rows, "valid": all(row["valid"] for row in rows),
-            "host_returncode": shared.load(output / "host-process.json")["returncode"],
-            "formal_accepted_trace_count": sum(row["accepted"] for row in rows
-                if row.get("scientific_credit") in {"formal-only-if-bound-to-final-50-plan",
-                    "formal-only-if-bound-to-rolling-enrollment"}),
-            "scientific_credit": "per-lane; registered blocks require their matched commit"}
+                    reopened = ordinary.verify_launch_receipt(intent_path.parent / "complete.json", spec=spec, evidence_root=root)
+                row.update(valid=True, accepted=reopened["accepted"], launch_receipt=str(intent_path.parent / "complete.json"),
+                           launch_receipt_sha256=shared.sha(shared.read(intent_path.parent / "complete.json")),
+                           scientific_credit=reopened["scientific_credit"])
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+                row["error"] = f"{type(error).__name__}: {error}"
+            rows.append(row)
+        context.check()
+        return {"schema_version": 1, "lanes": rows, "valid": all(row["valid"] for row in rows),
+                "host_returncode": shared.load(output / "host-process.json")["returncode"],
+                "formal_accepted_trace_count": sum(row["accepted"] for row in rows
+                    if row.get("scientific_credit") in {"formal-only-if-bound-to-final-50-plan",
+                        "formal-only-if-bound-to-rolling-enrollment"}),
+                "scientific_credit": "per-lane; registered blocks require their matched commit"}
