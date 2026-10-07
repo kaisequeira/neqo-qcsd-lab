@@ -699,7 +699,8 @@ def validate_qualification_reuse(old_receipt, current_receipt) -> None:
                 actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"), _context=current_context())
             return
         from . import rapid_rolling_schedule as schedule
-        if value.get("artifact_type") == schedule.CAPSULE_TYPE:
+        from . import rapid_quick_profile as quick
+        if value.get("artifact_type") == schedule.CAPSULE_TYPE or quick.is_profile(value):
             if _CURRENT_BRIDGE.get() is not None or os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"):
                 raise ValueError("rolling scheduling cannot claim historical installation or runtime repair authority")
             from .rapid_operation_facts import current_context
