@@ -11395,7 +11395,7 @@ from qcsd_lab.rapid_parallel_capture import put
 put(Path(sys.argv[2])/"image-preflight.json",json.load(sys.stdin))
 ' "${ROOT}" "${parallel_output}"
   if (( parallel_formal )); then
-    parallel_formal_second_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index 1)" || exit 1
+    parallel_formal_second_inputs="$(builtin printf '%s' "${parallel_formal_first_inputs}" | /usr/bin/python3 -I -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["second_worker_inputs"], sort_keys=True))')" || exit 1
     QCSD_DOCKER_OUTPUT_PARALLEL_DNS=""
     qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_PARALLEL_DNS \
       docker run --network bridge --read-only --cap-drop ALL \

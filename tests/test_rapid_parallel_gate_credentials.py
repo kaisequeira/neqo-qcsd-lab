@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from qcsd_lab import rapid_parallel_capture as parallel
+from qcsd_lab import rapid_operation_facts as operations
 from tests.test_rapid_parallel_capture import _released, context
 
 
@@ -94,7 +95,7 @@ def test_failed_uid_drop_restores_gid(monkeypatch):
     assert state["calls"] == [("gids", 1000), ("uids", 1000), ("gids", 0)]
 
 
-@pytest.mark.parametrize("failure", [None, "authority", "partition", "cpu", "timeout", "restore"])
+@pytest.mark.parametrize("failure", [None, "authority", "partition", "cpu", "restore"])
 def test_actual_private_gate_checks_run_as_declared_user_then_restore(context, monkeypatch, failure):
     _released(context)
     directory = context.output / "lane-1/gate"
@@ -135,10 +136,6 @@ def test_actual_private_gate_checks_run_as_declared_user_then_restore(context, m
         (directory / "host-partition.json").write_bytes(b"{}\n")
     elif failure == "cpu":
         monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "9")
-    elif failure == "timeout":
-        (directory / "release.json").unlink()
-        clocks = iter([0, 121])
-        monkeypatch.setattr(parallel.time, "monotonic", lambda: next(clocks))
     elif failure == "restore":
         state["fail"] = ("uids", 0)
     if failure:
@@ -156,6 +153,36 @@ def test_actual_private_gate_checks_run_as_declared_user_then_restore(context, m
     assert state["gids"] == [0, 0, 0]
     assert state["uids"] == ([0, 1000, 0] if failure == "restore" else [0, 0, 0])
     assert state["calls"] == [("gids", 1000), ("uids", 1000), ("uids", 0), ("gids", 0)]
+
+
+def test_private_gate_can_wait_past_120_seconds_without_starting_traffic(context, monkeypatch):
+    _released(context)
+    directory = context.output / "lane-1/gate"
+    release = directory / "release.json"
+    raw = release.read_bytes()
+    release.unlink()
+    _declared(monkeypatch)
+    _credentials(monkeypatch)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "2")
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "4")
+    elapsed, calls = [0.0], []
+
+    def wait(seconds):
+        assert seconds == .1 and not calls
+        elapsed[0] += 61
+        if elapsed[0] >= 183:
+            release.write_bytes(raw)
+
+    def execute(command, argv):
+        assert elapsed[0] > 120 and release.read_bytes() == raw
+        calls.append((command, argv))
+
+    monkeypatch.setattr(parallel.time, "sleep", wait)
+    monkeypatch.setattr(parallel.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(parallel.os, "execv", execute)
+    parallel.gate(directory, context.digest, 0, context.path)
+    assert calls == [("/usr/local/bin/collection-entrypoint",
+                      ["collection-entrypoint", "run", "/lab/config/campaigns/buflo.yml"])]
 
 
 def test_same_identity_reads_real_private_files_without_any_privilege_syscall(context, monkeypatch):
@@ -185,14 +212,25 @@ def test_formal_worker_environment_is_read_before_root_restoration(context, monk
     monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "2")
     monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "4")
     state = _credentials(monkeypatch)
-    original_authority = parallel.authority
+    original_load = parallel.load
+    fact, audit_context = object(), []
 
-    def authority(path):
-        value = original_authority(path)
-        return {**value, "artifact_type": "qcsd-two-worker-formal-lane-authority"}
+    def load(path):
+        value = original_load(path)
+        if path == context.path:
+            return {**value, "artifact_type": "qcsd-two-worker-formal-lane-authority"}
+        return value
 
-    def environment(inputs, index):
+    def audit(path, *, _context):
+        assert path == context.path and state["uids"] == state["gids"] == [0, 1000, 0]
+        assert operations.current_context() is _context
+        audit_context.append(_context)
+        return load(path), [fact, object()]
+
+    def environment(inputs, index, *, fact: object, _context):
         assert state["uids"] == state["gids"] == [0, 1000, 0]
+        assert operations.current_context() is _context
+        assert fact is facts[0] and _context is audit_context[0] and index == 0
         if failure:
             raise ValueError("test formal proof read failed")
         return {"QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION": "/private/verified-capsule.json"}
@@ -205,7 +243,9 @@ def test_formal_worker_environment_is_read_before_root_restoration(context, monk
         execs.append((command, argv))
 
     monkeypatch.delenv("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION", raising=False)
-    monkeypatch.setattr(parallel, "authority", authority)
+    facts = [fact]
+    monkeypatch.setattr(parallel, "load", load)
+    monkeypatch.setattr(formal, "_audit", audit)
     monkeypatch.setattr(formal, "worker_environment", environment)
     monkeypatch.setattr(parallel.os, "execv", execute)
     if failure:
@@ -216,3 +256,30 @@ def test_formal_worker_environment_is_read_before_root_restoration(context, monk
         parallel.gate(context.output / "lane-1/gate", context.digest, 0, context.path)
     assert state["uids"] == state["gids"] == [0, 0, 0]
     assert len(execs) == int(not failure)
+    assert operations.current_context() is None
+
+
+def test_gate_rechecks_scoped_dependency_before_exec(context, tmp_path, monkeypatch):
+    _released(context)
+    _declared(monkeypatch)
+    state = _credentials(monkeypatch)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "2")
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "4")
+    watched = tmp_path / "watched-input.json"
+    watched.write_bytes(b'{"source":"original"}\n')
+    original_authority = parallel.authority
+
+    def authority(path):
+        active = operations.current_context()
+        assert active is not None
+        active.watch_file(watched)
+        value = original_authority(path)
+        watched.write_bytes(b'{"source":"changed"}\n')
+        return value
+
+    monkeypatch.setattr(parallel, "authority", authority)
+    monkeypatch.setattr(parallel.os, "execv", lambda *args: pytest.fail("traffic entrypoint executed"))
+    with pytest.raises(ValueError, match="operation dependency bytes or mode changed"):
+        parallel.gate(context.output / "lane-1/gate", context.digest, 0, context.path)
+    assert state["uids"] == state["gids"] == [0, 0, 0]
+    assert operations.current_context() is None

@@ -48,7 +48,8 @@ elif args[:2]==['container','inspect']:
 elif args[0]=='logs': print('test-only retained worker output')
 elif args[0]=='rm':
     key=args[-1]
-    if state.get('workers') and key==state['workers'][0]: time.sleep(3.25)
+    if state.get('workers') and key==state['workers'][0]:
+        time.sleep(.05 if state.get('fast_first_removal') else 3.25)
     state['events'].append('remove-'+key);containers.pop(key,None)
 elif args[:2]==['network','rm']: networks.pop(args[-1],None)
 elif args[0]=='retire':
@@ -80,16 +81,17 @@ def test_parallel_command_uses_official_formal_dns_sink_only_when_opted_in(conte
     output = execution / "results" / "batch-operator"
     output.mkdir(parents=True)
     official_dns = execution / "evidence" / "lanes" / "buflo" / "dns.json"
-    inputs = json.dumps(dict(dns_path=str(official_dns)))
     campaign = context.authority["campaigns"][0]["path"]
+    inputs = json.dumps(dict(dns_path=str(official_dns), campaign_path=campaign))
     prefix = "\n".join([
         "set -euo pipefail", "ROOT=" + shlex.quote(str(execution)),
         "parallel_diagnostic=0", "parallel_formal=0",
         "QCSD_PARALLEL_AUTHORITY_SHA256=" + shlex.quote(context.digest),
         _environment_helper(source),
         'parallel_select_host_python() { printf "%s\\n" "/usr/bin/python3"; }',
+        'require_docker() { return 0; }',
         "parallel_python() { if [[ \"$1\" == select ]]; then printf '%s\\n' " + shlex.quote(campaign) +
-        "; elif [[ \"$1\" == formal-inputs ]]; then printf '%s\\n' " + shlex.quote(inputs) + "; else return 99; fi; }",
+        "; elif [[ \"$1\" == lifecycle-inputs ]]; then return 0; elif [[ \"$1\" == formal-entry-inputs ]]; then printf '%s\\n' " + shlex.quote(inputs) + "; else return 99; fi; }",
     ])
     result = subprocess.run([
         "bash", "-c", prefix + "\n" + setup +
@@ -121,11 +123,11 @@ def test_formal_shell_guard_rejects_wrong_lane_or_native_contract(role, version,
     ])
     result = subprocess.run(["bash", "-c", prefix + "\n" + guard], text=True, capture_output=True, timeout=10)
     assert result.returncode == 2
-    assert "official rapid v5 formal lanes" in result.stderr
+    assert "official rapid v5 or prospective rolling v6 formal lanes" in result.stderr
 
 
-@pytest.mark.parametrize("formal", [False, True])
-def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path, formal):
+@pytest.mark.parametrize("formal,release_failure", [(False, False), (True, False), (True, True)])
+def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path, formal, release_failure):
     project = Path(__file__).resolve().parents[1]
     source = (project / "qcsd-lab").read_text()
     block = source.split("# Two measured workers share one authenticated guardian.", 1)[1]
@@ -137,7 +139,8 @@ def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path, 
     fake = tmp_path / "fake_docker.py"
     fake.write_text(FAKE_DOCKER)
     state = tmp_path / "docker-state.json"
-    state.write_text(json.dumps(dict(containers={}, networks={}, workers=[], next=0, events=[])))
+    state.write_text(json.dumps(dict(containers={}, networks={}, workers=[], next=0, events=[],
+                                     fast_first_removal=release_failure)))
     preflight = (context.output / "image-preflight.json").read_text()
     (context.output / "image-preflight.json").unlink()
     quoting = shlex.quote
@@ -166,8 +169,21 @@ from pathlib import Path
 sys.path.insert(0,sys.argv[1]+"/src")
 from qcsd_lab import rapid_parallel_capture as parallel
 rows=json.loads(Path(sys.argv[2]).read_text()); args=sys.argv[3:]
-if args[0]=="formal-inputs":
-    print(json.dumps(rows[int(args[args.index("--index")+1])]))
+book=(Path(args[args.index("--output")+1])/"test-only-prepared-book.json"
+      if "--output" in args else None)
+if args[0]=="prepare-release":
+    print(parallel.put(book,dict(schema_version=1,artifact_type="test-only-shell-preparation",
+                                 scientific_credit=False)))
+elif args[0] in {"formal-inputs","release"}:
+    if (book is None or not book.is_file() or "--prepared-sha256" not in args
+        or args[args.index("--prepared-sha256")+1]!=parallel.sha(parallel.read(book))):
+        raise SystemExit("test-only prepared SHA did not reach worker and release")
+    if args[0]=="release":
+        index=args.index("--prepared-sha256")
+        del args[index:index+2]
+        parallel.main(args)
+    else:
+        print(json.dumps(rows[int(args[args.index("--index")+1])]))
 else:
     parallel.main(args)
     if args[0]=="initialize":
@@ -183,9 +199,10 @@ else:
         "set -euo pipefail", "ROOT=" + quoting(str(project)),
         'source "${ROOT}/tools/docker_signal_supervisor.sh"',
         "parallel_diagnostic=1", "parallel_formal=" + str(int(formal)), "rapid_capture=1",
+        "QCSD_TEST_FAIL_RELEASE=" + str(int(release_failure)),
         "rapid_capture_role=" + ("formal" if formal else "diagnostic"),
-        "rapid_capture_version=" + ("v5" if formal else ""),
-        "parallel_formal_first_inputs=" + quoting(json.dumps(inputs[0])),
+        "rapid_capture_version=" + ("v6" if formal else ""),
+        "parallel_formal_first_inputs=" + quoting(json.dumps({**inputs[0], "second_worker_inputs": inputs[1]})),
         "study_capture_scheduler_contract=" + quoting(parallel.NATIVE_CONTRACT),
         "parallel_authority=" + quoting(str(context.path)), "parallel_output=" + quoting(str(context.output)),
         "parallel_authority_sha256=" + quoting(context.digest), "image_id=" + quoting(context.actual["workers"][0]["image_id"]),
@@ -193,7 +210,7 @@ else:
         "qcsd_invoking_uid=$(id -u)", "qcsd_invoking_gid=$(id -g)",
         "container=(docker run --network bridge --cpuset-cpus 7,9 --env QCSD_CAPTURE_CLIENT_CPU=7 --env QCSD_CAPTURE_ORCHESTRATOR_CPU=9 --env QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64= --add-host inherited.example=8.8.8.8)",
         "fake() { /usr/bin/python3 " + quoting(str(fake)) + " " + quoting(str(state)) + " " + quoting(str(context.output)) + ' "$@"; }',
-        "parallel_python() { /usr/bin/python3 -I -c 'import sys;sys.path.insert(0,sys.argv.pop(1)+\"/src\");from qcsd_lab.rapid_parallel_capture import main;main()' \"$ROOT\" \"$@\"; }",
+        "parallel_python() { if [[ \"$1\" == release && \"$QCSD_TEST_FAIL_RELEASE\" == 1 ]]; then return 37; fi; /usr/bin/python3 -I -c 'import sys;sys.path.insert(0,sys.argv.pop(1)+\"/src\");from qcsd_lab.rapid_parallel_capture import main;main()' \"$ROOT\" \"$@\"; }",
         "qcsd_capture_attached_docker_output() { local -n result=$1; shift; printf '%s\\n' \"$*\" >>" + quoting(str(capture_calls)) +
         "; if [[ \" $* \" == *' formal-dns '* ]]; then result=" + quoting(dns_second) + "; else result=" + quoting(preflight) + "; fi; }",
         '_qcsd_docker_api() { fake "$@"; }',
@@ -214,8 +231,28 @@ else:
         source.split('replace_container_option_value() {', 1)[1].split('_qcsd_latch_cleanup_signal()', 1)[0].join(['replace_container_option_value() {', '']),
     ])
     if formal:
-        prefix += "\nparallel_python() { /usr/bin/python3 " + quoting(str(formal_helper)) + ' "$ROOT" ' + quoting(str(formal_inputs)) + ' "$@"; }'
+        prefix += "\nparallel_python() { if [[ \"$1\" == release && \"$QCSD_TEST_FAIL_RELEASE\" == 1 ]]; then return 37; fi; /usr/bin/python3 " + quoting(str(formal_helper)) + ' "$ROOT" ' + quoting(str(formal_inputs)) + ' "$@"; }'
     result = subprocess.run(["bash", "-c", prefix + "\n" + block], text=True, capture_output=True, timeout=30)
+    prepared_book = context.output / "test-only-prepared-book.json"
+    if formal:
+        assert parallel.load(prepared_book) == {
+            "schema_version": 1, "artifact_type": "test-only-shell-preparation", "scientific_credit": False,
+        }
+        prepared_digest = parallel.sha(parallel.read(prepared_book))
+    else:
+        assert not prepared_book.exists()
+    if release_failure:
+        assert result.returncode == 37, result.stderr
+        assert (context.output / "actual-launch.json").exists()
+        assert not (context.output / "batch-launch.json").exists()
+        assert not list(context.output.glob("lane-*/gate/release.json"))
+        observed = json.loads(state.read_text())
+        assert len(observed["workers"]) == 2
+        assert observed["containers"] == {} and observed["networks"] == {}
+        assert len(observed["retirements"]) == 6
+        assert len((tmp_path / "removal-durations.log").read_text().splitlines()) == 6
+        assert (completed_peer.read_bytes(), completed_peer.stat().st_mtime_ns, completed_peer.stat().st_ino) == peer_before
+        return
     assert result.returncode == 1, result.stderr
     assert (context.output / "lane-1/retirement.json").exists(), result.stderr
     first = parallel.load(context.output / "lane-1/retirement.json")
@@ -248,6 +285,7 @@ else:
         assert gate["schema_version"] == 5
         argv = parallel.load(context.output / f"lane-{index+1}/worker-argv.json")
         if formal:
+            assert "org.qcsd.release-preparation-sha256=" + prepared_digest in argv
             assert inputs[index]["result_namespace"] + ":/lab/results/" + inputs[index]["campaign_name"] + ":rw" in argv
             assert str(project / "results") + ":/lab/results:ro" in argv
             assert not any(value.endswith(":/lab/results:rw") for value in argv)

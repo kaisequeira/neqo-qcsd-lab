@@ -163,13 +163,15 @@ def test_formal_entry_keeps_one_actual_audit_for_selection_and_worker_inputs(mon
     monkeypatch.setattr(formal, "_audit", audit)
     monkeypatch.setattr(parallel, "host_source", lambda value: calls.append("source"))
     def inputs(path, index, *, _audited=None, _context=None):
-        assert _audited is audited and index == 0
+        assert _audited is audited and index in (0, 1)
         assert _context is contexts[0] and _context is not None
-        calls.append("worker")
-        return {"campaign_path": "same original full-graph campaign"}
+        calls.append(f"worker-{index}")
+        return {"campaign_path": f"full-graph campaign {index}"}
     monkeypatch.setattr(formal, "worker_inputs", inputs)
-    assert parallel.formal_entry_inputs(Path("unused"))["campaign_path"] == "same original full-graph campaign"
-    assert calls == ["audit", "source", "worker"]
+    result = parallel.formal_entry_inputs(Path("unused"))
+    assert result["campaign_path"] == "full-graph campaign 0"
+    assert result["second_worker_inputs"]["campaign_path"] == "full-graph campaign 1"
+    assert calls == ["audit", "source", "worker-0", "worker-1"]
 
 
 def test_scientific_failure_still_aborts_formal_entry(monkeypatch):

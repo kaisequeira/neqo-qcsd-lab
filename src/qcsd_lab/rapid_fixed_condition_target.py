@@ -268,7 +268,8 @@ def _compatible_code_ref(role, producer, current):
                        '8a263b9d3f2bfac765170edaf05eee6bff77e3523ea8cd635f1f831b37ab1676',
                        '5efeb8f9bdce65d4eb43e781e6388ac84a83453378812d456dc40862bd955b36',
                        '26b41cd9cff02e7dde8b9dbda902fa69d370fe5b242dd075f41c5db39c356b26',
-                       '784ceb0f5e5a8cbde41eafdee4bb209781ba2df352cd72a0fbab8f24eacc46cf'})
+                       '784ceb0f5e5a8cbde41eafdee4bb209781ba2df352cd72a0fbab8f24eacc46cf',
+                       '38b58853b7788608ad7601f927a4a924d7257641f1e373d3c288dd228b93b705'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -421,8 +422,8 @@ def _acquisition_reader_sources():
         'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
         'rapid_per_class_selected_enrollment.py': '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5',
-        'whole_graph_input.py': 'a95019161d069fda019de74768a13283a4a37d89fc6cddab0b2ddd0b52540245',
-        'whole_graph_supplement.py': '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052',
+        'whole_graph_input.py': '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b',
+        'whole_graph_supplement.py': '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7',
         'rapid_supplemental_cohort.py': '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
     }
     _open(reference(Path(__file__)))
@@ -442,7 +443,7 @@ def _cohort_acquisition_source_projection(raw, relative):
     import_sha = 'f2a706dd23b2283470da2476cf29e830c18e1433543e5b72f09e1106c356aaaa'
     order_sha = '2051f49616452fcfdc2829e49f13928271d068877a5dc1e9bc4867cd07fd17a0'
     if relative == 'src/qcsd_lab/whole_graph_supplement.py':
-        expected_sha = '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'
+        expected_sha = '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'
         hooks = {
             'load_context': ((0, import_sha), (1, '06b7c22232f3786dd56d2e1e93c034061ac244cabc0ed10147deacffa5ec6a77')),
             'is_context': ((0, import_sha), (1, '0a81ca9efc243020b02578740d82f06c7d8317af09a4f42f63a752cd939219a6')),
@@ -460,7 +461,9 @@ def _cohort_acquisition_source_projection(raw, relative):
         helper_sha = None
     else:
         return raw
-    if hashlib.sha256(raw).hexdigest() != expected_sha:
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != expected_sha and not (relative == 'src/qcsd_lab/whole_graph_supplement.py'
+            and digest == '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'):
         raise ValueError('cohort dispatch is outside the exact prospective Source')
     tree = ast.parse(raw); seen = set(); retained = []; helpers = 0
     for node in tree.body:
@@ -521,7 +524,8 @@ def _compatible_acquisition_code(relative, before, after):
         'src/qcsd_lab/whole_graph_supplement.py': (
             {'726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07',
              'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66',
-             '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357'},
+             '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357',
+             '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'},
             {'_plan_rows', '_declaration'},
             {'_recognized_producer_sources', '_input_rejection', 'record_input_rejection'}, set()),
     }
@@ -531,9 +535,12 @@ def _compatible_acquisition_code(relative, before, after):
     source44 = before['sha256'] in {
         'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308',
         '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad',
-        '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357'}
+        '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357',
+        '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'}
     def projection(raw, *, successor):
-        tree = ast.parse(_cohort_acquisition_source_projection(raw, relative) if successor else raw)
+        strip_cohort = successor or (relative == 'src/qcsd_lab/whole_graph_supplement.py'
+            and before['sha256'] == '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052')
+        tree = ast.parse(_cohort_acquisition_source_projection(raw, relative) if strip_cohort else raw)
         retained = []; removed = set(); added = set()
         for node in tree.body:
             if (successor and not source44 and relative.endswith('whole_graph_supplement.py')

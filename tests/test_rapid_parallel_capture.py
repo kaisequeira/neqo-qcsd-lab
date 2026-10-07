@@ -209,7 +209,7 @@ def test_release_failure_keeps_both_traffic_gates_closed(context, failure: str) 
     assert not list(context.output.glob("lane-*/gate/release.json"))
 
 
-@pytest.mark.parametrize("failure", [None, "wrong_lane", "partition_hash", "source_dirty", "authority_hash", "own_cpu", "index"])
+@pytest.mark.parametrize("failure", [None, "wrong_lane", "partition_hash", "source_dirty", "authority_hash", "release_authority", "own_cpu", "index"])
 def test_gate_executes_only_the_exact_authority_lane(context, monkeypatch, failure) -> None:
     _released(context)
     monkeypatch.setenv("QCSD_LAB_UID", str(os.geteuid()))
@@ -231,6 +231,10 @@ def test_gate_executes_only_the_exact_authority_lane(context, monkeypatch, failu
         _write(context.source_path, source)
     elif failure == "authority_hash":
         digest = "0" * 64
+    elif failure == "release_authority":
+        value = parallel.load(gate / "release.json")
+        value["authority_sha256"] = "0" * 64
+        _write(gate / "release.json", value)
     elif failure == "own_cpu":
         monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "9")
     elif failure == "index":

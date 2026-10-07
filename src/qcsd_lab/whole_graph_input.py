@@ -83,6 +83,19 @@ V9_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e6
 for _type in (V9_PLAN_TYPE, V9_CONTINUATION_PLAN_TYPE):
     VERSIONS[_type] = (9, V9_CONTRACT, V9_INPUT_TYPE, V9_PRODUCERS)
 CONTROL_SOURCES[9] = CONTROL_SOURCES[6]
+V10_PLAN_TYPE = "qcsd-external-navigation-seeded-whole-graph-catalogue-plan-v10"
+V10_CONTINUATION_PLAN_TYPE = "qcsd-external-navigation-seeded-born-interruption-continuation-plan-v10"
+V10_INPUT_TYPE = "qcsd-external-browser-whole-graph-input-v10"
+V10_CONTRACT = "catalogue-homepage-navigation-seeded-complete-occurrence-graph-input-only-v10"
+# The V10 producer preserves the same V8 browser Source and control modules,
+# while binding the actual V9 prebirth transport failure as separate history.
+V10_PRODUCERS = {"graph_input.py": "66e79a8f16a2ab7c3d2b30893cf8bdafc97deed502c627cd364d51835e4d1eee",
+                 "operator.py": "e8945b02090e2635aa546b816663f3c43b078ccd26220e47626d34648c59d552"}
+V10_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e633c8561f16f8e09c071f8c309",
+                      "controller.py": "ed25a6e8620fe31ad4e186a35c7792a009b2ade2abe439b6812fd4f23137145d"}
+for _type in (V10_PLAN_TYPE, V10_CONTINUATION_PLAN_TYPE):
+    VERSIONS[_type] = (10, V10_CONTRACT, V10_INPUT_TYPE, V10_PRODUCERS)
+CONTROL_SOURCES[10] = CONTROL_SOURCES[6]
 ZERO = {"scientific_credit": False, "site_credit": 0, "formal_accepted_trace_count": 0}
 RESOURCE_KEYS = {"id", "url", "type", "content_length", "data_length", "chaff_priority",
                  "known_valid", "depends_on", "headers"}
@@ -131,15 +144,17 @@ def _producer(plan: dict[str, Any]) -> Path:
         raise ValueError("whole graph input has an unrecognized discovery producer")
     if version[0] >= 5:
         parent = paths["operator.py"].parent
-        if version[0] == 9:
-            refs = get._exact(plan.get("action_local_sources"), set(V9_ACTION_SOURCES), "V9 action readers")
-            for name, digest in V9_ACTION_SOURCES.items():
+        if version[0] in (9, 10):
+            action_sources = V9_ACTION_SOURCES if version[0] == 9 else V10_ACTION_SOURCES
+            refs = get._exact(plan.get("action_local_sources"), set(action_sources),
+                f"V{version[0]} action readers")
+            for name, digest in action_sources.items():
                 if (reopen(refs[name]) != parent / name or refs[name]["sha256"] != digest
                         or refs[name]["mode"] != "0644"):
-                    raise ValueError("V9 action reader bytes, mode or location changed")
+                    raise ValueError(f"V{version[0]} action reader bytes, mode or location changed")
             original = get._load(get._read(reopen(plan["original_plan"])))
             if original.get("schema_version") != 8:
-                raise ValueError("V9 retained interruption has another original producer")
+                raise ValueError(f"V{version[0]} retained interruption has another original producer")
             parent = _producer(original).parent
         _external_control(plan, parent)
     return paths["operator.py"]
@@ -175,7 +190,8 @@ def load_plan(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("artifact_type") not in VERSIONS or not zero(value):
         raise ValueError("whole graph discovery declaration has another role")
     operator = _producer(value)
-    _verify_external(operator, "check", "--plan", path.absolute(), **({"timeout": 240} if value["schema_version"] == 9 else {}))
+    _verify_external(operator, "check", "--plan", path.absolute(),
+        **({"timeout": 240} if value["schema_version"] in (8, 9, 10) else {}))
     return value
 
 
@@ -219,7 +235,8 @@ def load_input(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     operator = _producer(plan)
     if VERSIONS[plan["artifact_type"]] != version:
         raise ValueError("whole graph input crosses discovery producer versions")
-    _verify_external(operator, "verify-input", "--input", path.absolute(), **({"timeout": 240} if version[0] == 9 else {}))
+    _verify_external(operator, "verify-input", "--input", path.absolute(),
+        **({"timeout": 240} if version[0] in (8, 9, 10) else {}))
     return value, project(value, get._load(get._read(reopen(value["native_manifest"]))))
 
 
@@ -353,10 +370,10 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
             # The independent verifier authenticates this complete inventory;
             # bind those exact files as well for transport/release fences.
             files.add(source_path)
-        if declaration["schema_version"] == 9:
-            # The independent V9 verifier reconstructs the born interruption,
+        if declaration["schema_version"] in (9, 10):
+            # The independent verifier reconstructs the born interruption,
             # exact old raw tree and every completed ordered successor batch.
-            # Bind those same raw files/trees for downstream release fences.
+            # V10 additionally binds the actual prebirth V9 transport refusal.
             for entry in declaration["action_local_sources"].values():
                 ref(entry)
             plan(declaration["original_plan"])
@@ -373,13 +390,36 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
                         retained_refs(item)
             retained_refs(retained)
             sources.add(Path(retained["original_root"]))
+            if declaration["schema_version"] == 10:
+                # The V8 Root inputs were checked against the original
+                # controller's authorities by the external V10 verifier.
+                # Bind those transitive reviewed files for release transport.
+                original_inputs = get._load(get._read(ref(retained["original_root_inputs"])))
+                driver = ref(original_inputs["driver"])
+                authorities_path = driver.with_name("authorities.json")
+                if authorities_path.is_symlink() or stat.S_IMODE(authorities_path.stat().st_mode) != 0o600:
+                    raise ValueError("V8 reviewed authority file mode or type changed")
+                authorities = get._load(get._read(authorities_path))
+                original_plan = get._load(get._read(reopen(declaration["original_plan"])))
+                if authorities != {"schema_version": 1,
+                        "producer": original_plan["producer_sources"]["graph_input.py"],
+                        "closure": original_inputs["producer_closure"],
+                        "review": original_inputs["producer_review"]}:
+                    raise ValueError("V8 reviewed controller authority ancestry changed")
+                files.add(authorities_path)
+                for key in ("producer_closure", "producer_review"):
+                    ref(original_inputs[key])
+                prebirth = declaration["prebirth_failure"]
+                plan(prebirth["plan"])
+                retained_refs(prebirth)
+                sources.add(Path(prebirth["root"]))
             if declaration["previous_plan"] is not None:
                 plan(declaration["previous_plan"])
                 batch = ref(declaration["previous_batch"])
                 sources.add(batch.parent)
                 for item in sorted(batch.parent.rglob("*")):
                     if item.is_symlink():
-                        raise ValueError("V9 batch has a linked raw member")
+                        raise ValueError(f"V{declaration['schema_version']} batch has a linked raw member")
                     if item.is_file():
                         files.add(item)
             return

@@ -81,7 +81,9 @@ def _recognized_producer_sources(value: Any) -> bool:
             ('8de0879f1ec1708ec43c061c41ada4d8315dd74865edbd7134045c9fa0b9b940',
              '726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07'),
             ('4b999d64aa59c7ebc91a2d65f29e091752920891d41539f9f079c99bc7dde583',
-             'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66'))
+             'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66'),
+            ('a95019161d069fda019de74768a13283a4a37d89fc6cddab0b2ddd0b52540245',
+             '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'))
         if (supplement_sha != '726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07'
             or expected['qcsd_lab.application_response_policy'] ==
                 '8d85075852b94e7c8969fc17f141fed45b65c23bf6493fe607ca43b6a902d27e')]

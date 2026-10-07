@@ -239,15 +239,16 @@ def lifecycle_inputs(path: Path, execution_root: Path, expected_sha: str) -> Non
 
 
 def formal_entry_inputs(path: Path, *, _context=None) -> dict[str, Any]:
-    """One fresh scientific pass for campaign selection and first-worker inputs."""
+    """One fresh scientific pass for both workers' preflight transport."""
     from . import rapid_formal_parallel as formal
     from .rapid_operation_facts import OperationFacts
     context = OperationFacts() if _context is None else _context
     audited = formal._audit(path, _context=context)
     host_source(audited[0])
-    result = formal.worker_inputs(path, 0, _audited=audited, _context=context)
+    first = formal.worker_inputs(path, 0, _audited=audited, _context=context)
+    second = formal.worker_inputs(path, 1, _audited=audited, _context=context)
     context.check()
-    return result
+    return {**first, "second_worker_inputs": second}
 
 
 def _campaigns(value: dict[str, Any]):
@@ -510,38 +511,40 @@ def gate(path: Path, expected_sha: str, index: int, authority_path: Path) -> Non
         directory = regular_dir(path)
         if type(index) is not int or index not in (0, 1):
             raise ValueError("parallel worker index is not one of the two declared lanes")
-        deadline = time.monotonic() + 120
+        # The host release rechecks the full byte and mode fence after both
+        # workers are born. The owning launcher cleans up unreleased workers
+        # on its terminal paths. A worker clock deadline could expire while
+        # the valid host check is still running.
         while not (directory / "release.json").exists():
-            if time.monotonic() >= deadline:
-                raise TimeoutError("parallel launch gate was not released within 120 seconds")
             time.sleep(.1)
         value = load(directory / "release.json")
         from .rapid_operation_facts import OperationFacts
         context = OperationFacts()
-        if load(authority_path).get("artifact_type") != AUTHORITY_TYPE:
-            from . import rapid_formal_parallel as formal
-            inputs, facts = formal._audit(authority_path, _context=context)
-        else:
-            inputs, facts = authority(authority_path), None
-        campaign = "/lab/" + str(Path(inputs["campaigns"][index]["path"]).relative_to(inputs["runtime"]["execution_root"]))
-        if (sha(read(authority_path)) != expected_sha
-            or value["authority_sha256"] != expected_sha or value["campaign"] != campaign):
-            raise ValueError("parallel worker received another authority")
-        raw = read(directory / "host-partition.json")
-        if sha(raw) != value["host_partition_sha256"]:
-            raise ValueError("parallel worker host partition changed")
-        proof = json.loads(raw)
-        worker = proof["declared_workers"][index]
-        if (proof["measured_container_id"] != value["worker_id"]
-            or worker["id"] != value["worker_id"]
-            or str(worker["client_cpu"]) != os.environ.get("QCSD_CAPTURE_CLIENT_CPU")
-            or str(worker["orchestrator_cpu"]) != os.environ.get("QCSD_CAPTURE_ORCHESTRATOR_CPU")):
-            raise ValueError("parallel worker host partition names another worker")
-        environment = {}
-        if inputs["artifact_type"] != AUTHORITY_TYPE:
-            from .rapid_formal_parallel import worker_environment
-            environment = worker_environment(inputs, index, fact=facts[index], _context=context)
-        context.check()
+        with context.scope():
+            if load(authority_path).get("artifact_type") != AUTHORITY_TYPE:
+                from . import rapid_formal_parallel as formal
+                inputs, facts = formal._audit(authority_path, _context=context)
+            else:
+                inputs, facts = authority(authority_path), None
+            campaign = "/lab/" + str(Path(inputs["campaigns"][index]["path"]).relative_to(inputs["runtime"]["execution_root"]))
+            if (sha(read(authority_path)) != expected_sha
+                or value["authority_sha256"] != expected_sha or value["campaign"] != campaign):
+                raise ValueError("parallel worker received another authority")
+            raw = read(directory / "host-partition.json")
+            if sha(raw) != value["host_partition_sha256"]:
+                raise ValueError("parallel worker host partition changed")
+            proof = json.loads(raw)
+            worker = proof["declared_workers"][index]
+            if (proof["measured_container_id"] != value["worker_id"]
+                or worker["id"] != value["worker_id"]
+                or str(worker["client_cpu"]) != os.environ.get("QCSD_CAPTURE_CLIENT_CPU")
+                or str(worker["orchestrator_cpu"]) != os.environ.get("QCSD_CAPTURE_ORCHESTRATOR_CPU")):
+                raise ValueError("parallel worker host partition names another worker")
+            environment = {}
+            if inputs["artifact_type"] != AUTHORITY_TYPE:
+                from .rapid_formal_parallel import worker_environment
+                environment = worker_environment(inputs, index, fact=facts[index], _context=context)
+            context.check()
     os.environ.pop("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", None)
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE"] = str(directory / "host-partition.json")
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256"] = value["host_partition_sha256"]

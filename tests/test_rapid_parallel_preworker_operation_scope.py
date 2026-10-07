@@ -157,9 +157,14 @@ def test_cli_closes_dependencies_on_return_and_exception(tmp_path, monkeypatch, 
         return {}, []
 
     def inputs(target, index, *, _audited=None, _context=None):
-        assert target == path and index == 0
+        assert target == path
         if action == "formal-entry-inputs":
             assert _audited == ({}, [])
+            assert index in (0, 1)
+            if index == 1:
+                return {"engineering_fixture": "second worker", "scientific_credit": False}
+        else:
+            assert index == 0
         return effect(_context)
 
     def preflight(target, expected_sha, *, _context=None):
@@ -197,7 +202,10 @@ def test_cli_closes_dependencies_on_return_and_exception(tmp_path, monkeypatch, 
                 if action == "prepare-release":
                     assert raw == "c" * 64 + "\n"
                 else:
-                    assert json.loads(raw) == result
+                    expected = ({**result, "second_worker_inputs": {
+                        "engineering_fixture": "second worker", "scientific_credit": False}}
+                        if action == "formal-entry-inputs" else result)
+                    assert json.loads(raw) == expected
             assert contexts[0] is not contexts[1]
         assert operations.current_context() is parent
         assert all(context is not parent for context in contexts)

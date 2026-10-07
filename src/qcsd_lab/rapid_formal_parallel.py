@@ -1296,13 +1296,13 @@ def reopen_launch(path: Path, output: Path, value: dict[str, Any], *, facts=None
         _worker_inputs_actual(value, output, index, actual, fact=facts[index] if facts is not None else None)
 
 
-def verified_worker_start(raw: bytes, intent_raw: bytes, campaign_name: str) -> dict[str, Any]:
+def verified_worker_start(raw: bytes, intent_raw: bytes, campaign_name: str, *, _context=None) -> dict[str, Any]:
     value = ordinary.admission._unpack(raw, START_TYPE)
     if set(value) != {"command", "execution_root", "started_at", "intent_sha256", "authority",
                       "batch_root", "worker_index", "batch_launch_sha256", "worker_argv_sha256", "host_partition_sha256"}:
         raise ValueError("formal worker birth fields differ")
     path = _reference(value["authority"])
-    inputs, facts = _audit(path)
+    inputs, facts = _audit(path, _context=_context)
     index = value["worker_index"]
     _index(index)
     spec, root, intent_path, intent, _, lane, _ = facts[index]
@@ -1394,13 +1394,18 @@ def retire_lane(output: Path, index: int, actual: dict[str, Any]) -> None:
     launch = shared._verify_retirement_actual(output, index, actual)
     batch = shared.load(output / "batch-intent.json")
     path = Path(batch["authority_path"])
-    value, facts = _audit(path)
-    spec, root, intent_path, intent, _, lane, _ = facts[index]
+    from .rapid_operation_facts import OperationFacts
+    context = OperationFacts()
+    with context.scope():
+        value, facts = _audit(path, _context=context)
+        spec, root, intent_path, intent, _, lane, _ = facts[index]
+        start_raw = shared.read(intent_path.parent / "host-start.json")
+        start = verified_worker_start(start_raw, shared.read(intent_path), lane.campaign_name,
+                                      _context=context)
+        context.check()
     retired_path = output / f"lane-{index+1}" / "retirement.json"
     shared.put(retired_path, {"schema_version": 1, "retired_at": shared.now(), "actual": actual,
         "authority_sha256": launch["authority_sha256"], "formal_accepted_trace_count": 0, "scientific_credit": False})
-    start_raw = shared.read(intent_path.parent / "host-start.json")
-    start = verified_worker_start(start_raw, shared.read(intent_path), lane.campaign_name)
     retirement = ordinary._put_object(root, shared.read(retired_path))
     common = {key: start[key] for key in ("command", "execution_root", "started_at")}
     observed = shared.load(retired_path)["retired_at"]

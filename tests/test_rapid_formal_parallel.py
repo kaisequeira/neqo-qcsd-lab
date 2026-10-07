@@ -26,6 +26,72 @@ from tests.test_rapid_lane_evidence import setup as ordinary_setup
 VERIFY_LANE_RESULT = plan.verify_lane_result
 
 
+def test_retirement_shares_audit_context_and_fences_inputs_before_writing(tmp_path, monkeypatch):
+    from qcsd_lab import rapid_operation_facts as operations
+
+    output = tmp_path / "batch"
+    output.mkdir()
+    authority_path = tmp_path / "authority.json"
+    shared.put(output / "batch-intent.json", {"authority_path": str(authority_path)})
+    intent_path = tmp_path / "lane" / "intent.json"
+    intent_path.parent.mkdir()
+    intent_path.write_bytes(b"intent\n")
+    (intent_path.parent / "host-start.json").write_bytes(b"host start\n")
+    watched = tmp_path / "raw-dependency.json"
+    watched.write_bytes(b'{"source":"original"}\n')
+    contexts = []
+
+    def audit(path, *, _context):
+        assert path == authority_path and operations.current_context() is _context
+        contexts.append(_context)
+        _context.watch_file(watched)
+        lane = SimpleNamespace(campaign_name="buflo")
+        return {}, [(None, tmp_path, intent_path, {}, {}, lane, ())]
+
+    def verified_start(raw, intent_raw, campaign_name, *, _context):
+        assert raw == b"host start\n" and intent_raw == b"intent\n"
+        assert campaign_name == "buflo" and _context is contexts[0]
+        assert operations.current_context() is _context
+        watched.write_bytes(b'{"source":"changed"}\n')
+        return {}
+
+    monkeypatch.setattr(shared, "_verify_retirement_actual",
+                        lambda *args: {"authority_sha256": "a" * 64})
+    monkeypatch.setattr(formal, "_audit", audit)
+    monkeypatch.setattr(formal, "verified_worker_start", verified_start)
+    monkeypatch.setattr(shared, "put", lambda *args: pytest.fail("retirement written before final fence"))
+    with pytest.raises(ValueError, match="operation dependency bytes or mode changed"):
+        formal.retire_lane(output, 0, {})
+    assert len(contexts) == 1 and operations.current_context() is None
+    assert not (output / "lane-1/retirement.json").exists()
+
+
+def test_verified_worker_start_passes_owning_context_to_its_audit(tmp_path, monkeypatch):
+    from qcsd_lab import rapid_operation_facts as operations
+
+    class StopAtAudit(Exception):
+        pass
+
+    authority_path = tmp_path / "authority.json"
+    value = {key: None for key in ("command", "execution_root", "started_at", "intent_sha256",
+            "authority", "batch_root", "worker_index", "batch_launch_sha256",
+            "worker_argv_sha256", "host_partition_sha256")}
+    value["authority"] = {"path": str(authority_path), "sha256": "a" * 64}
+    context = operations.OperationFacts()
+    monkeypatch.setattr(formal.ordinary.admission, "_unpack", lambda raw, kind: value)
+    monkeypatch.setattr(formal, "_reference", lambda reference: authority_path)
+
+    def audit(path, *, _context):
+        assert path == authority_path and _context is context
+        assert operations.current_context() is context
+        raise StopAtAudit
+
+    monkeypatch.setattr(formal, "_audit", audit)
+    with context.scope(), pytest.raises(StopAtAudit):
+        formal.verified_worker_start(b"start", b"intent", "buflo", _context=context)
+    assert operations.current_context() is None
+
+
 def _write(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(evidence._json(value))

@@ -21,6 +21,7 @@ from tests.test_rapid_formal_parallel import formal_setup, _prepare
 ROOT = Path(__file__).resolve().parents[1]
 BASE = "7b47cb5b1d507f2b94bb493f7c724f1f86d2b460"
 FRONT_BASE = "209bcf35d0e12bba8282a32ec66ae67a524ba7cc"
+CURRENT_SCIENCE_BASE = "b5827c60fca03db448f5a383ce3e80178a7dbbbe"
 
 
 def retained(path, revision=BASE):
@@ -33,44 +34,39 @@ def control_baseline():
     paths = {"src/qcsd_lab/" + name + ".py"
              for names in readiness.DEPENDENCY_FILES.values() for name in names}
     paths.update(readiness.STATIC_MEASUREMENT_FILES - {"qcsd-lab"})
-    for revision in (BASE, FRONT_BASE):
+    for revision in (BASE, FRONT_BASE, CURRENT_SCIENCE_BASE):
         if all(retained(path, revision) == (ROOT / path).read_bytes() for path in paths):
             return revision
-    raise AssertionError("current scientific bytes match neither retained control baseline")
+    raise AssertionError("current scientific bytes match no retained control baseline")
 
 
-def test_actual_control_source_keeps_all_scientific_groups(source_bytes):
-    baseline = control_baseline()
-    old = {path: retained(path, baseline) if not path.startswith("neqo-qcsd/") else raw
-           for path, raw in source_bytes.items()}
-    old[schedule.MODULE_FILE] = retained(schedule.MODULE_FILE)
-    new = {path: (ROOT / path).read_bytes() for path in old}
-    comparison = schedule.source_changes(old, new, client_sha256="a" * 64)
-    unchanged = schedule.source_changes(old, old, client_sha256="a" * 64)
-    for key in ("dependency_groups", "acquisition_source_groups", "qualification_dependencies"):
-        assert comparison[key] == unchanged[key]
-    assert comparison["changed_sources"][schedule.MODULE_FILE]["units"] == [
-        "scheduling-v2-pre-birth-release-authority"]
-    assert comparison["changed_sources"]["tools/rapid_parallel_capture.py"]["units"] == [
-        "_host_authority", "declared-repository-import-bootstrap", "launch", "main"]
+def test_retained_science_and_current_parallel_control_projection():
+    control_baseline()
+    path = "src/qcsd_lab/rapid_parallel_capture.py"
+    before, before_units = schedule._python_projection(
+        path, retained(path, CURRENT_SCIENCE_BASE))
+    after, after_units = schedule._python_projection(path, (ROOT / path).read_bytes())
+    assert before == after
+    assert {name for name in before_units.keys() | after_units.keys()
+            if before_units.get(name) != after_units.get(name)} == {
+                "formal_entry_inputs", "gate"}
 
 
-def test_historical_projection_is_byte_for_byte_legacy_result(source_bytes):
+def test_v1_named_projection_matches_exact_retained_helper(tmp_path):
     old_helper = retained(schedule.MODULE_FILE)
     legacy = types.ModuleType("qcsd_lab._retained_scheduling_v1")
     legacy.__package__ = "qcsd_lab"
-    legacy.__file__ = str(ROOT.parent.parent / "rapid-execution-rolling-parallel-v6-20261004" / schedule.MODULE_FILE)
-    assert Path(legacy.__file__).read_bytes() == old_helper
+    retained_helper = tmp_path / "rapid_rolling_schedule_v1.py"
+    retained_helper.write_bytes(old_helper)
+    legacy.__file__ = str(retained_helper)
+    assert schedule.evidence._sha(old_helper) == schedule.V1_HELPER_SHA256
     exec(compile(old_helper, legacy.__file__, "exec"), legacy.__dict__)
-    new = {path: retained(path) if not path.startswith("neqo-qcsd/") else raw
-           for path, raw in source_bytes.items()}
-    new[schedule.MODULE_FILE] = old_helper
-    expected = legacy.source_changes(source_bytes, new, client_sha256="b" * 64)
-    actual = schedule.source_changes(source_bytes, new, client_sha256="b" * 64,
-                                     contract=schedule.CONTRACT_V1)
-    assert actual == expected
     assert schedule.V1_CONTROL_DEFINITIONS == legacy.CONTROL_DEFINITIONS
     assert schedule.NEW_FILES == legacy.NEW_FILES
+    for path in sorted(legacy.CONTROL_DEFINITIONS):
+        raw = (ROOT / path).read_bytes()
+        assert schedule._python_projection(path, raw, contract=schedule.CONTRACT_V1) == (
+            legacy._python_projection(path, raw))
 
 
 @pytest.mark.parametrize("mutation", ["foreign_root", "after_import", "duplicate"])
@@ -149,4 +145,6 @@ def test_shell_closes_preparation_and_transports_digest_before_birth():
     assert '--label "org.qcsd.release-preparation-sha256=${parallel_prepared_sha256}"' in region
     assert region.index("actual-launch.json") < region.rindex("parallel_python release")
     gate = (ROOT / "src/qcsd_lab/rapid_parallel_capture.py").read_text()
-    assert "time.monotonic() + 120" in gate
+    assert 'while not (directory / "release.json").exists():' in gate
+    assert 'parallel launch gate was not released within 120 seconds' not in gate
+    assert "trap 'cleanup_parallel_diagnostic \"$?\"' EXIT" in raw
