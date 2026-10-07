@@ -527,6 +527,15 @@ def _parallel_facts_source_projection(raw):
     import ast
     digest = hashlib.sha256(raw).hexdigest()
     quick_profile = 'b71aeb8ea29056d13c1153ea16cd3d1445d8ca355c7e4e1928df5dfa560449f8'
+    if digest == '0e6889b169b647048718107230e7a2c1f6c3c2171c16dfb2f327895b964c3938':
+        before = b'        if isinstance(item, dict) and item.get("artifact_type") == quick.CAPSULE_TYPE:\n'
+        after = b'        if quick.is_profile(item):\n'
+        if raw.count(after) != 1:
+            raise ValueError('Facts explicit-mode dispatch is absent or duplicated')
+        raw = raw.replace(after, before, 1)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != quick_profile:
+            raise ValueError('Facts explicit-mode dispatch changes protected Source bytes')
     if digest == quick_profile:
         additions = (
             b'        from . import rapid_quick_profile as quick\n'
@@ -575,6 +584,18 @@ def _parallel_schedule_source_projection(raw):
     """Retain every scheduling unit except the exact typed adapter dispatches."""
     import ast
     digest = hashlib.sha256(raw).hexdigest()
+    if digest == '925cc2c7d76e4c76f63b0c298ae10126f79eee70a74a708e631af0932f0fe2c6':
+        replacements = (
+            (b'    if quick.is_profile(value):\n', b'    if isinstance(value, dict) and value.get("artifact_type") == quick.CAPSULE_TYPE:\n', 1),
+            (b'    if quick.is_profile(capsule):\n', b'    if capsule["artifact_type"] == quick.CAPSULE_TYPE:\n', 2),
+        )
+        for after, before, count in replacements:
+            if raw.count(after) != count:
+                raise ValueError('scheduling explicit-mode dispatch is absent or duplicated')
+            raw = raw.replace(after, before)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != '3563882347e3ddb2df93846538bc8f95c833b158b62435964f35586046d03f5b':
+            raise ValueError('scheduling explicit-mode dispatch changes protected Source bytes')
     if digest == '3563882347e3ddb2df93846538bc8f95c833b158b62435964f35586046d03f5b':
         additions = (
             b'    from . import rapid_quick_profile as quick\n'
@@ -943,7 +964,7 @@ def _compatible_sources(producer):
                 from . import rapid_quick_profile as quick
                 quick_ref = reference(Path(quick.__file__))
                 _open(quick_ref)
-                if (quick_ref['sha256'] != '79a8c80fc8e701e2bd97fd7dd3ddd996dceb2c7145201d1844a0a2b15d11d99e'
+                if (quick_ref['sha256'] != '35808d483b82a4da1cd9c22e4a9ef967986dd7ab4ede448f8cd98db9d0c3b25c'
                         or quick_ref['mode'] != 0o644):
                     raise ValueError('fixed target quick dispatcher Source or full mode changed')
         elif any(producer[name][key] != expected[key] for key in ('sha256', 'mode')):

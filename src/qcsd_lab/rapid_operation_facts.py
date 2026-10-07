@@ -199,7 +199,7 @@ class OperationFacts:
     def _references(self, item, root: Path, seen=None) -> None:
         """Follow authenticated lab receipt references, never webpage bodies."""
         from . import rapid_quick_profile as quick
-        if isinstance(item, dict) and item.get("artifact_type") == quick.CAPSULE_TYPE:
+        if quick.is_profile(item):
             for reference in item["material_files"]:
                 self._reference(reference)
             return

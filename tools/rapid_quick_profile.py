@@ -34,6 +34,8 @@ def main(argv=None):
     profile.add_argument("--canonical-sha256", required=True)
     profile.add_argument("--workload", action="append")
     profile.add_argument("--runtime-spec", type=Path)
+    profile.add_argument("--mode", choices=rolling.plan.MODES,
+        help="explicit original ready mode; publishes a prospective version-two profile")
     plan = sub.add_parser("plan")
     plan.add_argument("--profile", type=Path, required=True)
     plan.add_argument("--profile-sha256", required=True)
@@ -58,6 +60,7 @@ def main(argv=None):
                 spec = _runtime_spec(args.spec)
                 result = quick.publish_profile(spec, canonical, args.output,
                     workloads=args.workload, runtime_spec=_runtime_spec(args.runtime_spec) if args.runtime_spec else None,
+                    mode=args.mode,
                     _context=context)
             else:
                 reference = rolling._ref(args.profile)

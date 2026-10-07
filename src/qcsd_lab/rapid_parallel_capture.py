@@ -284,6 +284,37 @@ def _campaigns(value: dict[str, Any]):
     return campaigns
 
 
+def _quick_buflo_parameter_fixture(value: dict[str, Any]) -> str:
+    """Select duration200 only from two authenticated, prospective v2 lanes."""
+    from . import rapid_lane_evidence as lanes, rapid_quick_profile as quick
+    from . import rapid_capture_traffic as traffic
+    from . import buflo_duration_budget as budget
+    if (value.get("artifact_type") != "qcsd-two-worker-formal-lane-authority"
+        or not isinstance(value.get("lane_specs"), list) or len(value["lane_specs"]) != 2
+        or not isinstance(value.get("campaigns"), list) or len(value["campaigns"]) != 2):
+        raise ValueError("parallel BuFLO200 requires prospective typed formal lanes")
+    for index, reference in enumerate(value["lane_specs"]):
+        path = Path(reference["path"])
+        if sha(read(path)) != reference["sha256"]:
+            raise ValueError("parallel BuFLO200 lane specification changed")
+        spec = lanes.load_capture_spec(path)
+        _, payload = quick.verify_plan(spec)
+        capsule = quick.validate_profile(payload["scheduling"])
+        if (capsule["artifact_type"] != quick.MODE_CAPSULE_TYPE or capsule["mode_selection"]["mode"] != "buflo"
+            or traffic.declared(payload) != budget.POLICY
+            or {key: spec.serializable()[key] for key in RUNTIME_KEYS} != value["runtime"]
+            or len(payload["lanes"]) != 1
+            or str(spec.campaign_dir / (payload["lanes"][0]["campaign_name"] + ".yml")) != value["campaigns"][index]["path"]
+            or sha(read(Path(value["campaigns"][index]["path"]))) != value["campaigns"][index]["sha256"]):
+            raise ValueError("parallel BuFLO200 differs from its selected fixed profile/campaign")
+        for key in ("buflo_parameters_sha256", "buflo_parameter_provenance_sha256"):
+            relative, digest = traffic.plan_files(payload)[key]
+            for root in (spec.runtime_source_root, spec.execution_root):
+                if sha(read(root / relative)) != digest:
+                    raise ValueError("parallel BuFLO200 parameter/provenance bytes changed")
+    return Path(budget.PARAMETER_PATH).name
+
+
 def _execution_parameter_context(value: dict[str, Any]):
     """Keep source identity separate from identical execution fixture copies.
 
@@ -313,6 +344,9 @@ def _execution_parameter_context(value: dict[str, Any]):
             for defense in campaign.get("defenses", ()):
                 if isinstance(defense, dict) and "parameters" in defense:
                     filename = canonical.get(defense.get("kind"))
+                    if (defense.get("kind") == "buflo" and isinstance(defense["parameters"], str)
+                        and Path(defense["parameters"]).name == "buflo-duration200.json"):
+                        filename = _quick_buflo_parameter_fixture(value)
                     if (filename is None or not isinstance(defense["parameters"], str)
                         or Path(defense["parameters"]).is_absolute()):
                         raise ValueError("parallel campaign must select its canonical execution parameter fixture")

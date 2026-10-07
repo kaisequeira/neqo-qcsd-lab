@@ -19,7 +19,7 @@ def _source(module):
 
 def test_quick_dispatch_preserves_legacy_rolling_and_facts_projections():
     assert hashlib.sha256(_source(rolling)).hexdigest() == 'b9f316d212cf024e3d09ab4fa1a61035233f68f50f8a7c03c7450495cf81d2b0'
-    assert hashlib.sha256(_source(facts)).hexdigest() == 'b71aeb8ea29056d13c1153ea16cd3d1445d8ca355c7e4e1928df5dfa560449f8'
+    assert hashlib.sha256(_source(facts)).hexdigest() == '0e6889b169b647048718107230e7a2c1f6c3c2171c16dfb2f327895b964c3938'
     # Both projections require reconstructing the entire exact predecessor
     # before their older, narrow AST projection can admit a historical reader.
     assert fixed._epoch_dispatch_source_projection(_source(rolling))
@@ -43,7 +43,7 @@ def test_other_reader_change_cannot_hide_behind_quick_dispatch(module, projectio
 
 def test_quick_scheduling_dispatch_keeps_old_reader_projection_and_rejects_other_changes():
     raw = _source(scheduling)
-    assert hashlib.sha256(raw).hexdigest() == '3563882347e3ddb2df93846538bc8f95c833b158b62435964f35586046d03f5b'
+    assert hashlib.sha256(raw).hexdigest() == '925cc2c7d76e4c76f63b0c298ae10126f79eee70a74a708e631af0932f0fe2c6'
     assert fixed._parallel_schedule_source_projection(raw)
     protected = b'epoch_workers.CAPSULE_TYPE'
     assert protected in raw
