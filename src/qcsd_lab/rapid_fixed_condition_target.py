@@ -208,6 +208,19 @@ def _front_incoming_acceptance_condition_projection(raw):
         raw = raw.replace(after, before, 1)
     elif raw.count(after) > 1:
         raise ValueError('FRONT incoming acceptance identity definition is duplicated')
+    member_before = (
+        b"            '6f5fc34f6d8ee14390378200d2ebba55d4de9fc205d6788453c960739f138881'}\n"
+        b"        exact_deep_successor = (\n"
+    )
+    member_after = (
+        b"            '6f5fc34f6d8ee14390378200d2ebba55d4de9fc205d6788453c960739f138881',\n"
+        b"            'd0c7b2132fc1a15809a10605567b2cc21c5d41522ddab1ae8f2c0a6b7bd1fc26'}\n"
+        b"        exact_deep_successor = (\n"
+    )
+    if raw.count(member_after) == 1:
+        raw = raw.replace(member_after, member_before, 1)
+    elif raw.count(member_after) > 1:
+        raise ValueError('FRONT incoming acceptance membership dispatch is duplicated')
     return raw
 
 
@@ -1470,7 +1483,8 @@ def _compatible_membership(producer, current, producer_sources):
             '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739',
             'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14',
             'b9f316d212cf024e3d09ab4fa1a61035233f68f50f8a7c03c7450495cf81d2b0',
-            '6f5fc34f6d8ee14390378200d2ebba55d4de9fc205d6788453c960739f138881'}
+            '6f5fc34f6d8ee14390378200d2ebba55d4de9fc205d6788453c960739f138881',
+            'd0c7b2132fc1a15809a10605567b2cc21c5d41522ddab1ae8f2c0a6b7bd1fc26'}
         exact_deep_successor = (
             pair[0] in {'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702',
                         '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739'}
