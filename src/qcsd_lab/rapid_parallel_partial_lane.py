@@ -49,6 +49,13 @@ _DIRECT_QUICK_V2_GUARDS = {
     'rapid_quick_profile': '35808d483b82a4da1cd9c22e4a9ef967986dd7ab4ede448f8cd98db9d0c3b25c',
     'rapid_rolling_schedule': '925cc2c7d76e4c76f63b0c298ae10126f79eee70a74a708e631af0932f0fe2c6',
 }
+_DIRECT_QUICK_FRONT_V3_GUARDS = {
+    'rapid_lane_evidence': '3034f3a1cebb6b23b422fd3df921c1ed685b24ba59b3ffd4aed719b55f377977',
+    'rapid_rolling_capture': 'd0c7b2132fc1a15809a10605567b2cc21c5d41522ddab1ae8f2c0a6b7bd1fc26',
+    'rapid_slot_chunks': 'f69f212f29f8507246f9aa1136e169723afcf541e51dafee55c19c919fe1c06c',
+    'rapid_quick_profile': '70d0fbed289b3f7362f0334717ec5a9f61d7575d6dcf125b87782f9ee8315e05',
+    'rapid_rolling_schedule': '925cc2c7d76e4c76f63b0c298ae10126f79eee70a74a708e631af0932f0fe2c6',
+}
 _READER007_SOURCES = {
     'qcsd_lab.rapid_parallel_partial_lane': '4d99a5b655422c721984e1b40aa8ce7edfea3efa8aaeadee53974a85c98de754',
     'qcsd_lab.rapid_partial_lane': '0c32fde26a13c4602a88b314ca4deb73d47c4f89b769ec6a5e527ebce7bcf4c4',
@@ -434,8 +441,9 @@ def _direct_quick_binding(report, source):
         if retained['mode'] != 0o644 or current['mode'] != 0o644:
             raise ValueError('parallel partial changed a retained direct-quick guard')
         retained_guards[name], current_guards[name] = retained['sha256'], current['sha256']
-    if (current_guards != _DIRECT_QUICK_V2_GUARDS
-            or retained_guards not in (_DIRECT_QUICK_V1_GUARDS, _DIRECT_QUICK_V2_GUARDS)):
+    if (current_guards != _DIRECT_QUICK_FRONT_V3_GUARDS
+            or retained_guards not in (_DIRECT_QUICK_V1_GUARDS, _DIRECT_QUICK_V2_GUARDS,
+                                       _DIRECT_QUICK_FRONT_V3_GUARDS)):
         raise ValueError('parallel partial changed a retained direct-quick guard')
 
     lane = geometry.checked_lane(report['lane'])
@@ -454,6 +462,9 @@ def _direct_quick_binding(report, source):
     if (retained_guards == _DIRECT_QUICK_V1_GUARDS
             and json.loads(reopen(policy).read_bytes()).get('artifact_type') != quick.CAPSULE_TYPE):
         raise ValueError('parallel partial retained V1 guards cannot authorize an explicit V2 mode')
+    if (retained_guards != _DIRECT_QUICK_FRONT_V3_GUARDS
+            and json.loads(reopen(policy).read_bytes()).get('artifact_type') == quick.FRONT_CAPSULE_TYPE):
+        raise ValueError('parallel partial retained legacy guards cannot authorize FRONT V3')
     for ref in (plan, policy):
         if ref not in report['read_dependencies']:
             raise ValueError('parallel partial original proof did not observe its quick plan and profile bytes')

@@ -210,10 +210,11 @@ def compatible_legacy_reader(role, before, current):
         raise ValueError('mixed historical reader differs after exact full-byte inverse')
     if role == 'traffic' and before['sha256'] != old:
         from . import rapid_quick_profile as quick
+        from . import rapid_front_quick_compatibility as quick_front
         actual = fixed.reference(Path(quick.__file__))
         fixed._open(actual)
-        if actual['sha256'] != '35808d483b82a4da1cd9c22e4a9ef967986dd7ab4ede448f8cd98db9d0c3b25c' or actual['mode'] != 0o644:
-            raise ValueError('mixed historical traffic quick dispatcher changed bytes/full mode')
+        fixed._mixed_epoch()
+        quick_front.checked_dispatcher(actual)
     return True
 
 RECEIPT = {'schema_version': 1, 'policy': BUFLO_POLICY, 'interval_us': 64000,
@@ -265,6 +266,11 @@ def _source_files(value):
     for role in ('mixed', 'front_configuration', 'front_preparation', 'front_incoming_acceptance'):
         fixed._open(value[role]); fixed._open(current[role])
         if any(value[role][key] != current[role][key] for key in ('sha256', 'mode')):
+            if role == 'mixed':
+                from . import rapid_front_quick_compatibility as quick_front
+                fixed._mixed_epoch()
+                if quick_front.compatible_mixed_module(value[role], current[role]):
+                    continue
             raise ValueError('mixed epoch reader module bytes or full mode changed')
     return [*value['base'].values(), *[value[role] for role in ('mixed', 'front_configuration', 'front_preparation', 'front_incoming_acceptance')]]
 

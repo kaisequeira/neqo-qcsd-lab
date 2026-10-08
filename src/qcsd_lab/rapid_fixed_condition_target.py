@@ -329,7 +329,8 @@ def _compatible_code_ref(role, producer, current):
                        'aef299755e14c577e366fffa8df0f281f5f10bdef0937abb6fea52e51dd4ae90',
                        '80783154a4c0097fa8729b69c3ea5dd6ca8f617dd655ce286c7e929874ba8f45',
                        'e57126d7a6e179a82f6f997dd8935a543fbf3378718466ad0eb5033b4811890a',
-                       '13b8610c344176087bc8c85a29d8912c8aed14320999130e2f0a28e394c6bb86'})
+                       '13b8610c344176087bc8c85a29d8912c8aed14320999130e2f0a28e394c6bb86',
+                       'f661fbfb19641d6aa19586d2a587475878d080734f33602a0a02df461615ac53'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -371,8 +372,14 @@ def _compatible_code_ref(role, producer, current):
 
 def _mixed_epoch():
     from . import rapid_mixed_implementation_target as mixed
+    from . import rapid_front_quick_compatibility as quick_front
     declared = reference(Path(mixed.__file__))
-    if (declared['sha256'] != '3b0a8faf8afeb95c8deb8a8feb560214d0fc02e4655b20781776834bd00ba365'
+    compatibility = reference(Path(quick_front.__file__))
+    _open(compatibility)
+    if (Path(quick_front.__file__) != Path(__file__).with_name('rapid_front_quick_compatibility.py')
+            or compatibility['sha256'] != '12693bb5ccf8903c75fdb4d2ba318628d1da2e18ab743cad77012dde88fe6580'
+            or type(compatibility['mode']) is not int or compatibility['mode'] != 0o644
+            or declared['sha256'] != 'fcb97be28badbe1379c7a1ae30030fcefa57143b947765065fd64688084e3a7c'
             or declared['mode'] != 0o644):
         raise ValueError('mixed target reader differs from its exact reviewed module')
     return mixed
@@ -1409,11 +1416,11 @@ def _compatible_sources(producer):
                 # Pin its complete Source so a new receipt type cannot alias an
                 # old one while the historical projection is in use.
                 from . import rapid_quick_profile as quick
+                from . import rapid_front_quick_compatibility as quick_front
                 quick_ref = reference(Path(quick.__file__))
                 _open(quick_ref)
-                if (quick_ref['sha256'] != '35808d483b82a4da1cd9c22e4a9ef967986dd7ab4ede448f8cd98db9d0c3b25c'
-                        or quick_ref['mode'] != 0o644):
-                    raise ValueError('fixed target quick dispatcher Source or full mode changed')
+                _mixed_epoch()
+                quick_front.checked_dispatcher(quick_ref)
         elif any(producer[name][key] != expected[key] for key in ('sha256', 'mode')):
             raise ValueError('fixed target relevant producer/reader code bytes or modes differ')
     return True

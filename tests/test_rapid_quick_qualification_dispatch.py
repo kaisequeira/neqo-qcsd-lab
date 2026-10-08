@@ -9,7 +9,7 @@ from qcsd_lab import rapid_rolling_schedule as schedule
 from qcsd_lab import rapid_runtime_epochs as epochs
 
 
-@pytest.mark.parametrize("kind", [quick.CAPSULE_TYPE, quick.MODE_CAPSULE_TYPE, schedule.CAPSULE_TYPE])
+@pytest.mark.parametrize("kind", [quick.CAPSULE_TYPE, quick.MODE_CAPSULE_TYPE, quick.FRONT_CAPSULE_TYPE, schedule.CAPSULE_TYPE])
 def test_qualified_profile_dispatches_to_full_schedule_validator(tmp_path, monkeypatch, kind):
     path = tmp_path / "profile.json"
     raw = json.dumps({"artifact_type": kind}).encode()
@@ -31,7 +31,7 @@ def test_qualified_profile_dispatches_to_full_schedule_validator(tmp_path, monke
     assert kwargs["actual_image"] == "sha256:" + "a" * 64
 
 
-@pytest.mark.parametrize("kind", [quick.CAPSULE_TYPE, quick.MODE_CAPSULE_TYPE])
+@pytest.mark.parametrize("kind", [quick.CAPSULE_TYPE, quick.MODE_CAPSULE_TYPE, quick.FRONT_CAPSULE_TYPE])
 @pytest.mark.parametrize("authority", ["installation", "ambient_bridge"])
 def test_quick_profile_cannot_claim_historical_repair_authority(tmp_path, monkeypatch, kind, authority):
     path = tmp_path / "profile.json"

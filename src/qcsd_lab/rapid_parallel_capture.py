@@ -377,6 +377,7 @@ def _target_front_v5_parameter_fixture(value: dict[str, Any]) -> str:
     from . import rapid_target_parallel_schedule as workers
     from . import rapid_capture_traffic as traffic
     from . import front_fixed_configuration as front
+    from . import rapid_quick_profile as quick
     from .rapid_operation_facts import OperationFacts, current_context
     if current_context() is None:
         context = OperationFacts()
@@ -397,9 +398,19 @@ def _target_front_v5_parameter_fixture(value: dict[str, Any]) -> str:
         if sha(current_context().watch_file(spec_path)) != reference["sha256"]:
             raise ValueError("FRONT V5 target worker specification changed")
         spec = lanes.load_capture_spec(spec_path)
-        sites, payload = workers.verify_plan(spec, require_current=True)
-        capsule = workers.require_plan(payload)
-        if (capsule["mode"] != "front" or traffic.front_declared(payload) != front.POLICY
+        if quick.is_plan(spec.plan_receipt):
+            sites, payload = quick.verify_plan(spec)
+            capsule = quick.validate_profile(payload["scheduling"])
+            if capsule["artifact_type"] != quick.FRONT_CAPSULE_TYPE:
+                raise ValueError("FRONT V5 quick worker requires its distinct version-three profile")
+            selected_mode = capsule["mode_selection"]["mode"]
+            selected_workers = quick
+        else:
+            sites, payload = workers.verify_plan(spec, require_current=True)
+            capsule = workers.require_plan(payload)
+            selected_mode = capsule["mode"]
+            selected_workers = workers
+        if (selected_mode != "front" or traffic.front_declared(payload) != front.POLICY
             or {key: spec.serializable()[key] for key in RUNTIME_KEYS} != value["runtime"]):
             raise ValueError("FRONT V5 fixture lacks its exact target-mode policy")
         campaign = value["campaigns"][index]
@@ -410,8 +421,8 @@ def _target_front_v5_parameter_fixture(value: dict[str, Any]) -> str:
             or matching[0]["campaign_sha256"] != campaign["sha256"]
             or sha(current_context().watch_file(Path(campaign["path"]))) != campaign["sha256"]):
             raise ValueError("FRONT V5 worker campaign bytes/path changed")
-        lane = workers.prepared_lane({key: item for key, item in matching[0].items() if key != "campaign_sha256"})
-        workers.require_worker(payload, lane, sites, spec)
+        lane = selected_workers.prepared_lane({key: item for key, item in matching[0].items() if key != "campaign_sha256"})
+        selected_workers.require_worker(payload, lane, sites, spec)
         front.validate_source_artifacts(payload["runtime"])
         for name in ("execution_root", "runtime_source_root", "module_root"):
             root = Path(payload["runtime"][name])
@@ -421,7 +432,10 @@ def _target_front_v5_parameter_fixture(value: dict[str, Any]) -> str:
                 if artifact.stat().st_mode & 0o7777 != 0o644 or sha(current_context().watch_file(artifact)) != digest:
                     raise ValueError("FRONT V5 source/execution parameter/provenance changed")
         facts.append((spec, payload, lane, sites))
-    workers.require_disjoint(facts)
+    kinds = {quick.is_payload(payload) for _, payload, _, _ in facts}
+    if len(kinds) != 1:
+        raise ValueError("FRONT V5 workers cannot mix direct quick and target authorities")
+    (quick if True in kinds else workers).require_disjoint(facts)
     return Path(front.CONFIGURATION_PATH).name
 
 

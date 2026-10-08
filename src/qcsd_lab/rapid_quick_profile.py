@@ -12,9 +12,11 @@ from . import rapid_lane_evidence as lanes
 from . import rapid_rolling_capture as rolling
 from . import rapid_site_admission as receipts
 from . import rapid_slot_chunks as geometry
+from . import rapid_front_quick_profile as front_quick
 
 CAPSULE_TYPE = "qcsd-prospective-direct-quick-launch-profile-v1"
 MODE_CAPSULE_TYPE = "qcsd-prospective-direct-quick-launch-profile-v2"
+FRONT_CAPSULE_TYPE = front_quick.PROFILE_TYPE
 PLAN_TYPE = "qcsd-prospective-direct-quick-formal-plan-v1"
 FIELD = "direct_quick_launch_profile"
 CONTRACT = "current-material-bindings-complete-graphs-fixed-settings-full-deep-50x5x64-v1"
@@ -23,7 +25,7 @@ EMPTY_SHA256 = lanes._sha(b"")
 PLAN_FIELDS = {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
     "qualification_spec_sha256", "data_role", "capture_limits", "application_body_identity_policy",
     "qualification_delivery_compatibility", "tamaraw_configuration_policy", "buflo_duration_policy", "static_capture_amendment",
-    "ordinary_capture_contract"}
+    "ordinary_capture_contract", "front_configuration_policy", "front_incoming_credit_acceptance_policy"}
 
 
 def is_payload(value):
@@ -31,7 +33,7 @@ def is_payload(value):
 
 
 def is_profile(value):
-    return isinstance(value, dict) and value.get("artifact_type") in {CAPSULE_TYPE, MODE_CAPSULE_TYPE}
+    return isinstance(value, dict) and value.get("artifact_type") in {CAPSULE_TYPE, MODE_CAPSULE_TYPE, FRONT_CAPSULE_TYPE}
 
 
 def is_plan(path):
@@ -50,7 +52,7 @@ def _open(reference, context=None):
     return path
 
 
-def _runtime_once(spec, canonical_ref):
+def _runtime_once(spec, canonical_ref, *, front=False):
     """Check the current closed installation, without reopening its ancestors."""
     from . import rapid_rolling_readiness as evidence
     canonical_path = _open(canonical_ref)
@@ -58,13 +60,14 @@ def _runtime_once(spec, canonical_ref):
     root = canonical_path.parent
     source = lanes._load(lanes._read(spec.source_manifest))
     client_sha = lanes._sha(lanes._read(spec.client_binary))
+    expected_native = front_quick.NATIVE if front else NATIVE
     if (canonical.get("installed_byte_verification_completed") is not True
         or canonical.get("scientific_credit") is not False
         or canonical.get("collection_image_digest") != spec.collection_image_digest
         or canonical.get("source") != source
         or source.get("lab_dirty") is not False or source.get("neqo_dirty") is not False
         or source.get("lab_patch_sha256") != EMPTY_SHA256 or source.get("neqo_patch_sha256") != EMPTY_SHA256
-        or source.get("neqo_commit") != NATIVE or source.get("neqo_pinned_commit") != NATIVE
+        or source.get("neqo_commit") != expected_native or source.get("neqo_pinned_commit") != expected_native
         or canonical.get("installed_client_sha256") != client_sha
         or canonical.get("exported_source_manifest_sha256") != lanes._sha(lanes._read(spec.source_manifest))):
         raise ValueError("quick profile requires the actual current Native818 installation")
@@ -124,6 +127,8 @@ def _source_layout(root, context=None):
 
 def _traffic_files(seed):
     from . import rapid_capture_traffic as traffic
+    if front_quick.selected(seed, "front"):
+        return traffic.plan_files(seed)
     return traffic.files(traffic.policy(seed.get(traffic.FIELD)))
 
 
@@ -152,6 +157,9 @@ def _mode_readiness_domain(seed, mode, reference, recipe, deep, source, files, c
     execution, clean = Path(recipe["execution_root"]), Path(recipe["clean_runtime_root"])
     campaign_path = evidence._child(execution, campaign.get("campaign_relative"))
     files.add(_open({"path": str(campaign_path), "sha256": campaign.get("campaign_sha256")}, context))
+    if front_quick.selected(seed, mode):
+        import yaml
+        front_quick.validate_campaign(yaml.safe_load(lanes._read(campaign_path)))
     declared = Path(deep.get("root", ""))
     if (type(campaign.get("visits")) is not int or campaign["visits"] != 1
         or deep.get("name") != campaign.get("name") or deep.get("purpose") != "smoke"
@@ -211,6 +219,8 @@ def _mode_readiness_domain(seed, mode, reference, recipe, deep, source, files, c
 
 def _mode_selection(seed, mode, context=None):
     """Reopen one original ready mode's direct records, without ancestor audits."""
+    fixed_front = front_quick.selected(seed, mode)
+    expected_native = front_quick.NATIVE if fixed_front else NATIVE
     rows = [row for row in seed["lanes"] if row["mode"] == mode]
     reference = seed.get("readiness", {}).get(mode)
     if (mode not in rolling.plan.MODES or not rows or any(row.get("role") != "formal" for row in rows)
@@ -251,15 +261,17 @@ def _mode_selection(seed, mode, context=None):
         or deep.get("plan_sha256") != reference["plan"]["sha256"]
         or deep.get("workload_sha256") not in {site["workload_sha256"] for site in seed["sites"]}
         or any(deep.get("source", {}).get(key) != source.get(key) for key in identity)
-        or source.get("neqo_commit") != NATIVE or source.get("neqo_pinned_commit") != NATIVE
+        or source.get("neqo_commit") != expected_native or source.get("neqo_pinned_commit") != expected_native
         or source.get("lab_dirty") is not False or source.get("neqo_dirty") is not False
         or source.get("lab_patch_sha256") != EMPTY_SHA256 or source.get("neqo_patch_sha256") != EMPTY_SHA256
-        or recipe.get("expected_lab_commit") != source.get("lab_commit") or recipe.get("expected_native_commit") != NATIVE
+        or recipe.get("expected_lab_commit") != source.get("lab_commit") or recipe.get("expected_native_commit") != expected_native
         or recipe.get("traffic_hashes") != {key: digest for key, (_, digest) in _traffic_files(seed).items()}
         or recipe.get("capture_limits") != {**seed.get("capture_limits", {}), "max_attempts": 1}
         or deep.get("application_body_identity_policy") != seed.get("application_body_identity_policy")
         or mode == "tamaraw" and deep.get("tamaraw_configuration_policy") != seed.get("tamaraw_configuration_policy")):
         raise ValueError("quick explicit mode differs from its genuine original Native/settings readiness")
+    if fixed_front:
+        front_quick.validate_readiness(seed, recipe, deep, source)
     _mode_readiness_domain(seed, mode, reference, recipe, deep, source, files, context)
     return {"mode": mode, "readiness": reference}, rows, files
 
@@ -273,6 +285,7 @@ def publish_profile(spec, canonical_ref, output, *, workloads=None, runtime_spec
     if is_plan(spec.plan_receipt):
         raise ValueError("quick profile must start from an original qualified cohort plan")
     seed = lanes.plan_payload(lanes._read(spec.plan_receipt))
+    fixed_front = front_quick.selected(seed, mode)
     cohort_frame = lanes._load(lanes._read(spec.cohort))
     cohort = receipts._unpack(lanes._read(spec.cohort), cohort_frame["receipt_type"])
     declared_ids = cohort.get("selected_candidate_ids", [row["candidate_id"] for row in cohort.get("decisions", [])
@@ -306,7 +319,11 @@ def publish_profile(spec, canonical_ref, output, *, workloads=None, runtime_spec
     sites = tuple(site for site in sites if site.workload_id in selected)
     if not 1 <= len(sites) <= 5:
         raise ValueError("quick cohort requires one through five complete admitted sites")
-    canonical, inventory_ref = _runtime_once(spec, canonical_ref)
+    if fixed_front:
+        front_quick.validate_artifacts({key: spec.serializable()[key] for key in rolling.RUNTIME_FIELDS}, context=_context)
+        canonical, inventory_ref = _runtime_once(spec, canonical_ref, front=True)
+    else:
+        canonical, inventory_ref = _runtime_once(spec, canonical_ref)
     files = {getattr(spec, name) for name in ("cohort", "qualification_spec", "source_manifest",
         "client_binary", "base_launcher", "host_launcher")}
     files.update({_open(canonical_ref), _open(inventory_ref), original.plan_receipt})
@@ -321,6 +338,8 @@ def publish_profile(spec, canonical_ref, output, *, workloads=None, runtime_spec
     for site in sites:
         path = spec.workload_root / (site.workload_id + ".json")
         manifest = lanes._load(lanes._read(path))
+        if fixed_front:
+            front_quick.native.validate_prepared(manifest)
         resources = manifest["resources"]
         from urllib.parse import urlsplit
         origins = sorted({f'{urlsplit(row["url"]).scheme}://{urlsplit(row["url"]).netloc}' for row in resources})
@@ -346,6 +365,8 @@ def publish_profile(spec, canonical_ref, output, *, workloads=None, runtime_spec
         "formal_accepted_trace_count": 0, "scientific_credit": False}
     if selection is not None:
         value.update(schema_version=2, artifact_type=MODE_CAPSULE_TYPE, mode_selection=selection)
+        if fixed_front:
+            value.update(schema_version=3, artifact_type=FRONT_CAPSULE_TYPE)
     if _context is not None:
         for item in value["material_files"]:
             _open(item, _context)
@@ -366,23 +387,31 @@ def validate_profile(reference, *, runtime=None, before=None, _context=None):
         "original_canonical", "source_inventory", "source", "client_sha256", "sites", "graphs", "seed_payload", "material_files",
         "material_modes", "permitted_slots", "archive_references", "class_target", "modes", "visits_per_class_mode", "formal_trace_target", "published_at",
         "source_directory_modes", "reason", "formal_accepted_trace_count", "scientific_credit"}
-    explicit_mode = value.get("artifact_type") == MODE_CAPSULE_TYPE
+    fixed_front = value.get("artifact_type") == FRONT_CAPSULE_TYPE
+    explicit_mode = value.get("artifact_type") in {MODE_CAPSULE_TYPE, FRONT_CAPSULE_TYPE}
     if explicit_mode:
         fields.add("mode_selection")
     if (set(value) != fields or not is_profile(value) or type(value.get("schema_version")) is not int
-        or value["schema_version"] != (2 if explicit_mode else 1) or value.get("contract") != CONTRACT
+        or value["schema_version"] != (3 if fixed_front else 2 if explicit_mode else 1) or value.get("contract") != CONTRACT
         or (value.get("class_target"), value.get("visits_per_class_mode"), value.get("formal_trace_target")) != (50, 64, 16000)
         or value.get("modes") != list(rolling.plan.MODES) or value.get("scientific_credit") is not False
         or value.get("formal_accepted_trace_count") != 0
         or runtime is not None and value["runtime"] != dict(runtime)
         or not receipts._utc(value["published_at"]) <= receipts._utc(before or receipts._now())):
         raise ValueError("quick profile explicit prospective contract differs")
+    if explicit_mode and (not isinstance(value["mode_selection"], dict)
+            or set(value["mode_selection"]) != {"mode", "readiness"}):
+        raise ValueError("quick explicit mode selection fields differ")
+    selected_mode = value["mode_selection"]["mode"] if explicit_mode else None
+    if front_quick.selected(value["seed_payload"], selected_mode) != fixed_front:
+        raise ValueError("quick FRONT setting requires its distinct version-three profile")
+    expected_native = front_quick.NATIVE if fixed_front else NATIVE
     for item in value["material_files"]:
         material = _open(item, _context)
         if __import__("stat").S_IMODE(material.stat().st_mode) != value["material_modes"][str(material)]:
             raise ValueError("quick profile current material permissions changed")
     source = lanes._load(lanes._read(Path(value["base_spec"]["source_manifest"])))
-    if (source != value["source"] or source.get("neqo_commit") != NATIVE or source.get("neqo_pinned_commit") != NATIVE
+    if (source != value["source"] or source.get("neqo_commit") != expected_native or source.get("neqo_pinned_commit") != expected_native
         or source.get("lab_dirty") is not False or source.get("neqo_dirty") is not False
         or source.get("lab_patch_sha256") != EMPTY_SHA256 or source.get("neqo_patch_sha256") != EMPTY_SHA256
         or lanes._sha(lanes._read(Path(value["base_spec"]["client_binary"]))) != value["client_sha256"]):
@@ -396,6 +425,8 @@ def validate_profile(reference, *, runtime=None, before=None, _context=None):
         raise ValueError("quick profile direct current installation fields disagree")
     inventory = lanes._load(lanes._read(_open(value["source_inventory"], _context)))
     source_root = Path(value["base_spec"]["runtime_source_root"])
+    if fixed_front:
+        front_quick.validate_artifacts(value["runtime"], context=_context)
     source_files = {str(source_root / name): item for name, item in inventory.items()}
     materials = {item["path"]: item for item in value["material_files"]}
     if (len(materials) != len(value["material_files"]) or not source_files
@@ -438,6 +469,8 @@ def validate_profile(reference, *, runtime=None, before=None, _context=None):
     for row in value["sites"]:
         manifest_path = Path(value["base_spec"]["workload_root"]) / (row["workload_id"] + ".json")
         manifest = lanes._load(lanes._read(manifest_path))
+        if fixed_front:
+            front_quick.native.validate_prepared(manifest)
         resources = manifest["resources"]
         graph = {"resource_count": len(resources), "origins": sorted({f'{urlsplit(item["url"]).scheme}://{urlsplit(item["url"]).netloc}' for item in resources}),
             "resources_sha256": lanes._sha(lanes._json(resources))}
@@ -467,7 +500,7 @@ def verify_plan(spec, *, _context=None, **unused):
     if value["sites"] != capsule["sites"] or value["bindings"] != capsule["seed_payload"]["bindings"]:
         raise ValueError("quick plan changed admitted site identities or immutable cohort bindings")
     seed = capsule["seed_payload"]
-    mode = capsule["mode_selection"]["mode"] if capsule["artifact_type"] == MODE_CAPSULE_TYPE else seed["lanes"][0]["mode"]
+    mode = capsule["mode_selection"]["mode"] if capsule["artifact_type"] in {MODE_CAPSULE_TYPE, FRONT_CAPSULE_TYPE} else seed["lanes"][0]["mode"]
     protected = {key: item for key, item in seed.items() if key in PLAN_FIELDS}
     if (set(value) != set(protected) | {FIELD, "scheduling", "sites", "readiness", "declared_at", "formal_accepted_trace_count", "scientific_credit", "planned_trace_count", "lanes"}
         or any(lanes._json(value[key]) != lanes._json(item) for key, item in protected.items())
@@ -475,12 +508,12 @@ def verify_plan(spec, *, _context=None, **unused):
         or value["formal_accepted_trace_count"] != 0 or value["scientific_credit"] is not False):
         raise ValueError("quick plan changed its frozen settings or explicit new-profile fields")
     sites = prepared_sites(value["sites"])
-    allowed_modes = {mode} if capsule["artifact_type"] == MODE_CAPSULE_TYPE else {row["mode"] for row in seed["lanes"]}
+    allowed_modes = {mode} if capsule["artifact_type"] in {MODE_CAPSULE_TYPE, FRONT_CAPSULE_TYPE} else {row["mode"] for row in seed["lanes"]}
     for row in value["lanes"]:
         lane = geometry.checked_lane({key: item for key, item in row.items() if key != "campaign_sha256"})
         if lane.mode not in allowed_modes or tuple(lane.workload_ids) != tuple(site.workload_id for site in sites):
             raise ValueError("quick plan changes its qualified setting or complete class set")
-        if capsule["artifact_type"] == MODE_CAPSULE_TYPE and not any(
+        if capsule["artifact_type"] in {MODE_CAPSULE_TYPE, FRONT_CAPSULE_TYPE} and not any(
             row["mode"] == mode and row["shard"] == lane.shard
             and set(lane.workload_ids) <= set(row["workload_ids"]) for row in seed["lanes"]):
             raise ValueError("quick explicit mode plan changed its original class shard")
@@ -563,7 +596,7 @@ def publish_plan(spec, reference, output, *, slot_start, slot_count, generation=
     if not set(range(slot_start, slot_start + slot_count)) <= set(capsule["permitted_slots"]):
         raise ValueError("quick plan cannot expand the seed's declared remaining ledger")
     seed = capsule["seed_payload"]
-    mode = capsule["mode_selection"]["mode"] if capsule["artifact_type"] == MODE_CAPSULE_TYPE else seed["lanes"][0]["mode"]
+    mode = capsule["mode_selection"]["mode"] if capsule["artifact_type"] in {MODE_CAPSULE_TYPE, FRONT_CAPSULE_TYPE} else seed["lanes"][0]["mode"]
     if capsule["artifact_type"] == CAPSULE_TYPE and any(row["mode"] != mode for row in seed["lanes"]):
         raise ValueError("quick profile requires one independently ready fixed setting")
     sites = capsule["sites"]
@@ -584,7 +617,9 @@ def publish_plan(spec, reference, output, *, slot_start, slot_count, generation=
     raw_campaign = geometry.render(lane, site_objects, static_capture_limits=value.get("capture_limits"),
         buflo_duration_policy=value.get("buflo_duration_policy"), application_body_identity_policy=value.get("application_body_identity_policy"),
         qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"),
-        tamaraw_configuration_policy=value.get("tamaraw_configuration_policy") if mode == "tamaraw" else None)
+        tamaraw_configuration_policy=value.get("tamaraw_configuration_policy") if mode == "tamaraw" else None,
+        front_configuration_policy=value.get("front_configuration_policy") if mode == "front" else None,
+        front_incoming_credit_acceptance_policy=value.get("front_incoming_credit_acceptance_policy") if mode == "front" else None)
     value["lanes"] = [{**asdict(lane), "campaign_sha256": lanes._sha(raw_campaign)}]
     campaign = spec.campaign_dir / (lane.campaign_name + ".yml")
     receipts.durable_create(campaign, raw_campaign)

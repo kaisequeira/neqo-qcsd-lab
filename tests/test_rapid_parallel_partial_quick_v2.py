@@ -16,6 +16,7 @@ import pytest
 
 from qcsd_lab import rapid_lane_evidence as lanes
 from qcsd_lab import rapid_parallel_partial_lane as reader
+from qcsd_lab import rapid_front_quick_compatibility as quick_compatibility
 from qcsd_lab import rapid_quick_profile as quick
 from qcsd_lab import rapid_rolling_capture as rolling
 from qcsd_lab import rapid_rolling_schedule as schedule
@@ -62,7 +63,12 @@ def test_saved_source60_v2_material_plan_worker_and_actual_complete_config(saved
     saved = saved_v2
     for module in (quick, schedule):
         path = Path(module.__file__)
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == saved.fixture["stock_guards"][path.name]
+        raw = path.read_bytes()
+        if module is quick:
+            # The complete new FRONT dispatcher must restore the original
+            # Source60 stock guard before this old complete-schema regression.
+            raw = quick_compatibility.restore("quick", raw)
+        assert hashlib.sha256(raw).hexdigest() == saved.fixture["stock_guards"][path.name]
         assert stat.S_IMODE(path.stat().st_mode) == 0o644
     context = OperationFacts()
     capsule = quick.validate_profile({key: saved.fixture["profile"][key] for key in ("path", "sha256")}, _context=context)
