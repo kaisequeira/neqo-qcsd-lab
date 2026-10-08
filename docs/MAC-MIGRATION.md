@@ -127,7 +127,10 @@ once and record its new executable, image, SDK and platform bindings. An
 architecture change alone does not require a fabricated new source commit.
 
 The public producer's initial ARM64 route is a cold build; leave out
-`--reuse-canonical` for an x86-64 prior runtime:
+`--reuse-canonical` for an x86-64 prior runtime. The explicit prospective
+resource-domain policy below skips the old broad Rust formatting, test and
+Clippy gates. It still compiles the release client and checks the complete
+source, installed SDK and exported bytes:
 
 ```sh
 .venv/bin/python3 tools/rapid_portable_runtime.py stage \
@@ -135,6 +138,7 @@ The public producer's initial ARM64 route is a cold build; leave out
   --lab-commit LAB_COMMIT_40_HEX \
   --native-commit NATIVE_COMMIT_40_HEX \
   --platform linux/arm64 \
+  --cold-check-policy resource-domain-live-pilot-v1 \
   --build-root /absolute/fresh/arm64-runtime
 .venv/bin/python3 tools/rapid_portable_runtime.py build \
   --build-root /absolute/fresh/arm64-runtime
@@ -148,6 +152,14 @@ is not a verified runtime. Later Lab-only changes on the same architecture can
 use the producer's authenticated client-reuse route; that is separate from
 the first ARM64 compilation. The build closure alone grants no live admission,
 mode readiness or scientific session credit.
+
+The selected policy is bound into the build inputs and an installed receipt
+that explicitly records that Rust gates were **not run**. Omitting the option
+keeps the original `full` policy. This option applies only to a new cold build;
+authenticated client reuse retains its original build authority. ARM64 runtime
+behavior remains unverified until actual live pilots pass. Before formal
+capture in each of the five modes, its pilot must complete all 20 resources
+on the new architecture and satisfy the physical evidence checks below.
 
 ## 4. Prepare the input and run a small, zero-credit pilot
 

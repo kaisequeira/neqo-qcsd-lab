@@ -23,6 +23,17 @@ CHUNK = 20
 INPUT_LIMIT = 16 * 1024 * 1024
 
 
+def coordinator_provenance() -> dict:
+    """Record the host code actually coordinating and verifying this attempt."""
+    source = Path(__file__).parent
+    names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
+             "resource_study_verify.py", "resource_study_inputs.py", "resource_study_storage.py",
+             "resource_study_supplements.py", "fidelity.py", "capture.py", "process_scheduler.py")
+    return {"record_type": "qcsd-resource-study-host-code-v1",
+            "files": {name: sha256_file(source / name) for name in names},
+            "installed_native_and_sdk": "recorded separately in runtime"}
+
+
 def authenticated_input(path: Path, digest: str) -> bytes:
     with path.open("rb") as handle:
         raw = handle.read(INPUT_LIMIT + 1)
@@ -236,6 +247,7 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         "five_tuple": [local_ip, local_port, remote_ip, remote_port, 17],
         "capture_position": "client-eth0-before-nat", "workload_sha256": enrollment["workload_sha256"],
         "runtime": runtime, "collector_version": "qcsd-resource-study-coordinator-v1",
+        "coordinator_provenance": coordinator_provenance(),
         "mode_policies": result.get("mode_policies", {}),
         "mode_settings": enrollment.get("mode_settings", {}).get(attempt["mode"], {}),
         "artifact_paths": paths, "files": files,

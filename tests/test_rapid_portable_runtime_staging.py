@@ -12,6 +12,53 @@ import pytest
 from qcsd_lab import rapid_portable_runtime as runtime
 
 
+def test_checkout_inventory_excludes_ignored_caches_and_venv_binds_native(tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    (root / "src").mkdir(parents=True)
+    (root / "neqo-qcsd").mkdir()
+    (root / "src/lab.py").write_bytes(b"tracked Lab")
+    (root / "neqo-qcsd/Cargo.lock").write_bytes(b"tracked Native")
+    (root / "neqo-qcsd/Cargo.lock").chmod(0o755)
+    def git(repository, *args):
+        assert args == ("ls-files", "--cached", "-z")
+        return b"Cargo.lock\0" if Path(repository).name == "neqo-qcsd" else b"src/lab.py\0neqo-qcsd\0"
+    monkeypatch.setattr(runtime, "_git", git)
+    expected = runtime._checkout_inventory(root)
+    for name in (".pytest_cache/state", ".venv/bin/python", "src/__pycache__/lab.pyc",
+                 "neqo-qcsd/target/cache"):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ignored local state")
+    assert runtime._checkout_inventory(root) == expected
+    assert set(expected) == {"src/lab.py", "neqo-qcsd/Cargo.lock"}
+    assert expected["src/lab.py"] == {"sha256": runtime._sha(b"tracked Lab"), "executable": False}
+    assert expected["neqo-qcsd/Cargo.lock"] == {"sha256": runtime._sha(b"tracked Native"), "executable": True}
+    (root / ".venv/bin/python").write_bytes(b"different ignored bytes")
+    assert runtime._checkout_inventory(root) == expected
+    assert runtime._inventory(root) != expected
+
+
+@pytest.mark.parametrize("name", [b"../escape", b"/escape", b".git/config", b"a/../../escape"])
+def test_checkout_inventory_refuses_unsafe_git_paths(tmp_path, monkeypatch, name):
+    root = tmp_path / "checkout"
+    (root / "neqo-qcsd").mkdir(parents=True)
+    monkeypatch.setattr(runtime, "_git", lambda *args: name + b"\0")
+    monkeypatch.setattr(runtime, "_read", lambda path: pytest.fail("unsafe path reached reader"))
+    with pytest.raises(ValueError, match="escapes"):
+        runtime._checkout_inventory(root)
+
+
+def test_checkout_inventory_refuses_tracked_symlink(tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    (root / "neqo-qcsd").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"outside bytes")
+    (root / "tracked").symlink_to(outside)
+    monkeypatch.setattr(runtime, "_git", lambda *args: b"tracked\0")
+    with pytest.raises(ValueError, match="unlinked"):
+        runtime._checkout_inventory(root)
+
+
 def archive(rows):
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as handle:
@@ -185,11 +232,15 @@ def staged_source(tmp_path, monkeypatch):
     native_commit, lab_commit = "d" * 40, "a" * 40
     archives = {"lab": archive([regular("source", b"lab")]),
                 "native": archive([regular("Cargo.lock", b"lock")])}
+    (checkout / "source").write_bytes(b"lab")
+    (checkout / "neqo-qcsd/Cargo.lock").write_bytes(b"lock")
     monkeypatch.setattr(runtime, "_clean", lambda *args: None)
     producer_paths = (runtime.SOURCE_PATH, runtime.CLI_PATH, runtime.VERIFIER_PATH)
     monkeypatch.setattr(runtime, "_read", lambda path: b"producer source"
         if any(str(path).endswith(name) for name in producer_paths) else Path(path).read_bytes())
     def git(path, *args):
+        if args == ("ls-files", "--cached", "-z"):
+            return b"Cargo.lock\0" if Path(path).name == "neqo-qcsd" else b"source\0neqo-qcsd\0"
         if "ls-files" in args:
             return f"160000 {native_commit} 0\tneqo-qcsd\n".encode()
         assert "archive" in args
@@ -241,4 +292,21 @@ def test_inventory_is_read_only_after_successful_batch_fence(staged_source, tmp_
     with pytest.raises(RuntimeError, match="stop before metadata"):
         stage_fixture(staged_source, root)
     assert order == ["flush", "inventory"]
+    assert not (root / "build-inputs.json").exists()
+
+
+@pytest.mark.parametrize("changed", ["lab-bytes", "native-bytes", "native-executable"])
+def test_tracked_checkout_tamper_refuses_stage_before_build_authority(staged_source, tmp_path, monkeypatch, changed):
+    checkout = staged_source[0]
+    if changed == "lab-bytes":
+        (checkout / "source").write_bytes(b"changed tracked Lab")
+    elif changed == "native-bytes":
+        (checkout / "neqo-qcsd/Cargo.lock").write_bytes(b"changed tracked Native")
+    else:
+        (checkout / "neqo-qcsd/Cargo.lock").chmod(0o755)
+    root = tmp_path / "runtime"
+    monkeypatch.setattr(runtime, "_flush_snapshot", lambda path: None)
+    with pytest.raises(ValueError, match="exact clean checkout"):
+        stage_fixture(staged_source, root)
+    assert not (root / "source-inventory.json").exists()
     assert not (root / "build-inputs.json").exists()

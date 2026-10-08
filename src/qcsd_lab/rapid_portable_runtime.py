@@ -38,6 +38,7 @@ IMAGE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 HEAD = re.compile(r"[0-9a-f]{40}\Z")
 PLATFORMS = {"linux/amd64", "linux/arm64"}
+COLD_CHECK_POLICIES = {"full", "resource-domain-live-pilot-v1"}
 ARCHITECTURES = {"amd64": "amd64", "x86_64": "amd64", "arm64": "arm64", "aarch64": "arm64"}
 ZERO = {"scientific_credit": False, "admitted_site_count": 0, "formal_accepted_trace_count": 0}
 GIT_ENV = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -131,6 +132,26 @@ def _create(path, raw, *, mode=0o644):
 def _inventory(root):
     from .rapid_rolling_readiness import _inventory as inventory
     return inventory(_path(root, directory=True))
+
+
+def _checkout_inventory(root):
+    """Bind committed Lab/Native inputs while permitting local ignored caches."""
+    root = _path(root, directory=True)
+    result = {}
+    for repository, prefix in ((root, ""), (root / "neqo-qcsd", "neqo-qcsd/")):
+        for raw_name in _git(repository, "ls-files", "--cached", "-z").split(b"\0"):
+            if not raw_name:
+                continue
+            name = raw_name.decode()
+            if not prefix and name == "neqo-qcsd":
+                continue
+            relative = Path(name)
+            if relative.is_absolute() or ".." in relative.parts or ".git" in relative.parts:
+                raise ValueError("tracked source path escapes its checkout")
+            path = _path(repository / relative)
+            result[prefix + relative.as_posix()] = {"sha256": _sha(_read(path)),
+                                                    "executable": bool(path.stat().st_mode & 0o111)}
+    return dict(sorted(result.items()))
 
 
 def architecture(value):
@@ -246,18 +267,85 @@ def _defaults(dockerfile):
     return value
 
 
-def dockerfile_bytes(raw: bytes, *, cache_namespace: str, original=None) -> bytes:
+def _cold_check_policy(value):
+    if type(value) is not str or value not in COLD_CHECK_POLICIES:
+        raise ValueError("portable runtime cold-check policy is unsupported")
+    return value
+
+
+def _cold_check_recipe(value, check_policy):
+    if check_policy == "full":
+        return value
+    begin = ("RUN --mount=type=cache,id=qcsd-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \\\n"
+             "    --mount=type=cache,id=qcsd-cargo-git-${TARGETARCH},target=/usr/local/cargo/git \\\n"
+             "    bash -euxo pipefail")
+    end = "# Release artifacts are built only from the source that passed every gate.\n"
+    if value.count(begin) != 1 or value.count(end) != 1:
+        raise ValueError("tracked Native code-gate boundaries differ")
+    start = value.index(begin)
+    finish = value.index(end, start) + len(end)
+    if _sha(value[start:finish].encode()) != "eae4ff20e504f71350c4ec7c2bcd81590bb792a97ae8c33680044d820fbd8965":
+        raise ValueError("tracked Native code-gate bytes differ")
+    # Keep the installed evidence directory while explicitly refusing a Rust
+    # test-pass claim. Release compilation below remains byte-identical.
+    replacement = """RUN TARGETARCH="${TARGETARCH}" python3 - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+root = Path("/out/rust-code-gate")
+root.mkdir(parents=True)
+receipt = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-resource-domain-native-build-policy-v1",
+    "policy": "resource-domain-live-pilot-v1",
+    "target_arch": os.environ["TARGETARCH"],
+    "passed": False,
+    "rust_fmt_executed": False,
+    "rust_tests_executed": False,
+    "rust_clippy_executed": False,
+    "commands": [],
+    "source_metadata_sha256": hashlib.sha256(Path("/tmp/source-metadata.json").read_bytes()).hexdigest(),
+    "study_build_inputs_sha256": hashlib.sha256(Path("/tmp/study-build-inputs.json").read_bytes()).hexdigest(),
+    "required_live_pilots": "20-resource-each-traffic-mode-on-actual-architecture-before-formal-credit",
+    "scientific_credit": False,
+    "admitted_site_count": 0,
+    "formal_accepted_trace_count": 0,
+}
+(root / "receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+PY
+
+# Release compilation follows the explicitly selected prospective check policy.
+"""
+    note = ("# Run every mandatory Rust gate against the same clean, gitlink-matched source\n"
+            "# snapshot from which the release executables are built.  A failing gate makes\n"
+            "# the collection target unbuildable.  Logs and their self-hashed receipt are\n"
+            "# copied into the final image as immutable build evidence.\n")
+    before = value[:start]
+    if before.count(note) != 1:
+        raise ValueError("tracked Native code-gate policy comment differs")
+    before = before.replace(note, "# Validate the clean source, then record the explicit resource-domain policy.\n"
+                                  "# Formatting, test and Clippy gates are not executed under this policy.\n")
+    return before + replacement + value[finish:]
+
+
+def dockerfile_bytes(raw: bytes, *, cache_namespace: str, original=None, check_policy="full") -> bytes:
     """Reuse tracked stages; substitute only authenticated snapshot metadata.
 
     Named contexts keep generated metadata outside the complete tracked source.
-    The ordinary Dockerfile and every Native code gate remain unchanged.
+    The ordinary Dockerfile remains unchanged. Full Native gates are the
+    default; the explicit resource-domain policy records unexecuted gates.
     """
     value = raw.decode()
     _defaults(value)
+    check_policy = _cold_check_policy(check_policy)
+    if original is not None and check_policy != "full":
+        raise ValueError("cold-check policy cannot relabel authenticated client reuse")
+    value = _cold_check_recipe(value, check_policy)
     if SHA.fullmatch(cache_namespace) is None:
         raise ValueError("portable runtime cache namespace is malformed")
     # Every fresh build namespace receives empty Cargo registry/git caches.
-    # These are download caches; all tracked Native gate/build commands remain.
+    # These are download caches; release build commands remain unchanged.
     value = value.replace("id=qcsd-cargo-registry-${TARGETARCH},", "id=qcsd-cargo-registry-${TARGETARCH}-" + cache_namespace + ",")
     value = value.replace("id=qcsd-cargo-git-${TARGETARCH},", "id=qcsd-cargo-git-${TARGETARCH}-" + cache_namespace + ",")
     prefix = "WORKDIR /source\nCOPY . .\n"
@@ -304,6 +392,10 @@ def _original(ref, *, seen=frozenset()):
     from .rapid_rolling_schedule import reopen_runtime
     path = _open(ref)
     value = _load(path)
+    if is_portable(value):
+        if str(path) in seen:
+            raise ValueError("portable runtime reuse ancestry contains a cycle")
+        return _verify(path.parent, value, seen=seen | {str(path)})
     source = path.parent / "image-context/source"
     runtime = {"runtime_source_root": str(source), "module_root": str(source),
         "base_launcher": str(source / "qcsd-lab"), "host_launcher": str(source / "qcsd-lab"),
@@ -324,7 +416,11 @@ def _reuse_equal(before, after):
         raise ValueError("portable client reuse changed Native, dependencies, browser or capture build inputs")
 
 
-def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docker, original_canonical=None):
+def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docker, original_canonical=None,
+          cold_check_policy="full"):
+    cold_check_policy = _cold_check_policy(cold_check_policy)
+    if original_canonical is not None and cold_check_policy != "full":
+        raise ValueError("cold-check policy cannot relabel authenticated client reuse")
     checkout = _path(checkout, directory=True)
     if selected_platform not in PLATFORMS:
         raise ValueError("explicit native Linux runtime platform required")
@@ -358,7 +454,7 @@ def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docke
     _extract(native_archive, snapshot / "neqo-qcsd")
     _flush_snapshot(snapshot)
     inventory = _inventory(snapshot)
-    if inventory != _inventory(checkout):
+    if inventory != _checkout_inventory(checkout):
         raise ValueError("portable source archive differs from the exact clean checkout")
     original_inventory = None
     if original is not None:
@@ -380,7 +476,8 @@ def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docke
     _create(recipe / "study-build-inputs.json", _json(build_inputs))
     _create(recipe / "verify_installed.py", _read(snapshot / VERIFIER_PATH))
     images = None if original is None else {role: original[role + "_image_digest"] for role in ("collection", "prepare")}
-    _create(root / "image-context/Portable.Dockerfile", dockerfile_bytes(_read(snapshot / "Dockerfile"), cache_namespace=_sha(str(root).encode()), original=images))
+    _create(root / "image-context/Portable.Dockerfile", dockerfile_bytes(_read(snapshot / "Dockerfile"), cache_namespace=_sha(str(root).encode()), original=images,
+                                                                    check_policy=cold_check_policy))
     # Dockerfile-specific ignore takes precedence over the tracked root ignore.
     # The clean archive already excludes Git metadata and untracked caches.
     _create(root / "image-context/Portable.Dockerfile.dockerignore", b"")
@@ -396,6 +493,8 @@ def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docke
             recipe / "source-metadata.json", recipe / "study-build-inputs.json", recipe / "verify_installed.py")},
         "mode": "cold-build" if original is None else "authenticated-client-reuse", "original_canonical": original_canonical,
         "original_source_inventory": original_inventory, "staged_at": _now(), **ZERO}
+    if cold_check_policy != "full":
+        inputs["cold_check_policy"] = cold_check_policy
     _create(root / "build-inputs.json", _json(inputs))
     return reference(root / "build-inputs.json")
 
@@ -403,7 +502,11 @@ def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docke
 def _inputs(root, *, seen=frozenset()):
     root = _path(root, directory=True)
     inputs = _load(root / "build-inputs.json")
-    _keys(inputs, INPUT_KEYS, "portable runtime inputs")
+    expected_keys = INPUT_KEYS | ({"cold_check_policy"} if isinstance(inputs, dict) and "cold_check_policy" in inputs else set())
+    _keys(inputs, expected_keys, "portable runtime inputs")
+    check_policy = _cold_check_policy(inputs.get("cold_check_policy", "full"))
+    if inputs["mode"] == "authenticated-client-reuse" and check_policy != "full":
+        raise ValueError("cold-check policy cannot relabel authenticated client reuse")
     _exact({key: inputs[key] for key in ("schema_version", "artifact_type", "contract", *ZERO)},
            {"schema_version": 1, "artifact_type": INPUT_TYPE, "contract": CONTRACT, **ZERO}, "portable input identity")
     if inputs["platform"] not in PLATFORMS or re.fullmatch(r"[0-9]+:[0-9]+", inputs["actor"]) is None:
@@ -455,7 +558,8 @@ def _inputs(root, *, seen=frozenset()):
     for relative, digest in inputs["recipe_files"].items():
         if _sha(_read(root / relative)) != digest:
             raise ValueError("portable runtime recipe bytes changed")
-    if (_read(root / "image-context/Portable.Dockerfile") != dockerfile_bytes(_read(snapshot / "Dockerfile"), cache_namespace=_sha(str(root).encode()), original=images)
+    if (_read(root / "image-context/Portable.Dockerfile") != dockerfile_bytes(_read(snapshot / "Dockerfile"), cache_namespace=_sha(str(root).encode()), original=images,
+                                                                         check_policy=check_policy)
         or _read(root / "image-context/Portable.Dockerfile.dockerignore") != b""
         or _load(root / "image-context/recipe/source-metadata.json") != inputs["source"]
         or _read(root / "image-context/recipe/verify_installed.py") != _read(snapshot / VERIFIER_PATH)):
@@ -757,6 +861,7 @@ def main(argv=None):
     create.add_argument("--lab-commit", required=True)
     create.add_argument("--native-commit", required=True)
     create.add_argument("--platform", choices=sorted(PLATFORMS), required=True)
+    create.add_argument("--cold-check-policy", choices=sorted(COLD_CHECK_POLICIES), default="full")
     create.add_argument("--docker", type=Path, default=Path(shutil.which("docker") or "/usr/bin/docker"))
     create.add_argument("--reuse-canonical", type=Path)
     create.add_argument("--reuse-canonical-sha256")
@@ -772,7 +877,8 @@ def main(argv=None):
                 raise ValueError("portable reuse requires an explicit canonical file and digest")
             original = None if args.reuse_canonical is None else {"path": str(args.reuse_canonical), "sha256": args.reuse_canonical_sha256}
             result = stage(args.checkout, args.lab_commit, args.native_commit, args.build_root,
-                           selected_platform=args.platform, docker=args.docker, original_canonical=original)
+                           selected_platform=args.platform, docker=args.docker, original_canonical=original,
+                           cold_check_policy=args.cold_check_policy)
         elif args.action == "build":
             result = execute(args.build_root)
         else:
