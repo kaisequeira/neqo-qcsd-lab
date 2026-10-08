@@ -99,6 +99,7 @@ class PreparationRuntime:
         with docker_lock():
             _runtime_check(self.runtime)
             result = _docker("run", "--rm", "--network", "bridge", "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
+                "--env", "QCSD_LAB_ROOT=/runtime-src", "--env", "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json",
                 "--security-opt", "no-new-privileges", "--add-host", candidate["hostname"] + ":" + dns["selected_ipv4"],
                 "--mount", f"type=bind,src={self.root},dst={self.root}",
                 "--entrypoint", "/opt/qcsd-venv/bin/python3", self.runtime["collection_image_digest"],
@@ -224,6 +225,7 @@ class CaptureRuntime:
                     "QCSD_CAPTURE_ORCHESTRATOR_CPU": str(helper_cpu), "QCSD_CAPTURE_ETF_INTERFACE": "eth0",
                     "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE": str(lane / "partition.json"),
                     "QCSD_LAB_IMAGE_DIGEST": image, "QCSD_LAB_SOURCE_METADATA": "/usr/share/qcsd-lab/source.json",
+                    "QCSD_LAB_ROOT": "/runtime-src",
                     "QCSD_CONTROLLED_ROUTER_CLIENT_IP": router_ip, "QCSD_KERNEL_TX_PUBLIC_ROUTER_IP": router_ip,
                     "QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET": subnet,
                     "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ENDPOINT": router_ip + ":19090",

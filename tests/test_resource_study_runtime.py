@@ -144,6 +144,7 @@ def test_launch_has_actual_disjoint_peer_partitions_and_minimum_privileges(backe
                 assert "org.qcsd.study=resource-study" in options(args, "--label")
                 assert any("--pid --cpu-list" in arg and "ORCHESTRATOR_CPU" in arg for arg in args)
                 environment = dict(value.split("=", 1) for value in options(args, "--env"))
+                assert environment["QCSD_LAB_ROOT"] == "/runtime-src"
                 for field in (kernel.KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV,
                               kernel.KERNEL_TX_CONTROLLED_OBSERVER_BINDING_ENV):
                     raw = base64.b64decode(environment[field], validate=True)
@@ -306,6 +307,8 @@ def test_preparation_uses_host_uid_without_capabilities_and_freezes_only_new_fil
     assert option(args, "--user") == f"{runtime.os.getuid()}:{runtime.os.getgid()}"
     assert option(args, "--cap-drop") == "ALL" and "--cap-add" not in args
     assert "no-new-privileges" in args and "_prepare" in args
+    assert "QCSD_LAB_ROOT=/runtime-src" in options(args, "--env")
+    assert "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" in options(args, "--env")
     assert result["paths"]["chaff_manifest"] is None
     assert not Path(result["workload_path"]).is_absolute()
     assert result["source_occurrences"] == [{"source_index": 1}]
