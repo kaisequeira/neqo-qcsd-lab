@@ -678,7 +678,8 @@ def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo
                      application_body_identity_policy: str | None = None,
                      qualification_delivery_compatibility: Mapping[str, str] | None = None,
                      tamaraw_configuration_policy: str | None = None,
-                     front_configuration_policy: str | None = None) -> bytes:
+                     front_configuration_policy: str | None = None,
+                     front_incoming_credit_acceptance_policy: str | None = None) -> bytes:
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
     from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
     return plan.render_lane_campaign(lane, sites, static_capture_limits=(
@@ -688,7 +689,8 @@ def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo
         application_body_identity_policy=application_body_identity_policy,
         qualification_delivery_compatibility=qualification_delivery_compatibility,
         tamaraw_configuration_policy=tamaraw_configuration_policy if lane.mode == "tamaraw" else None,
-        front_configuration_policy=front_configuration_policy if lane.mode == "front" else None)
+        front_configuration_policy=front_configuration_policy if lane.mode == "front" else None,
+        front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy if lane.mode == "front" else None)
 
 
 def _static_canary_facts(facts: Mapping[str, Any], amendment: Mapping[str, Any]) -> dict[str, Any]:
@@ -744,6 +746,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                  qualification_delivery_compatibility: Mapping[str, str] | None = None,
                  tamaraw_configuration_policy: str | None = None,
                  front_configuration_policy: str | None = None,
+                 front_incoming_credit_acceptance_policy: str | None = None,
                  selected_input_renewal: Path | None = None, class_indices=None, _context=None) -> Path:
     from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = validate_application_body_identity_policy(application_body_identity_policy)
@@ -751,6 +754,10 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     fixed_tamaraw = validate_fixed_tamaraw_policy(tamaraw_configuration_policy)
     from .front_fixed_configuration import validate_policy as validate_fixed_front_policy
     fixed_front = validate_fixed_front_policy(front_configuration_policy)
+    from . import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.validate_policy(front_incoming_credit_acceptance_policy)
+    if selected_incoming is not None and fixed_front is None:
+        raise ValueError("FRONT incoming acceptance requires its prospective Native V5 plan")
     if fixed_front is not None and (set(readiness) != {"front"} or scheduling is not None
             or fixed_tamaraw is not None or front_capture_amendment is not None
             or static_capture_amendment is None or selected_input_renewal is not None
@@ -775,6 +782,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                 qualification_delivery_compatibility=qualification_delivery_compatibility,
                 tamaraw_configuration_policy=tamaraw_configuration_policy,
                 front_configuration_policy=front_configuration_policy,
+                front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy,
                 selected_input_renewal=selected_input_renewal, class_indices=class_indices, _context=_context)
     if _context is not None:
         _context._enrollment(enrollment)
@@ -911,6 +919,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         if (front.policy(facts) != fixed_front
             or fixed_front is not None and facts.get("front_configuration_sha256") != front.CONFIGURATION_SHA256):
             raise ValueError("rolling plan differs from its canary's fixed FRONT condition")
+        if front_incoming.policy(facts) != selected_incoming:
+            raise ValueError("rolling plan differs from its canary's frozen FRONT incoming acceptance")
         if facts.get("control_authority_witness", facts.get("qualification_delivery_compatibility")) != qualification_delivery_compatibility:
             raise ValueError("rolling plan differs from its canary's qualification delivery witness")
         if static_amendment is not None:
@@ -940,7 +950,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                                application_body_identity_policy=application_body_identity_policy,
                                qualification_delivery_compatibility=qualification_delivery_compatibility,
                                tamaraw_configuration_policy=fixed_tamaraw,
-                               front_configuration_policy=fixed_front)
+                               front_configuration_policy=fixed_front,
+                               front_incoming_credit_acceptance_policy=selected_incoming)
         if path.exists():
             if lanes._read(path) != raw:
                 raise ValueError("rolling plan cannot replace an earlier campaign")
@@ -975,6 +986,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         payload["application_body_identity_policy"] = body_policy
     if fixed_front is not None:
         payload["front_configuration_policy"] = fixed_front
+    if selected_incoming is not None:
+        payload[front_incoming.FIELD] = selected_incoming
     if fixed_tamaraw is not None:
         payload["tamaraw_configuration_policy"] = fixed_tamaraw
     if selected_reference is not None:
@@ -1085,6 +1098,10 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     fixed_tamaraw = fixed_tamaraw_policy(value)
     from . import front_fixed_configuration as front
     fixed_front = front.policy(value)
+    from . import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.configured(value)
+    if selected_incoming is not None:
+        fields.add(front_incoming.FIELD)
     if fixed_front is not None:
         fields.add(front.FIELD)
         if (set(value["readiness"]) != {"front"} or "scheduling" in value
@@ -1227,7 +1244,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
                                application_body_identity_policy=value.get("application_body_identity_policy"),
                                qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"),
                                tamaraw_configuration_policy=fixed_tamaraw,
-                               front_configuration_policy=fixed_front)
+                               front_configuration_policy=fixed_front,
+                               front_incoming_credit_acceptance_policy=selected_incoming)
         if lanes._read(spec.campaign_dir / f"{lane.campaign_name}.yml") != raw:
             raise ValueError("rolling campaign changed sites, graph, visits or fixed settings")
         actual.append({**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)})
@@ -1327,6 +1345,9 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
     if (front.policy(facts) != front.policy(payload)
         or front.policy(payload) is not None and facts.get("front_configuration_sha256") != front.CONFIGURATION_SHA256):
         raise ValueError("formal readiness changed its fixed FRONT condition")
+    from . import front_incoming_acceptance as front_incoming
+    if front_incoming.policy(facts) != front_incoming.configured(payload):
+        raise ValueError("formal readiness changed its frozen FRONT incoming acceptance")
     if facts.get("control_authority_witness", facts.get("qualification_delivery_compatibility")) != payload.get("qualification_delivery_compatibility"):
         raise ValueError("formal readiness changed its declared qualification delivery witness")
     if publication is not None and (admission._utc(publication) > admission._utc(payload["declared_at"])
@@ -1456,7 +1477,8 @@ def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, 
                                     application_body_identity_policy=value.get("application_body_identity_policy"),
                                     qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"),
                                     tamaraw_configuration_policy=value.get("tamaraw_configuration_policy") if lane.mode == "tamaraw" else None,
-                                    front_configuration_policy=value.get("front_configuration_policy") if lane.mode == "front" else None)
+                                    front_configuration_policy=value.get("front_configuration_policy") if lane.mode == "front" else None,
+                                    front_incoming_credit_acceptance_policy=value.get("front_incoming_credit_acceptance_policy") if lane.mode == "front" else None)
     admission.durable_create(spec.campaign_dir / f"{lane.campaign_name}.yml", raw)
     value = {**value, "lanes": [{**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)}],
              "planned_trace_count": lane.sample_count, "declared_at": admission._now()}

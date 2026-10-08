@@ -1591,11 +1591,15 @@ def _positive(value: Any, label: str) -> int:
     return parsed
 
 
-def _schedule_realization_metrics(sample: Path, *, tamaraw_configuration_policy: str | None = None) -> dict[str, Any]:
-    return _schedule_realization_metrics_from_path(sample / "neqo/schedule.csv", tamaraw_configuration_policy=tamaraw_configuration_policy)
+def _schedule_realization_metrics(sample: Path, *, tamaraw_configuration_policy: str | None = None,
+                                 front_incoming_credit_acceptance_policy: str | None = None) -> dict[str, Any]:
+    return _schedule_realization_metrics_from_path(sample / "neqo/schedule.csv",
+        tamaraw_configuration_policy=tamaraw_configuration_policy,
+        front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy)
 
 
-def _schedule_realization_metrics_from_path(path: Path, *, tamaraw_configuration_policy: str | None = None) -> dict[str, Any]:
+def _schedule_realization_metrics_from_path(path: Path, *, tamaraw_configuration_policy: str | None = None,
+                                           front_incoming_credit_acceptance_policy: str | None = None) -> dict[str, Any]:
     if not path.is_file():
         return {}
     with path.open(newline="", encoding="utf-8") as source:
@@ -1889,7 +1893,8 @@ def _schedule_realization_metrics_from_path(path: Path, *, tamaraw_configuration
         "terminal_defense_elapsed_us_values": terminal_defense_elapsed_values,
         "target_times_us_by_direction": target_times,
         "scheduled_sizes_by_direction": scheduled_sizes,
-        **_incoming_credit_release_metrics(path, rows),
+        **_incoming_credit_release_metrics(path, rows,
+            front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy),
         **_buflo_duration_budget_metrics(path),
         **_tamaraw_capture_metrics(path, rows),
         **_front_capture_metrics(path, rows),
@@ -2136,8 +2141,17 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
 
 
 def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Mapping[str, Any],
-                                    resolved: Mapping[str, Any] | None) -> bool:
+                                    resolved: Mapping[str, Any] | None, *,
+                                    front_incoming_credit_acceptance_policy: str | None = None) -> bool:
     from .capture_acceptance_policy import FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY, validate_front_capture_marker
+    from . import front_incoming_acceptance as incoming_acceptance
+    try:
+        selected_acceptance = incoming_acceptance.validate_policy(front_incoming_credit_acceptance_policy)
+    except ValueError:
+        return False
+    if (not incoming_acceptance.validate_schedule(schedule, selected_policy=selected_acceptance)
+        or selected_acceptance is not None and schedule.get("front_capture_policy", {}).get("policy") != FRONT_LIGHT_POLICY):
+        return False
     try:
         marker = validate_front_capture_marker(schedule.get("front_capture_policy"))
     except ValueError:
@@ -2215,7 +2229,8 @@ def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Ma
             or type(schedule.get("incoming_credit_release_timing_events")) is not int
             or schedule["incoming_credit_release_timing_events"] != incoming
             or type(schedule.get("incoming_credit_release_window_violations")) is not int
-            or schedule["incoming_credit_release_window_violations"] != 0
+            or not 0 <= schedule["incoming_credit_release_window_violations"] <= incoming
+            or selected_acceptance is None and schedule["incoming_credit_release_window_violations"] != 0
             or type(schedule.get("incoming_credit_release_original_5000us_violations")) is not int
             or not 0 <= schedule["incoming_credit_release_original_5000us_violations"] <= incoming):
             return False
@@ -2428,7 +2443,8 @@ def _buflo_kernel_credit_release_intervals(
 
 
 def _incoming_credit_release_metrics(
-    schedule_path: Path, rows: list[dict[str, str]]
+    schedule_path: Path, rows: list[dict[str, str]], *,
+    front_incoming_credit_acceptance_policy: str | None = None,
 ) -> dict[str, Any]:
     """Bound receive-credit handoff against the scheduled defense tick.
 
@@ -2466,9 +2482,14 @@ def _incoming_credit_release_metrics(
         startup = validate_buflo_startup_evidence(run, runner_directory=schedule_path.parent, schedule_rows=rows)
     kernel_intervals = _buflo_kernel_credit_release_intervals(run, rows)
 
+    from . import front_incoming_acceptance as incoming_acceptance
+    selected_acceptance = incoming_acceptance.validate_policy(front_incoming_credit_acceptance_policy)
+    if selected_acceptance is not None:
+        incoming_acceptance.validate_run(run, selected_policy=selected_acceptance)
     timing_events = 0
     window_violations = 0
     historical_window_violations = 0
+    acceptance_window_violations = 0
     lateness_upper_bounds_us: list[int] = []
     for row in rows:
         if row.get("direction") != "incoming" or row.get("satisfaction") == "missed":
@@ -2479,6 +2500,7 @@ def _incoming_credit_release_metrics(
         except (KeyError, TypeError, ValueError):
             window_violations += 1
             historical_window_violations += 1
+            acceptance_window_violations += 1
             continue
         timing_events += 1
         if kernel_intervals is not None:
@@ -2498,6 +2520,9 @@ def _incoming_credit_release_metrics(
             if (advertised_lower_ns < release_ns or advertised_upper_ns > release_ns
                 + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000):
                 historical_window_violations += 1
+            if selected_acceptance is not None and (advertised_lower_ns < release_ns
+                or advertised_upper_ns > release_ns + incoming_acceptance.WINDOW_US * 1_000):
+                acceptance_window_violations += 1
             lateness_upper_bounds_us.append(max(0, (advertised_upper_ns - release_ns - 1) // 1_000))
     return {
         **({"incoming_credit_release_time_basis": "validated-kernel-physical-CLOCK_TAI-v1"}
@@ -2513,6 +2538,12 @@ def _incoming_credit_release_metrics(
             "incoming_credit_release_window_us": window_us,
             "incoming_credit_release_original_5000us_violations": historical_window_violations}
            if front_v5 else {}),
+        **({incoming_acceptance.FIELD: incoming_acceptance.marker(),
+            "front_incoming_credit_acceptance_window_us": incoming_acceptance.WINDOW_US,
+            "front_incoming_credit_acceptance_timing_events": timing_events,
+            "front_incoming_credit_acceptance_window_violations": acceptance_window_violations,
+            "front_incoming_credit_acceptance_schedule_sha256": sha256_file(schedule_path)}
+           if selected_acceptance is not None else {}),
         "incoming_credit_release_timing_events": timing_events,
         "incoming_credit_release_window_violations": window_violations,
         "incoming_credit_release_lateness_upper_bound_us_max": max(
@@ -7239,8 +7270,19 @@ def fidelity_eligible(
     schedule_metrics: Mapping[str, Any] | None = None,
     resolved_configuration: Mapping[str, Any] | None = None,
     require_defense_activation: bool = False,
+    front_incoming_credit_acceptance_policy: str | None = None,
 ) -> bool:
     defense = _canonical_fidelity_defense(defense)
+    from . import front_incoming_acceptance as incoming_acceptance
+    try:
+        selected_acceptance = incoming_acceptance.validate_policy(front_incoming_credit_acceptance_policy)
+    except ValueError:
+        return False
+    if (selected_acceptance is not None and (defense != "front" or not isinstance(schedule_metrics, Mapping)
+            or not incoming_acceptance.validate_schedule(schedule_metrics, selected_policy=selected_acceptance))
+        or selected_acceptance is None and isinstance(schedule_metrics, Mapping)
+            and set(schedule_metrics) & incoming_acceptance.METRIC_KEYS):
+        return False
     if not sample_eligible:
         return False
     buflo_period_us = 20_000
@@ -7260,7 +7302,8 @@ def fidelity_eligible(
             and _diagnostics_match_contract(defense, diagnostics, buflo_period_us=buflo_period_us)
             and type(missed_events) is int and missed_events == schedule_metrics.get("missed_events")
             and type(outgoing_size_mismatches) is int and outgoing_size_mismatches == 0
-            and _front_capture_activation_valid(diagnostics, schedule_metrics, resolved_configuration))
+            and _front_capture_activation_valid(diagnostics, schedule_metrics, resolved_configuration,
+                front_incoming_credit_acceptance_policy=selected_acceptance))
     if (
         defense in DEFENSE_ADAPTATIONS
         and defense != "undefended"

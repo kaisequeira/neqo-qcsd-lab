@@ -148,6 +148,7 @@ def run(args, *, _context=None):
                                     application_body_identity_policy=getattr(args, "application_body_identity_policy", None),
                                     tamaraw_configuration_policy=getattr(args, "tamaraw_configuration_policy", None),
                                     front_configuration_policy=getattr(args, "front_configuration_policy", None),
+                                    front_incoming_credit_acceptance_policy=getattr(args, "front_incoming_credit_acceptance_policy", None),
                                     selected_input_renewal=getattr(args, "selected_input_renewal", None),
                                     class_indices=getattr(args, "class_indices", None),
                                     qualification_delivery_compatibility=(rolling._ref(args.qualification_delivery_compatibility)
@@ -263,6 +264,8 @@ def _parser():
             item.add_argument("--tamaraw-configuration-policy", choices=(TAMARAW_CONFIGURATION_POLICY,))
             from qcsd_lab.front_fixed_configuration import POLICY as FRONT_LIGHT_CONFIGURATION_POLICY
             item.add_argument("--front-configuration-policy", choices=(FRONT_LIGHT_CONFIGURATION_POLICY,))
+            from qcsd_lab.front_incoming_acceptance import POLICY as FRONT_INCOMING_ACCEPTANCE_POLICY
+            item.add_argument("--front-incoming-credit-acceptance-policy", choices=(FRONT_INCOMING_ACCEPTANCE_POLICY,))
             item.add_argument("--output", type=Path, required=True)
             item.add_argument("--spec-output", type=Path, required=True)
         elif name == "front-amendment":

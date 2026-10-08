@@ -496,6 +496,8 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
     front_configuration_policy = fixed_front_policy(experiment["configuration"])
     if front_configuration_policy is not None:
         validate_front_configuration(root / experiment["configuration"]["front_configuration"])
+    from . import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.configured(experiment["configuration"])
     complete_delivery = body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY
 
     prepared_by_id: dict[str, dict[str, Any]] = {}
@@ -535,6 +537,7 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
         if native_front_v5 != (front_configuration_policy is not None):
             raise ValueError("accepted FRONT V5 run differs from its prospective campaign configuration")
         validate_front_configuration_run(run, selected_policy=front_configuration_policy)
+        front_incoming.validate_run(run, selected_policy=selected_incoming)
         validate_terminal_primary_source_binding(prepared, run, runner_directory=run_path.parent,
             tamaraw_configuration_policy=tamaraw_configuration_policy)
         if complete_delivery or application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:

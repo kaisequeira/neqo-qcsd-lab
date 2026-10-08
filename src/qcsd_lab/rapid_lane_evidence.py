@@ -551,7 +551,8 @@ def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
                       application_body_identity_policy=payload.get("application_body_identity_policy"),
                       qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"),
                       tamaraw_configuration_policy=payload.get("tamaraw_configuration_policy") if lane.mode == "tamaraw" else None,
-                      front_configuration_policy=payload.get("front_configuration_policy") if lane.mode == "front" else None)
+                      front_configuration_policy=payload.get("front_configuration_policy") if lane.mode == "front" else None,
+                      front_incoming_credit_acceptance_policy=payload.get("front_incoming_credit_acceptance_policy") if lane.mode == "front" else None)
     if "data_role" in payload:
         from .supplied_static_preparation import ROLE
         from .rapid_selected_capture_input import ROLE as SELECTED_ROLE
@@ -575,7 +576,8 @@ def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
                                          application_body_identity_policy=payload.get("application_body_identity_policy"),
                                          qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"),
                                          tamaraw_configuration_policy=payload.get("tamaraw_configuration_policy") if lane.mode == "tamaraw" else None,
-                      front_configuration_policy=payload.get("front_configuration_policy") if lane.mode == "front" else None)
+                      front_configuration_policy=payload.get("front_configuration_policy") if lane.mode == "front" else None,
+                      front_incoming_credit_acceptance_policy=payload.get("front_incoming_credit_acceptance_policy") if lane.mode == "front" else None)
     return plan.render_lane_campaign(lane, sites)
 
 

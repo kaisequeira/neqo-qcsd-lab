@@ -1997,6 +1997,11 @@ def _validate_run_binding(
     if selected_front is not None:
         validate_front_configuration(front_path)
         validate_front_configuration_run(run_data, selected_policy=selected_front)
+    from . import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.validate_policy(getattr(context, front_incoming.FIELD, None))
+    if selected_incoming is not None and selected_front is None:
+        raise ValueError("FRONT incoming acceptance lacks its prospective Native V5 launch")
+    front_incoming.validate_run(run_data, selected_policy=selected_incoming)
     historical_candidate = historical_candidate_source is not None
     response_policy = _launch_application_response_policy(
         application_workload_source, application_response_policy
@@ -2455,6 +2460,10 @@ def _client_command(
     )
     fixed_front = validate_front_configuration_policy(getattr(context, "front_configuration_policy", None))
     front_path = getattr(context, "front_configuration_path", None)
+    from . import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.validate_policy(getattr(context, front_incoming.FIELD, None))
+    if selected_incoming is not None and fixed_front is None:
+        raise ValueError("FRONT incoming acceptance lacks its prospective Native V5 launch")
     if defense.kind == "front" and not defense.baseline:
         from .capture_acceptance_policy import validate_front_preparation_policy, FRONT_LIGHT_POLICY
         prepared = load_json(application_workload_source)

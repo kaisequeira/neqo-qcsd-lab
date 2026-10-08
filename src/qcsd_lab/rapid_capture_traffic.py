@@ -81,7 +81,8 @@ def front_declared(payload: Mapping[str, Any], *, canary: bool = False, mode: st
     return selected
 
 
-def files(selected: str | None = None, *, front_selected: str | None = None) -> dict[str, tuple[str, str]]:
+def files(selected: str | None = None, *, front_selected: str | None = None,
+          front_acceptance_selected: str | None = None) -> dict[str, tuple[str, str]]:
     from .rapid_lane_evidence import TRAFFIC_FILES
     result = dict(TRAFFIC_FILES)
     if policy(selected) is not None:
@@ -95,11 +96,19 @@ def files(selected: str | None = None, *, front_selected: str | None = None) -> 
         result.update(front_configuration_sha256=(front.CONFIGURATION_PATH, front.CONFIGURATION_SHA256),
             front_configuration_provenance_sha256=(front.PROVENANCE_PATH, front.PROVENANCE_SHA256),
             front_configuration_source_sha256=("src/qcsd_lab/front_fixed_configuration.py", "512bdfeda75bdd305394e4e4580fe065744604f0d3a8e913c521dffef2448cca"))
+    from . import front_incoming_acceptance as front_incoming
+    if front_incoming.validate_policy(front_acceptance_selected) is not None:
+        if front_selected != front.POLICY or selected is not None:
+            raise ValueError("FRONT incoming acceptance traffic lacks its exact Native V5 selection")
+        result["front_incoming_credit_acceptance_source_sha256"] = (front_incoming.SOURCE_PATH,
+            "f6d9d9afedbaad1e8f6fc6c650f3048293bdeff03c22895f0afdb3400c72cbf5")
     return result
 
 
 def plan_files(payload: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
-    return files(declared(payload), front_selected=front_declared(payload))
+    from . import front_incoming_acceptance as front_incoming
+    return files(declared(payload), front_selected=front_declared(payload),
+                 front_acceptance_selected=front_incoming.configured(payload))
 
 
 def canary_policy(payload: Mapping[str, Any], mode: str | None = None) -> str | None:
@@ -116,7 +125,9 @@ def canary_policy(payload: Mapping[str, Any], mode: str | None = None) -> str | 
 
 
 def canary_files(payload: Mapping[str, Any], mode: str | None = None) -> dict[str, tuple[str, str]]:
-    return files(canary_policy(payload, mode), front_selected=front_declared(payload, canary=True, mode=mode))
+    from . import front_incoming_acceptance as front_incoming
+    return files(canary_policy(payload, mode), front_selected=front_declared(payload, canary=True, mode=mode),
+                 front_acceptance_selected=front_incoming.configured(payload, mode=mode))
 
 
 def spec_files(spec) -> dict[str, tuple[str, str]]:

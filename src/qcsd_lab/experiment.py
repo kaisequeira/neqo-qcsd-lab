@@ -164,6 +164,7 @@ _OPTIONAL_CONFIGURATION_KEYS = {
     "front_configuration_policy",
     "front_configuration",
     "front_configuration_sha256",
+    "front_incoming_credit_acceptance_policy",
     "application_body_identity_policy",
     "qualification_delivery_compatibility",
     "chaff_qualification_set",
@@ -1147,6 +1148,10 @@ def _validate_configuration(value: object) -> None:
             or application_body_identity_policy(value) != COMPLETE_APPLICATION_DELIVERY_POLICY
             or "qualification_delivery_compatibility" in value):
             raise ValueError("configuration fixed FRONT V5 condition is not fully bound")
+    from . import front_incoming_acceptance as front_incoming
+    if front_incoming.configured(value, mode=value["defenses"][0].get("kind") if len(value["defenses"]) == 1 else "") is not None:
+        if not fixed_front_fields <= set(value):
+            raise ValueError("FRONT incoming acceptance lacks its frozen configuration")
     if not isinstance(value["limits"], Mapping):
         raise ValueError("configuration limits are invalid")
     if "chaff_qualification_set" in value and (

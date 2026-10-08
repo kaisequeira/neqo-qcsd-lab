@@ -29,6 +29,7 @@ MODES = ("undefended", "front", "tamaraw", "buflo", "cs-buflo")
 CLI_BUFLO_POLICIES = ("rapid-v6-fixed-200s-duration-budget-v1",
                       "rapid-v7-fixed-64ms-640s-duration-budget-v1")
 CLI_FRONT_POLICY = "rapid-v7-front-450-600-sigma1-4-incoming10000us-padding-10pct-window10000us-reserve1000us-v5"
+CLI_FRONT_INCOMING_ACCEPTANCE_POLICY = "rapid-front-v5-local-credit-jitter50000us-acceptance-v1"
 AMENDED_MODES = ("front", "buflo")
 PUBLIC_CLI_BOOTSTRAP = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
                         "runpy.run_path(sys.argv.pop(1),run_name='__main__')")
@@ -674,6 +675,10 @@ def stage(args):
     fixed_tamaraw = validate_fixed_tamaraw_policy(getattr(args, "tamaraw_configuration_policy", None))
     from qcsd_lab.front_fixed_configuration import validate_policy as validate_fixed_front_policy
     fixed_front = validate_fixed_front_policy(getattr(args, "front_configuration_policy", None))
+    from qcsd_lab import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.validate_policy(getattr(args, front_incoming.FIELD, None))
+    if selected_incoming is not None and fixed_front is None:
+        raise ValueError("FRONT incoming acceptance requires explicit prospective Native V5")
     if fixed_front is not None and (args.mode != "front" or fixed_tamaraw is not None
             or body_policy != "complete-current-application-delivery-v1"
             or getattr(args, "qualification_delivery_compatibility", None) is not None
@@ -822,6 +827,8 @@ def stage(args):
         setup[ael.FIELD] = response_policy
     if fixed_front is not None:
         setup["front_configuration_policy"] = fixed_front
+    if selected_incoming is not None:
+        setup[front_incoming.FIELD] = selected_incoming
     if fixed_tamaraw is not None:
         setup["tamaraw_configuration_policy"] = fixed_tamaraw
     if witness is not None:
@@ -924,6 +931,10 @@ def finalize(args):
             or authority is None or authority["policies"].get("front_capture_policy") != fixed_front):
             raise ValueError("fixed FRONT setup changed its prospective amendment/condition")
         campaign["front_configuration_policy"] = fixed_front
+    from qcsd_lab import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.configured(setup, mode=mode)
+    if selected_incoming is not None:
+        campaign[front_incoming.FIELD] = selected_incoming
     if "qualification_delivery_compatibility" in setup:
         campaign["qualification_delivery_compatibility"] = setup["qualification_delivery_compatibility"]
     import yaml
@@ -958,7 +969,8 @@ def finalize(args):
         "qualification_set": qualification_set, "group_qualification_set": group_set,
         "selected_classes": current, "full_graph": canary["full_graph"],
         "traffic_hashes": {key: expected for key, (_, expected)
-            in traffic.files(selected_policy, front_selected=fixed_front).items()},
+            in traffic.files(selected_policy, front_selected=fixed_front,
+                front_acceptance_selected=selected_incoming).items()},
         "static_preparation_roots": static_roots(manifest), "group_preparation_roots": group_roots(manifests),
         "capture_limits": limits, "campaigns": campaigns, "reuse": setup["reuse"],
         "study_root": setup["study_root"], "enrollment": setup["enrollment"]}
@@ -970,6 +982,8 @@ def finalize(args):
         plan[ael.FIELD] = response_policy
     if fixed_front is not None:
         plan["front_configuration_policy"] = fixed_front
+    if selected_incoming is not None:
+        plan[front_incoming.FIELD] = selected_incoming
     if fixed_tamaraw is not None:
         plan["tamaraw_configuration_policy"] = fixed_tamaraw
     if "qualification_delivery_compatibility" in setup:
@@ -1001,6 +1015,8 @@ def finalize(args):
         commands["plan"] += ["--application-body-identity-policy", body_policy]
     if fixed_front is not None:
         commands["plan"] += ["--front-configuration-policy", fixed_front]
+    if selected_incoming is not None:
+        commands["plan"] += ["--front-incoming-credit-acceptance-policy", selected_incoming]
     if fixed_tamaraw is not None:
         commands["plan"] += ["--tamaraw-configuration-policy", fixed_tamaraw]
     if "selected_input_renewal" in setup:
@@ -1157,6 +1173,12 @@ def checked_plan(args, *, image=False):
                 artifact = root / relative
                 if artifact.stat().st_mode & 0o7777 != 0o644 or digest(read(artifact)) != expected:
                     raise ValueError("canary FRONT configuration/provenance bytes or full mode changed")
+    from qcsd_lab import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.configured(plan, mode=mode)
+    import yaml
+    configured_incoming = yaml.safe_load(read(execution / campaign["campaign_relative"]))
+    if front_incoming.configured(configured_incoming, mode=mode) != selected_incoming:
+        raise ValueError("canary plan changed its frozen FRONT incoming acceptance selection")
     witness = plan.get("qualification_delivery_compatibility")
     if "qualification_delivery_compatibility" in plan and witness is None:
         raise ValueError("explicit canary qualification delivery witness cannot be null")
@@ -1442,6 +1464,11 @@ def image_action(args):
     if fixed_front_policy(config) != fixed_front:
         raise ValueError("actual canary changed its fixed FRONT condition")
     validate_fixed_front_run(run, selected_policy=fixed_front)
+    from qcsd_lab import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.configured(plan, mode=mode)
+    if front_incoming.configured(config, mode=mode) != selected_incoming:
+        raise ValueError("actual canary changed its frozen FRONT incoming acceptance selection")
+    front_incoming.validate_run(run, selected_policy=selected_incoming)
     validate_terminal_primary_source_binding(manifest, run, runner_directory=result_root / sample["path"] / "neqo",
         tamaraw_configuration_policy=fixed_tamaraw)
     if sorted(str(row["origin"]).rstrip("/") for row in run["endpoints"]) != plan["full_graph"]["origins"]:
@@ -1462,6 +1489,8 @@ def image_action(args):
     if fixed_front is not None:
         deep_receipt.update(front_configuration_policy=fixed_front,
                             front_configuration_sha256=front_configuration_sha256())
+    if selected_incoming is not None:
+        deep_receipt[front_incoming.FIELD] = selected_incoming
     if fixed_tamaraw is not None:
         deep_receipt.update(tamaraw_configuration_policy=fixed_tamaraw,
                             tamaraw_configuration_sha256=configuration_sha256())
@@ -1583,6 +1612,8 @@ def main():
     item.add_argument("--name", required=True)
     item.add_argument("--campaign-seed", type=int, required=True)
     item.add_argument("--mode", choices=MODES, required=True)
+    item.add_argument("--front-incoming-credit-acceptance-policy", choices=(CLI_FRONT_INCOMING_ACCEPTANCE_POLICY,),
+                      help="explicit Lab-only 50 ms local incoming credit acceptance; Native V5 remains 10 ms")
     item.add_argument("--front-configuration-policy", choices=(CLI_FRONT_POLICY,),
                       help="explicit prospective lighter FRONT V5; default retains V4")
     item.add_argument("--buflo-duration-policy", choices=CLI_BUFLO_POLICIES,

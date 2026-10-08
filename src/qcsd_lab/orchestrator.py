@@ -146,6 +146,7 @@ REQUEST_POLICIES = {"as-defined", "half-duplex"}
 LEGACY_CAMPAIGN_KEYS = {
     "tamaraw_configuration_policy",
     "front_configuration_policy",
+    "front_incoming_credit_acceptance_policy",
     "application_body_identity_policy",
     "qualification_delivery_compatibility",
     "schema",
@@ -270,6 +271,7 @@ class Campaign:
     tamaraw_configuration_path: Path | None = None
     front_configuration_policy: str | None = None
     front_configuration_path: Path | None = None
+    front_incoming_credit_acceptance_policy: str | None = None
 
     @property
     def udp_payload_ceiling(self) -> int:
@@ -286,6 +288,7 @@ class _RunContext:
     tamaraw_configuration_path: Path | None = None
     front_configuration_policy: str | None = None
     front_configuration_path: Path | None = None
+    front_incoming_credit_acceptance_policy: str | None = None
 
 
 def _slug(value: str) -> str:
@@ -583,6 +586,8 @@ def _load_campaign(
     tamaraw_configuration_policy = fixed_tamaraw_policy(value)
     from .front_fixed_configuration import policy as fixed_front_policy
     front_configuration_policy = fixed_front_policy(value)
+    from .front_incoming_acceptance import policy as front_incoming_policy
+    front_incoming_credit_acceptance_policy = front_incoming_policy(value)
     if front_configuration_policy is not None and tamaraw_configuration_policy is not None:
         raise ValueError("fixed FRONT and Tamaraw configurations are distinct settings")
     delivery_compatibility = value.get("qualification_delivery_compatibility")
@@ -851,6 +856,10 @@ def _load_campaign(
     from .front_fixed_configuration import validate_campaign as validate_fixed_front_campaign, validate_configuration as validate_front_configuration, INPUT as FRONT_CONFIG_INPUT
     validate_fixed_front_campaign(selected_policy=front_configuration_policy, profile=profile,
         defenses=defenses, body_policy=body_policy, qualification_compatibility=delivery_compatibility)
+    from .front_incoming_acceptance import validate_campaign as validate_front_incoming_campaign
+    validate_front_incoming_campaign(selected_policy=front_incoming_credit_acceptance_policy,
+        profile=profile, defenses=defenses, body_policy=body_policy,
+        front_configuration_policy=front_configuration_policy, qualification_compatibility=delivery_compatibility)
     front_configuration_path = None
     if front_configuration_policy is not None and frozen_inputs is not None:
         front_configuration_path = validate_front_configuration(frozen_inputs / FRONT_CONFIG_INPUT)
@@ -913,6 +922,7 @@ def _load_campaign(
         tamaraw_configuration_path=tamaraw_configuration_path,
         front_configuration_policy=front_configuration_policy,
         front_configuration_path=front_configuration_path,
+        front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy,
         chaff_qualification_set=qualification_set,
         defense_order_scheme=defense_order_scheme,
         defense_order_block=defense_order_block,
@@ -4987,6 +4997,7 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                             campaign.tamaraw_configuration_path,
                             campaign.front_configuration_policy,
                             campaign.front_configuration_path,
+                            campaign.front_incoming_credit_acceptance_policy,
                         )
                         # Preserve the established collector seam for campaigns
                         # without qualified inputs.  Current defended campaigns
@@ -5038,7 +5049,8 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                 capture_engine._mark_origin_completed(runtime_workload, origin_last_run)
                 if result.get("success") is True:
                     fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt,
-                        tamaraw_configuration_policy=campaign.tamaraw_configuration_policy)
+                        tamaraw_configuration_policy=campaign.tamaraw_configuration_policy,
+                        front_incoming_credit_acceptance_policy=campaign.front_incoming_credit_acceptance_policy)
                     if fidelity_failure is None:
                         fidelity_failure = _prepared_response_identity_failure(workload, attempt)
                     if fidelity_failure is None:
@@ -5400,6 +5412,7 @@ def _intrinsic_fidelity_failure(
     result: dict[str, Any],
     attempt: Path,
     *, tamaraw_configuration_policy: str | None = None,
+    front_incoming_credit_acceptance_policy: str | None = None,
 ) -> dict[str, Any] | None:
     """Reject a collected defense realization before it becomes immutable evidence."""
 
@@ -5419,7 +5432,8 @@ def _intrinsic_fidelity_failure(
             "details": [{"error": str(error)}],
         }
 
-    schedule = _schedule_realization_metrics(attempt, tamaraw_configuration_policy=tamaraw_configuration_policy)
+    schedule = _schedule_realization_metrics(attempt, tamaraw_configuration_policy=tamaraw_configuration_policy,
+        front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy)
     try:
         run = load_json(attempt / "neqo/run.json")
     except (OSError, ValueError):
@@ -5442,6 +5456,7 @@ def _intrinsic_fidelity_failure(
             run.get("resolved_configuration") if isinstance(run, Mapping) else None
         ),
         require_defense_activation=True,
+        front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy,
     )
     if eligible:
         return None
@@ -5806,8 +5821,11 @@ def _compare_group(
         capture_valid = diagnostics.get("capture", {}).get("valid") is True
         operational = diagnostics.get("operationally_valid") is True
         from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+        from .front_incoming_acceptance import policy as front_incoming_policy
+        selected_incoming = front_incoming_policy(experiment["configuration"])
         schedule = _schedule_realization_metrics(sample_path,
-            tamaraw_configuration_policy=fixed_tamaraw_policy(experiment["configuration"]))
+            tamaraw_configuration_policy=fixed_tamaraw_policy(experiment["configuration"]),
+            front_incoming_credit_acceptance_policy=selected_incoming)
         defense_metrics = diagnostics.get("defense")
         if not isinstance(defense_metrics, dict):
             defense_metrics = {}
@@ -5822,6 +5840,7 @@ def _compare_group(
             schedule_metrics=schedule,
             resolved_configuration=diagnostics.get("resolved_configuration"),
             require_defense_activation=True,
+            front_incoming_credit_acceptance_policy=selected_incoming,
         )
         diagnostics.update(
             response_match=response_match,
@@ -6086,7 +6105,8 @@ def _recover_completed_attempt(
             raise ValueError("running attempt has an invalid terminal receipt")
         if result["success"] is True:
             fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt,
-                tamaraw_configuration_policy=campaign.tamaraw_configuration_policy)
+                tamaraw_configuration_policy=campaign.tamaraw_configuration_policy,
+                front_incoming_credit_acceptance_policy=campaign.front_incoming_credit_acceptance_policy)
             if fidelity_failure is None:
                 workload = next(
                     item for item in campaign.workloads if item.id == sample["workload_id"]
@@ -6388,6 +6408,8 @@ def _frozen_configuration(
         configuration.update(front_configuration_policy=campaign.front_configuration_policy,
             front_configuration=path.relative_to(root).as_posix(),
             front_configuration_sha256=front_configuration_sha256())
+    if campaign.front_incoming_credit_acceptance_policy is not None:
+        configuration["front_incoming_credit_acceptance_policy"] = campaign.front_incoming_credit_acceptance_policy
     if campaign.qualification_delivery_compatibility is not None:
         configuration["qualification_delivery_compatibility"] = dict(campaign.qualification_delivery_compatibility)
     if campaign.chaff_qualification_set is not None:

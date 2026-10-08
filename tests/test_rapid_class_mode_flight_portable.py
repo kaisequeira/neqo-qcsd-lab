@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ROOT / "tools/rapid_class_mode_flight.py"
 BUNDLE = ROOT / "tools/_rapid_class_mode_flight"
 FILES = {
-    "flight/operator.py": "ce379b511efadbc9fda99975fe361c807ac1b4cae59ee2fb1f0666581598ba4a",
+    "flight/operator.py": "a2a195a0a73426cb633ca260daa853338e6b814099c21b7e420e5208556199d9",
     "rapid-v6-first-site-operator-20261004-001/operator.py":
         "f50d4781cde87ee78d6d5ee6efa85ebf586d680068ec9569342fb16df111b8f1",
     "application-response-policy-runtime-20261003-001/runtime_recipe.py":

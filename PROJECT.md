@@ -49,6 +49,38 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+### Prospective Source71: declared FRONT timing adaptation and portable integration
+
+The final target remains **50 sites × five settings × 64 visits = 16,000**.
+The retained verified ledger contains **35 sites and 264 formal recordings**;
+this change adds no measurement or enrollment credit. Source71 retains the
+Source70 subgroup transport and finite historical reader corrections, while
+restoring the main checkout's existing Native D2 Gitlink
+`d2c4ec0e7dcc358fb0915d7b09c9a9b91715da8c`. The immutable ordinary SDK remains
+separate on Native818 and continues using its already installed runtime.
+
+The new [FRONT timing adaptation](docs/FRONT-TIMING-ADAPTATION.md) explicitly
+declares a 50 ms Lab acceptance window for incoming credit advertisement.
+Native V5 still uses its original 10 ms control interval and release window.
+The original 10 ms and historical 5 ms diagnostics remain reportable; the
+50 ms decision gets separate metrics and a separately declared condition.
+Outgoing timing, padding completeness, full resource graphs, source/runtime
+bindings and the ordinary 10 ms clock-alignment limit are unchanged.
+
+Root focused002 returned zero with **304 passes in 91.69 seconds**, with no
+skips. The first run's rolling-reader dispatch error and historical target
+fixture error remain saved. The repaired fixture independently restores the
+entire Source70 target before checking its original scientific units. The
+new historical reader controls can read authenticated predecessor bytes from
+Git history, allowing a normal clone to run them without the author's paths.
+
+The old failed FRONT V5 sample remains uncredited. A matching installed Lab
+runtime, a prospectively declared empty FRONT condition, a fresh complete
+canary, deep verification and readiness are still required. This code change
+requires no Native implementation change or fresh Rust compilation.
+The [evidence index](docs/EVIDENCE-INDEX.md#source71-front-incoming-timing-adaptation)
+describes the retained failures and the limits of this checkpoint.
+
 ### Prospective Source70: complete subgroup evidence transport and bounded HOST readers
 
 The target remains **50 sites × five settings × 64 visits = 16,000**.

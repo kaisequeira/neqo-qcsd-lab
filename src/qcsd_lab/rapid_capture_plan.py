@@ -370,7 +370,8 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
                          application_body_identity_policy: str | None = None,
                          qualification_delivery_compatibility: Mapping[str, str] | None = None,
                          tamaraw_configuration_policy: str | None = None,
-                         front_configuration_policy: str | None = None) -> bytes:
+                         front_configuration_policy: str | None = None,
+                         front_incoming_credit_acceptance_policy: str | None = None) -> bytes:
     """Render one deterministic schema-one campaign without granting authority."""
 
     if lane.role not in {"formal", "diagnostic"}:
@@ -382,7 +383,8 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
             application_body_identity_policy=application_body_identity_policy,
             qualification_delivery_compatibility=qualification_delivery_compatibility,
             tamaraw_configuration_policy=tamaraw_configuration_policy,
-            front_configuration_policy=front_configuration_policy)
+            front_configuration_policy=front_configuration_policy,
+            front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy)
     from .rapid_undefended_capture import OrdinarySite
     ordinary_only = any(isinstance(site, OrdinarySite) for site in sites)
     if ordinary_only and (lane.mode != "undefended" or lane.qualification_set is not None
@@ -475,6 +477,10 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
             or tamaraw_configuration_policy is not None or buflo_duration_policy is not None):
             raise ValueError("fixed FRONT configuration requires only its complete-graph formal setting")
         document[FIELD] = validate_policy(front_configuration_policy)
+    from . import front_incoming_acceptance as front_incoming
+    if front_incoming.validate_policy(front_incoming_credit_acceptance_policy) is not None:
+        document[front_incoming.FIELD] = front_incoming_credit_acceptance_policy
+        front_incoming.configured(document, mode=lane.mode)
     if buflo_duration_policy is not None:
         from . import buflo_duration_budget as duration
         from .rapid_capture_traffic import parameter_files

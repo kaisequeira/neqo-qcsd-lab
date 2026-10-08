@@ -28,7 +28,8 @@ FIELD = 'target_chunk_policy'
 CONTROL_MODULES = ('rapid_target_chunks', 'rapid_slot_chunks', 'rapid_fixed_condition_target',
     'rapid_lane_evidence', 'rapid_rolling_capture', 'rapid_rolling_readiness', 'rapid_operation_facts',
     'buflo_duration_budget', 'rapid_capture_traffic', 'rapid_action_local_source_facts',
-    'rapid_mixed_implementation_target', 'front_fixed_configuration', 'front_preparation_evidence')
+    'rapid_mixed_implementation_target', 'front_fixed_configuration', 'front_preparation_evidence',
+    'front_incoming_acceptance')
 CONTROL_FILENAMES = tuple('src/qcsd_lab/' + name + '.py' for name in CONTROL_MODULES) + (
     'tools/rapid_target_chunks.py',)
 POLICY_KEYS = {'contract', 'lane_layout', 'base_spec', 'base_four_visit_plan', 'target_chunk_inputs',
@@ -54,13 +55,14 @@ def _executing_source_path(relative, runtime):
             rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
             rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,
             rapid_ordinary_transport_control, rapid_action_local_source_facts,
-            rapid_mixed_implementation_target, front_fixed_configuration, front_preparation_evidence)
+            rapid_mixed_implementation_target, front_fixed_configuration, front_preparation_evidence,
+            front_incoming_acceptance)
         modules = {module.__name__.rsplit('.', 1)[-1]: module for module in (
             rapid_target_chunks, rapid_slot_chunks, rapid_fixed_condition_target,
             rapid_lane_evidence, rapid_rolling_capture, rapid_rolling_readiness,
             rapid_operation_facts, buflo_duration_budget, rapid_capture_traffic,
             rapid_action_local_source_facts, rapid_mixed_implementation_target,
-            front_fixed_configuration, front_preparation_evidence,
+            front_fixed_configuration, front_preparation_evidence, front_incoming_acceptance,
             rapid_target_parallel_schedule, rapid_ordinary_parallel_schedule,
             rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
             rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,
@@ -166,6 +168,11 @@ def _condition(spec, sites, base, mode):
     identity = target.condition_identity(configuration, run, mode)
     from . import front_fixed_configuration as fixed_front
     selected_front = fixed_front.policy(base)
+    from . import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.configured(base, mode=mode)
+    if (front_incoming.policy(identity) != selected_incoming
+        or front_incoming.policy(facts) != selected_incoming):
+        raise ValueError('target canary, readiness and serial base changed FRONT incoming acceptance')
     marker = identity.get('capture_policies', {}).get(target.FRONT_FIELD)
     prospective_front = isinstance(marker, dict) and marker.get('policy') == target._mixed_epoch().FRONT_POLICY
     if prospective_front != (selected_front is not None):

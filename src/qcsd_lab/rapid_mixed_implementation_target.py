@@ -86,12 +86,68 @@ _LEGACY_MODULE_INVERSES = {
 }
 
 
+_FRONT_INCOMING_ACCEPTANCE_INVERSES = {
+    "traffic": ("e6572e50928332ce97a7470c56fb9e1f6dbab018a06737eba9bd5d1d90a3f2c2", "b525c043eb465d51f7f75e35181e02010102b4da01a04801bb2b9f6221bcae4f", (
+        ("def files(selected: str | None = None, *, front_selected: str | None = None) -> dict[str, tuple[str, str]]:", "def files(selected: str | None = None, *, front_selected: str | None = None,\n          front_acceptance_selected: str | None = None) -> dict[str, tuple[str, str]]:", 1),
+        ("    return result\n\n\ndef plan_files", "    from . import front_incoming_acceptance as front_incoming\n    if front_incoming.validate_policy(front_acceptance_selected) is not None:\n        if front_selected != front.POLICY or selected is not None:\n            raise ValueError(\"FRONT incoming acceptance traffic lacks its exact Native V5 selection\")\n        result[\"front_incoming_credit_acceptance_source_sha256\"] = (front_incoming.SOURCE_PATH,\n            \"f6d9d9afedbaad1e8f6fc6c650f3048293bdeff03c22895f0afdb3400c72cbf5\")\n    return result\n\n\ndef plan_files", 1),
+        ("    return files(declared(payload), front_selected=front_declared(payload))", "    from . import front_incoming_acceptance as front_incoming\n    return files(declared(payload), front_selected=front_declared(payload),\n                 front_acceptance_selected=front_incoming.configured(payload))", 1),
+        ("    return files(canary_policy(payload, mode), front_selected=front_declared(payload, canary=True, mode=mode))", "    from . import front_incoming_acceptance as front_incoming\n    return files(canary_policy(payload, mode), front_selected=front_declared(payload, canary=True, mode=mode),\n                 front_acceptance_selected=front_incoming.configured(payload, mode=mode))", 1),
+    )),
+    "capture_plan": ("4382ae162d65c3383ce87c055a64e503dd8c5c57c6c386a2eec4840675c87178", "3026e0687072a406160e6de25897306702dc255dcba173641a5caf43d56c2cb7", (
+        ("                         front_configuration_policy: str | None = None) -> bytes:", "                         front_configuration_policy: str | None = None,\n                         front_incoming_credit_acceptance_policy: str | None = None) -> bytes:", 1),
+        ("            front_configuration_policy=front_configuration_policy)", "            front_configuration_policy=front_configuration_policy,\n            front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy)", 1),
+        ("        document[FIELD] = validate_policy(front_configuration_policy)\n", "        document[FIELD] = validate_policy(front_configuration_policy)\n    from . import front_incoming_acceptance as front_incoming\n    if front_incoming.validate_policy(front_incoming_credit_acceptance_policy) is not None:\n        document[front_incoming.FIELD] = front_incoming_credit_acceptance_policy\n        front_incoming.configured(document, mode=lane.mode)\n", 1),
+    )),
+    "chunks": ("c0eced6275b929cb7b75ccf37e8e8105839bd64ac1566474db3e010c774622f0", "f69f212f29f8507246f9aa1136e169723afcf541e51dafee55c19c919fe1c06c", (
+        ("    if lane.mode != \"front\" and \"front_configuration_policy\" in options:\n        options = {**options, \"front_configuration_policy\": None}\n", "    if lane.mode != \"front\" and \"front_configuration_policy\" in options:\n        options = {**options, \"front_configuration_policy\": None}\n    if lane.mode != \"front\" and \"front_incoming_credit_acceptance_policy\" in options:\n        options = {**options, \"front_incoming_credit_acceptance_policy\": None}\n", 1),
+        ("            \"front_configuration_policy\": value.get(\"front_configuration_policy\"),\n", "            \"front_configuration_policy\": value.get(\"front_configuration_policy\"),\n            \"front_incoming_credit_acceptance_policy\": value.get(\"front_incoming_credit_acceptance_policy\"),\n", 1),
+    )),
+    "rolling": ("6f5fc34f6d8ee14390378200d2ebba55d4de9fc205d6788453c960739f138881", "d0c7b2132fc1a15809a10605567b2cc21c5d41522ddab1ae8f2c0a6b7bd1fc26", (
+        ("                     front_configuration_policy: str | None = None) -> bytes:", "                     front_configuration_policy: str | None = None,\n                     front_incoming_credit_acceptance_policy: str | None = None) -> bytes:", 1),
+        ("        front_configuration_policy=front_configuration_policy if lane.mode == \"front\" else None)", "        front_configuration_policy=front_configuration_policy if lane.mode == \"front\" else None,\n        front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy if lane.mode == \"front\" else None)", 1),
+        ("                 front_configuration_policy: str | None = None,\n                 selected_input_renewal:", "                 front_configuration_policy: str | None = None,\n                 front_incoming_credit_acceptance_policy: str | None = None,\n                 selected_input_renewal:", 1),
+        ("    fixed_front = validate_fixed_front_policy(front_configuration_policy)\n", "    fixed_front = validate_fixed_front_policy(front_configuration_policy)\n    from . import front_incoming_acceptance as front_incoming\n    selected_incoming = front_incoming.validate_policy(front_incoming_credit_acceptance_policy)\n    if selected_incoming is not None and fixed_front is None:\n        raise ValueError(\"FRONT incoming acceptance requires its prospective Native V5 plan\")\n", 1),
+        ("                front_configuration_policy=front_configuration_policy,\n", "                front_configuration_policy=front_configuration_policy,\n                front_incoming_credit_acceptance_policy=front_incoming_credit_acceptance_policy,\n", 1),
+        ("            raise ValueError(\"rolling plan differs from its canary's fixed FRONT condition\")\n", "            raise ValueError(\"rolling plan differs from its canary's fixed FRONT condition\")\n        if front_incoming.policy(facts) != selected_incoming:\n            raise ValueError(\"rolling plan differs from its canary's frozen FRONT incoming acceptance\")\n", 1),
+        ("                               front_configuration_policy=fixed_front)\n", "                               front_configuration_policy=fixed_front,\n                               front_incoming_credit_acceptance_policy=selected_incoming)\n", 2),
+        ("        payload[\"front_configuration_policy\"] = fixed_front\n", "        payload[\"front_configuration_policy\"] = fixed_front\n    if selected_incoming is not None:\n        payload[front_incoming.FIELD] = selected_incoming\n", 1),
+        ("    fixed_front = front.policy(value)\n", "    fixed_front = front.policy(value)\n    from . import front_incoming_acceptance as front_incoming\n    selected_incoming = front_incoming.configured(value)\n    if selected_incoming is not None:\n        fields.add(front_incoming.FIELD)\n", 1),
+        ("        raise ValueError(\"formal readiness changed its fixed FRONT condition\")\n", "        raise ValueError(\"formal readiness changed its fixed FRONT condition\")\n    from . import front_incoming_acceptance as front_incoming\n    if front_incoming.policy(facts) != front_incoming.configured(payload):\n        raise ValueError(\"formal readiness changed its frozen FRONT incoming acceptance\")\n", 1),
+        ("                                    front_configuration_policy=value.get(\"front_configuration_policy\") if lane.mode == \"front\" else None)", "                                    front_configuration_policy=value.get(\"front_configuration_policy\") if lane.mode == \"front\" else None,\n                                    front_incoming_credit_acceptance_policy=value.get(\"front_incoming_credit_acceptance_policy\") if lane.mode == \"front\" else None)", 1),
+    )),
+}
+
+
+def front_incoming_acceptance_source_projection(role, raw):
+    """Restore only the exact registered predecessor bytes, never its authority."""
+    import hashlib
+    if role not in _FRONT_INCOMING_ACCEPTANCE_INVERSES or type(raw) is not bytes:
+        raise ValueError('FRONT incoming acceptance source role or bytes are invalid')
+    old, current, edits = _FRONT_INCOMING_ACCEPTANCE_INVERSES[role]
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest == old:
+        return raw
+    if digest != current:
+        raise ValueError('FRONT incoming acceptance source is outside its exact pair')
+    for before, after, count in reversed(edits):
+        before, after = before.encode(), after.encode()
+        if raw.count(after) != count:
+            raise ValueError('FRONT incoming acceptance inverse is absent or ambiguous')
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != old:
+        raise ValueError('FRONT incoming acceptance inverse changes protected predecessor bytes')
+    return raw
+
+
 def legacy_source_projection(role, raw, *, historical_sha256):
     """Restore only one registered full-byte legacy reader with exact modes."""
     import hashlib
     if role not in _LEGACY_MODULE_INVERSES or type(raw) is not bytes:
         raise ValueError('mixed legacy source role or bytes are malformed')
     old, current, edits = _LEGACY_MODULE_INVERSES[role]
+    if (role in _FRONT_INCOMING_ACCEPTANCE_INVERSES
+            and hashlib.sha256(raw).hexdigest() in _FRONT_INCOMING_ACCEPTANCE_INVERSES[role][:2]):
+        raw = front_incoming_acceptance_source_projection(role, raw)
     digest = hashlib.sha256(raw).hexdigest()
     traffic_legacy = '4eb2d2ce5a35005f342befe9fb86dd6dad27980b2635e5372fda227902764542'
     if historical_sha256 not in ({old, traffic_legacy} if role == 'traffic' else {old}):
@@ -124,7 +180,24 @@ def legacy_source_projection(role, raw, *, historical_sha256):
 def compatible_legacy_reader(role, before, current):
     """Authenticate finite historical code refs, never a runtime/source wildcard."""
     fixed._open(before); fixed._open(current)
+    front_successor = None
+    if role in _FRONT_INCOMING_ACCEPTANCE_INVERSES:
+        predecessor, amended, _ = _FRONT_INCOMING_ACCEPTANCE_INVERSES[role]
+        if current['sha256'] == amended:
+            if (type(before['mode']) is not int or type(current['mode']) is not int
+                    or before['mode'] != 0o644 or current['mode'] != 0o644):
+                raise ValueError('FRONT incoming acceptance reader full mode differs')
+            restored = front_incoming_acceptance_source_projection(role, Path(current['path']).read_bytes())
+            if before['sha256'] == predecessor:
+                if restored != Path(before['path']).read_bytes():
+                    raise ValueError('FRONT incoming acceptance reader differs from exact predecessor')
+                return True
+            front_successor = amended
+    if role not in _LEGACY_MODULE_INVERSES:
+        return False
     old, successor, _edits = _LEGACY_MODULE_INVERSES[role]
+    if front_successor is not None:
+        successor = front_successor
     known = {old}
     if role == 'traffic':
         known.add('4eb2d2ce5a35005f342befe9fb86dd6dad27980b2635e5372fda227902764542')
@@ -178,20 +251,22 @@ def is_declaration(value):
 def _sources():
     from . import front_fixed_configuration as front
     from . import front_preparation_evidence as preparation
+    from . import front_incoming_acceptance as front_incoming
     return {'base': fixed._sources(), 'mixed': fixed.reference(Path(__file__)),
         'front_configuration': fixed.reference(Path(front.__file__)),
-        'front_preparation': fixed.reference(Path(preparation.__file__))}
+        'front_preparation': fixed.reference(Path(preparation.__file__)),
+        'front_incoming_acceptance': fixed.reference(Path(front_incoming.__file__))}
 
 
 def _source_files(value):
     current = _sources()
     fixed._keys(value, set(current), 'mixed epoch Source units')
     fixed._compatible_sources(value['base'])
-    for role in ('mixed', 'front_configuration', 'front_preparation'):
+    for role in ('mixed', 'front_configuration', 'front_preparation', 'front_incoming_acceptance'):
         fixed._open(value[role]); fixed._open(current[role])
         if any(value[role][key] != current[role][key] for key in ('sha256', 'mode')):
             raise ValueError('mixed epoch reader module bytes or full mode changed')
-    return [*value['base'].values(), *[value[role] for role in ('mixed', 'front_configuration', 'front_preparation')]]
+    return [*value['base'].values(), *[value[role] for role in ('mixed', 'front_configuration', 'front_preparation', 'front_incoming_acceptance')]]
 
 
 def _implementation(reference):
@@ -312,6 +387,8 @@ def front5_condition(value):
         raise ValueError('mixed FRONT lacks its exact V5 source-bound Native marker')
     front.validate_run({'resolved_configuration': value['resolved_configuration'], fixed.FRONT_FIELD: marker},
         selected_policy=FRONT_POLICY)
+    from . import front_incoming_acceptance as front_incoming
+    front_incoming.policy(value)
     return value
 
 
@@ -370,6 +447,10 @@ def _unchanged(retained, old, declarations, implementations, rows):
         expected_front['resolved_configuration']['control_interval_us'] = 10000
         expected_front['resolved_configuration']['defense'] = front.resolved_configuration()['defense']
         expected_front['capture_policies'][fixed.FRONT_FIELD] = after_front['capture_policies'][fixed.FRONT_FIELD]
+        from . import front_incoming_acceptance as front_incoming
+        selected_incoming = front_incoming.policy(after_front)
+        if selected_incoming is not None:
+            expected_front[front_incoming.FIELD] = selected_incoming
         if not fixed._typed_equal(after_front, expected_front):
             raise ValueError('mixed FRONT changed values outside its declared count/sigma/control/window amendment')
         if (implementations['front']['identity']['native_head'] == old['target_identity']['native_head']

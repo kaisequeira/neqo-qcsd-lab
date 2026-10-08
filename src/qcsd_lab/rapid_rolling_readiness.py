@@ -541,6 +541,11 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
             or config.get("front_configuration_sha256") != front.CONFIGURATION_SHA256
             or receipt.get("front_configuration_sha256") != front.CONFIGURATION_SHA256)):
         raise ValueError("canary plan/configuration/deep changed its fixed FRONT V5 condition")
+    from . import front_incoming_acceptance as front_incoming
+    selected_incoming = front_incoming.configured(plan, mode=mode)
+    if (front_incoming.configured(config, mode=mode) != selected_incoming
+        or front_incoming.policy(receipt) != selected_incoming):
+        raise ValueError("canary plan/configuration/deep changed its frozen FRONT incoming acceptance")
     if (config.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")
         or receipt.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")):
         raise ValueError("canary plan, configuration and deep receipt changed qualification delivery witness")
@@ -581,6 +586,7 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
     if fixed_front is not None:
         front.validate_prepared(manifest)
         front.validate_run(run, selected_policy=fixed_front)
+    front_incoming.validate_run(run, selected_policy=selected_incoming)
     response = validate_application_responses(manifest, run, body_identity_policy=body_policy)
     identity = application_response_identity_signature(manifest, response["response_signature"], body_identity_policy=body_policy)
     if (receipt.get("response_identity_sha256") != _sha(_encoded(identity))
@@ -623,6 +629,8 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
     if fixed_front is not None:
         facts.update(front_configuration_policy=fixed_front,
                      front_configuration_sha256=front.CONFIGURATION_SHA256)
+    if selected_incoming is not None:
+        facts[front_incoming.FIELD] = selected_incoming
     if fixed_tamaraw is not None:
         facts.update(tamaraw_configuration_policy=fixed_tamaraw,
                      tamaraw_configuration_sha256=configuration_sha256())

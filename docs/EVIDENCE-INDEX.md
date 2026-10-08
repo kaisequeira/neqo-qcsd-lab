@@ -7,6 +7,51 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
+## Source71 FRONT incoming timing adaptation
+
+The final corpus remains **264/16,000**, with **35/50 sites enrolled**.
+Source71 integrates the Source70 Lab corrections with main's unchanged
+Native D2 `d2c4ec0e7dcc358fb0915d7b09c9a9b91715da8c`. The ordinary Native818
+SDK and its runtime remain immutable and separate. The
+[timing declaration](FRONT-TIMING-ADAPTATION.md) explains the prospective
+50 ms Lab rule and the unchanged Native 10 ms measurements.
+
+The first Native D2 FRONT V5 practice completed all 58 resources, all 412
+outgoing padding releases and all 791 scheduled slots. Its original gate
+failed because two of 379 incoming credit intervals exceeded 10 ms; the
+largest conservative bound was 25.51 ms. The saved sample remains failed and
+uncredited. Recalculating it under a proposed rule is diagnostic evidence,
+not a new capture, readiness receipt or accepted formal visit.
+
+The new policy is bound through capture configuration, canary/deep metrics,
+readiness, serial and chunk plans, and the fixed condition identity. It
+preserves the original Native counters and rejects null, unknown and
+incompatible declarations. A fresh empty FRONT condition is required before
+formal capture. All graphs and outgoing acceptance checks remain complete.
+
+Root focused002 returned zero with **304 passes in 91.69 seconds**, no skips.
+Focused001's two errors and 22 unavailable-fixture skips remain preserved.
+The retry fixes the exact rolling-reader pair dispatch, independently
+restores all FRONT target edits to the complete Source70 predecessor, and
+supplies the genuine optional fixtures. It verifies old scientific units,
+typed full modes, changed-byte refusal, Native markers, capture/deep policy
+joins, current subgroup transport and historical context metadata. These
+software tests grant no installed runtime equivalence or measurement credit.
+
+Local retained locations in the migration bundle are:
+
+- `diagnostic-rehearsals/rapid-front50-main-integration-source71-root-gates-20261008-001/`:
+  application checks, original failed tests, passing focused002 and portable
+  Git-history controls.
+- `diagnostic-rehearsals/source65-d2-frontv5-buflo64-minimal-physical-practice-root-actual-20261008-001/`:
+  original FRONT qualification, preflight and failed capture operations.
+- `diagnostic-rehearsals/source66-portable-runtime-sdk-three-mode-real-host-plans-root-actual-20261008-007/`:
+  original full FRONT V5 experiment and raw failed Native outputs.
+
+A matching installed Source71 runtime and fresh physical proof are pending.
+The implementation is a declared client-only QUIC/Lab timing adaptation;
+paper equivalence and defended formal progress are not established here.
+
 ## Source70 subgroup raw evidence and closed HOST readers
 
 The formal total remains **264/16,000**, with **35/50 sites enrolled**.
