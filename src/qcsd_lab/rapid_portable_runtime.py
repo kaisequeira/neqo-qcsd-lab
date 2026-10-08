@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from concurrent.futures import ThreadPoolExecutor
+import errno
 from datetime import UTC, datetime
 import hashlib
 import io
@@ -206,11 +208,23 @@ def _flush_snapshot(root):
     try:
         library = ctypes.CDLL(None, use_errno=True)
         flush = getattr(library, "syncfs", None)
-        if flush is None:
-            for path in root.rglob("*"):
-                if path.is_file():
-                    with path.open("rb") as handle:
-                        os.fsync(handle.fileno())
+        fallback = flush is None
+        if flush is not None:
+            flush.argtypes, flush.restype = [ctypes.c_int], ctypes.c_int
+            if flush(descriptor) != 0:
+                code = ctypes.get_errno()
+                if code not in {errno.ENOMEM, errno.ENOSYS, errno.EOPNOTSUPP, errno.EINVAL}:
+                    raise OSError(code, "source snapshot syncfs failed")
+                fallback = True
+        if fallback:
+            def flush_file(path):
+                with path.open("rb") as handle:
+                    os.fsync(handle.fileno())
+            # Bounded parallel flushes share journal commits on slower disks.
+            # All must finish successfully before directory entries and input
+            # authority are published. This is staging I/O, not capture workers.
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                list(executor.map(flush_file, (p for p in root.rglob("*") if p.is_file())))
             for path in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
                 nested = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
                 try:
@@ -218,10 +232,6 @@ def _flush_snapshot(root):
                 finally:
                     os.close(nested)
             os.fsync(descriptor)
-        else:
-            flush.argtypes, flush.restype = [ctypes.c_int], ctypes.c_int
-            if flush(descriptor) != 0:
-                raise OSError(ctypes.get_errno(), "source snapshot syncfs failed")
     finally:
         os.close(descriptor)
 

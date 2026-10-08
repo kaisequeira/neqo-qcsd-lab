@@ -118,6 +118,63 @@ def test_fallback_flushes_regular_files_and_every_nested_directory(tmp_path, mon
     assert observations.index((root / "a/b").stat().st_ino) < observations.index(root.stat().st_ino)
 
 
+def test_syncfs_enomem_uses_real_file_and_directory_durability(tmp_path, monkeypatch):
+    root = tmp_path / "snapshot"
+    (root / "a/b").mkdir(parents=True)
+    files = [root / "first", root / "a/second", root / "a/b/third"]
+    for index, path in enumerate(files):
+        path.write_bytes(bytes([index]) * 31)
+    real_fsync, observed, root_descriptors = os.fsync, [], []
+    def syncfs(descriptor):
+        root_descriptors.append(descriptor)
+        runtime.ctypes.set_errno(errno.ENOMEM)
+        return -1
+    def fsync(descriptor):
+        observed.append(os.fstat(descriptor).st_ino)
+        real_fsync(descriptor)
+    monkeypatch.setattr(runtime.ctypes, "CDLL", lambda *a, **k: SimpleNamespace(syncfs=syncfs))
+    monkeypatch.setattr(runtime.os, "fsync", fsync)
+    runtime._flush_snapshot(root)
+    directories = [root / "a/b", root / "a", root]
+    assert set(observed) == {path.stat().st_ino for path in files + directories}
+    assert len(observed) == len(files + directories)
+    assert max(observed.index(path.stat().st_ino) for path in files) < min(
+        observed.index(path.stat().st_ino) for path in directories)
+    assert [observed.index(path.stat().st_ino) for path in directories] == sorted(
+        observed.index(path.stat().st_ino) for path in directories)
+    assert len(root_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(root_descriptors[0])
+
+
+def test_enomem_fallback_child_fsync_error_propagates_before_directory_flush(tmp_path, monkeypatch):
+    root = tmp_path / "snapshot"
+    (root / "a").mkdir(parents=True)
+    child = root / "a/source"
+    child.write_bytes(b"tiny actual source")
+    child_inode, root_inode = child.stat().st_ino, root.stat().st_ino
+    real_fsync, observed, root_descriptors = os.fsync, [], []
+    def syncfs(descriptor):
+        root_descriptors.append(descriptor)
+        runtime.ctypes.set_errno(errno.ENOMEM)
+        return -1
+    def fsync(descriptor):
+        inode = os.fstat(descriptor).st_ino
+        observed.append(inode)
+        if inode == child_inode:
+            raise OSError(errno.EIO, "actual child durability failed")
+        real_fsync(descriptor)
+    monkeypatch.setattr(runtime.ctypes, "CDLL", lambda *a, **k: SimpleNamespace(syncfs=syncfs))
+    monkeypatch.setattr(runtime.os, "fsync", fsync)
+    with pytest.raises(OSError) as failure:
+        runtime._flush_snapshot(root)
+    assert failure.value.errno == errno.EIO
+    assert observed == [child_inode]
+    assert root_inode not in observed
+    with pytest.raises(OSError):
+        os.fstat(root_descriptors[0])
+
+
 @pytest.fixture
 def staged_source(tmp_path, monkeypatch):
     checkout = tmp_path / "checkout"
