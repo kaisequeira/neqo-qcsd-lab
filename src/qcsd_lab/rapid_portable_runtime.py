@@ -7,6 +7,7 @@ site, qualification, canary or formal capture credit.
 from __future__ import annotations
 
 import argparse
+import ctypes
 from datetime import UTC, datetime
 import hashlib
 import io
@@ -183,7 +184,46 @@ def _archive_members(raw):
 
 def _extract(raw, root):
     for name, (content, executable) in _archive_files(raw).items():
-        _create(root / name, content, mode=0o755 if executable else 0o644)
+        path = root / name
+        if any(item.is_symlink() for item in (path, *path.parents)):
+            raise ValueError("portable source snapshot destination contains a link")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if any(item.is_symlink() for item in (path, *path.parents)):
+            raise ValueError("portable source snapshot destination contains a link")
+        with path.open("xb") as handle:
+            handle.write(content)
+            os.fchmod(handle.fileno(), 0o755 if executable else 0o644)
+
+
+def _flush_snapshot(root):
+    """Flush the complete filesystem once before publishing staged authority.
+
+    Every extracted name is create-only. A failed or interrupted extraction
+    has no build-input receipt and cannot be built. The final snapshot is
+    hashed after this durability fence, then bound by the durable input receipt.
+    """
+    descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        library = ctypes.CDLL(None, use_errno=True)
+        flush = getattr(library, "syncfs", None)
+        if flush is None:
+            for path in root.rglob("*"):
+                if path.is_file():
+                    with path.open("rb") as handle:
+                        os.fsync(handle.fileno())
+            for path in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                nested = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(nested)
+                finally:
+                    os.close(nested)
+            os.fsync(descriptor)
+        else:
+            flush.argtypes, flush.restype = [ctypes.c_int], ctypes.c_int
+            if flush(descriptor) != 0:
+                raise OSError(ctypes.get_errno(), "source snapshot syncfs failed")
+    finally:
+        os.close(descriptor)
 
 
 def _defaults(dockerfile):
@@ -306,6 +346,7 @@ def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docke
     snapshot = root / "image-context/source"
     _extract(lab_archive, snapshot)
     _extract(native_archive, snapshot / "neqo-qcsd")
+    _flush_snapshot(snapshot)
     inventory = _inventory(snapshot)
     if inventory != _inventory(checkout):
         raise ValueError("portable source archive differs from the exact clean checkout")
