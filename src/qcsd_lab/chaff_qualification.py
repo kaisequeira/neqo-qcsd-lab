@@ -4562,6 +4562,7 @@ def _stable_response_identity(
     qualified_parallel_chaff_streams: int,
     url: str,
     headers: list[list[str]],
+    resource_domain_max_response_bytes: int = 1_048_576,
 ) -> tuple[dict[str, Any], int]:
     if len(runs) != QUALIFICATION_RUNS:
         raise PreparationError("exactly three response qualification invocations are required")
@@ -4579,6 +4580,7 @@ def _stable_response_identity(
                 qualified_parallel_chaff_streams=qualified_parallel_chaff_streams,
                 url=url,
                 headers=headers,
+                resource_domain_max_response_bytes=resource_domain_max_response_bytes,
             )
         except ValueError as error:
             raise PreparationError(str(error)) from error
@@ -4648,7 +4650,13 @@ def _validate_response_receipt(
     qualified_parallel_chaff_streams: int,
     url: str,
     headers: list[list[str]],
+    resource_domain_max_response_bytes: int = 1_048_576,
 ) -> tuple[tuple[int, str, int, str], int, int, int, str]:
+    # The new direct-resource role declares its own finite16MiB GET bound.
+    # Historical callers retain the exact1MiB receipt contract by default.
+    if (type(resource_domain_max_response_bytes) is not int
+            or resource_domain_max_response_bytes not in {1_048_576, 16_777_216}):
+        raise ValueError("response qualification needs its declared finite response cap")
     receipt, incoming_limit = _receipt_udp_policy(
         value,
         legacy_keys=RESPONSE_RECEIPT_KEYS,
@@ -4684,7 +4692,7 @@ def _validate_response_receipt(
         != qualified_parallel_chaff_streams
         or type(receipt["request_stream_bytes"]) is not int
         or type(receipt["max_response_bytes"]) is not int
-        or receipt["max_response_bytes"] != 1_048_576
+        or receipt["max_response_bytes"] != resource_domain_max_response_bytes
         or type(receipt["udp_payload_ceiling"]) is not int
         or receipt["udp_payload_ceiling"] != UDP_PAYLOAD_CEILING
         or type(started) is not int
@@ -4730,6 +4738,7 @@ def _validate_response_receipt(
             or encoding != _normalize_content_encoding(encoding)
             or type(body_bytes) is not int
             or body_bytes < UDP_PAYLOAD_CEILING
+            or body_bytes > resource_domain_max_response_bytes
             or not _digest(body_sha256)
             or request["complete"] is not True
             or request["outcome"] != "complete"

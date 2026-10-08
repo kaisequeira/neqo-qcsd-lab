@@ -13,6 +13,8 @@ from qcsd_lab.process_scheduler import (
     CAPTURE_CLIENT_CPU,
     PORTABLE_ETF_SCHEDULER_CONTRACT,
     PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    PEER_HOST_PARTITION_CONTRACT,
+    RESOURCE_STUDY_PEER_HOST_PARTITION_CONTRACT,
     CaptureSchedulerMonitor,
     _host_partition_valid,
     _load_host_partition,
@@ -21,6 +23,80 @@ from qcsd_lab.process_scheduler import (
     capture_scheduler_runtime_evidence_valid,
 )
 from tests.scheduler_fixtures import process_scheduler_receipt
+
+
+def _resource_peer_inputs(count: int, cpu_count: int) -> tuple[list[dict], list[dict], dict[str, str]]:
+    workers = [{"id": f"{index + 1:064x}", "name": f"resource-{index}", "image_id": "sha256:" + "d" * 64,
+        "client_cpu": 2 * index + 1, "orchestrator_cpu": 2 * index + 2} for index in range(count)]
+    inspected = [{"Id": worker["id"], "Name": "/" + worker["name"], "Image": worker["image_id"],
+        "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab", "org.qcsd.role": "capture"}},
+        "HostConfig": {"CpusetCpus": f'{worker["client_cpu"]},{worker["orchestrator_cpu"]}'},
+        "State": {"Status": "created", "Running": False}} for worker in workers]
+    residual = sorted(set(range(cpu_count)) - {cpu for worker in workers for cpu in (worker["client_cpu"], worker["orchestrator_cpu"])})
+    inspected.append({"Id": "f" * 64, "Name": "/resource-observer", "Image": "sha256:" + "e" * 64,
+        "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab", "org.qcsd.role": "observer"}},
+        "HostConfig": {"CpusetCpus": ",".join(map(str, residual))}, "State": {"Status": "running", "Running": True}})
+    return inspected, workers, {"resource-observer": "f" * 64}
+
+
+@pytest.mark.parametrize("count,cpus", [(2, 6), (4, 9)])
+def test_resource_study_peer_partition_uses_actual_capacity(count: int, cpus: int) -> None:
+    inspected, workers, sidecars = _resource_peer_inputs(count, cpus)
+    for worker in workers:
+        proof = build_peer_host_partition(inspected, list(range(cpus)), workers, sidecars,
+            worker["id"], docker_ncpu=cpus, resource_study=True)
+        assert proof["peer_contract"] == RESOURCE_STUDY_PEER_HOST_PARTITION_CONTRACT
+        assert _host_partition_valid(proof)
+        assert len(proof["protected_cpus"]) == 2 * count
+
+
+@pytest.mark.parametrize("failure", ["eight-cpus", "overlap", "foreign", "missing", "single-worker", "unregistered-contract", "downgraded-contract"])
+def test_resource_study_peer_partition_refuses_capacity_or_identity_failure(failure: str) -> None:
+    cpus = 8 if failure == "eight-cpus" else 9
+    count = 1 if failure == "single-worker" else 4
+    inspected, workers, sidecars = _resource_peer_inputs(count, cpus)
+    if failure == "overlap": workers[1]["client_cpu"] = workers[0]["client_cpu"]
+    elif failure == "foreign": inspected[-1]["Config"]["Labels"]["org.qcsd.owner"] = "foreign"
+    elif failure == "missing": inspected.pop(1)
+    if failure.endswith("contract"):
+        proof = build_peer_host_partition(inspected, list(range(cpus)), workers, sidecars,
+            workers[0]["id"], docker_ncpu=cpus, resource_study=True)
+        proof["peer_contract"] = "unregistered-resource-partition" if failure.startswith("unregistered") else PEER_HOST_PARTITION_CONTRACT
+        assert not _host_partition_valid(proof)
+    else:
+        with pytest.raises(ValueError):
+            build_peer_host_partition(inspected, list(range(cpus)), workers, sidecars,
+                workers[0]["id"], docker_ncpu=cpus, resource_study=True)
+
+
+def test_historical_peer_builder_still_requires_exactly_two_workers() -> None:
+    inspected, workers, sidecars = _resource_peer_inputs(4, 9)
+    with pytest.raises(ValueError, match="two-worker"):
+        build_peer_host_partition(inspected, list(range(9)), workers, sidecars,
+            workers[0]["id"], docker_ncpu=9)
+    assert _peer_host_partition()["peer_contract"] == PEER_HOST_PARTITION_CONTRACT
+
+
+@pytest.mark.parametrize("measured", [0, 3])
+def test_resource_study_four_worker_runtime_keeps_native_v4_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, measured: int) -> None:
+    inspected, workers, sidecars = _resource_peer_inputs(4, 9)
+    proof = build_peer_host_partition(inspected, list(range(9)), workers, sidecars,
+        workers[measured]["id"], docker_ncpu=9, resource_study=True)
+    worker = workers[measured]; client, helper = worker["client_cpu"], worker["orchestrator_cpu"]
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT_V4)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", str(client))
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", str(helper))
+    proc_root, cpu_stat = _fixture(tmp_path)
+    (proc_root / "1/task/1/status").write_text(f"Name:\torchestrator\nTgid:\t1\nCpus_allowed_list:\t{helper}\n", encoding="ascii")
+    (proc_root / "stat").write_text(f"cpu{client} 1 2 3 4 5 6 7 0 0 0\n", encoding="ascii")
+    monitor = CaptureSchedulerMonitor(proc_root=proc_root, cgroup_cpu_stat_paths=(cpu_stat,), interval_us=1_000_000, host_partition=proof)
+    _write_task(proc_root, tgid=77, tid=77, process_group=77, cpus=str(client), name="neqo-qcsd-client")
+    _write_task(proc_root, tgid=77, tid=78, process_group=77, cpus=str(helper), name="qcsd-etf-helper")
+    monitor.process_started(77); evidence = monitor.finish()
+    assert evidence["contract"] == PORTABLE_ETF_SCHEDULER_CONTRACT_V4
+    assert capture_scheduler_runtime_evidence_valid(evidence)
+    altered = copy.deepcopy(evidence); altered["host_partition"]["measured_container_id"] = workers[1 if measured == 0 else 2]["id"]
+    assert not capture_scheduler_runtime_evidence_valid(altered)
 
 
 def _peer_inputs() -> tuple[list[dict], list[dict], dict[str, str]]:

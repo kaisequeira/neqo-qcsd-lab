@@ -45,6 +45,7 @@ def parser() -> argparse.ArgumentParser:
         description="Prepare, run, verify, and analyze QCSD experiments",
     )
     commands = root.add_subparsers(dest="command", required=True)
+    commands.add_parser("resource-study", help="prepare, capture and verify resource-domain sessions")
 
     prepare = commands.add_parser(
         "prepare",
@@ -378,6 +379,10 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] == "resource-study":
+        from .resource_study import main as resource_main
+        raise SystemExit(resource_main(arguments[1:]))
     args = parser().parse_args(argv)
     if args.command == "prepare":
         from .prepare import PreparationError, prepare_workload

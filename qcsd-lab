@@ -162,7 +162,7 @@ WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=1
 QCSD_LAUNCH_ACTION="${1:-}"
 
 usage() {
-  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|parallel-diagnostic-run|parallel-formal-run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {resource-study|lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|parallel-diagnostic-run|parallel-formal-run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test} [arguments...]" >&2
 }
 
 _qcsd_trusted_git() {
@@ -333,6 +333,15 @@ _qcsd_verify_clean_build_checkout() {
       ( -z "${expected_neqo_head}" || "${neqo_head}" == "${expected_neqo_head}" ) &&
       ( -z "${expected_gitlink}" || "${head_gitlink}" == "${expected_gitlink}" ) ]]
 }
+
+if [[ "${1:-}" == "resource-study" ]]; then
+  shift
+  resource_python="${ROOT}/.venv/bin/python3"
+  if [[ ! -x "${resource_python}" ]]; then
+    resource_python=/usr/bin/python3
+  fi
+  exec "${resource_python}" -I -B "${ROOT}/tools/resource_study.py" "$@"
+fi
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage

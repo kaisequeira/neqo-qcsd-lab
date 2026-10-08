@@ -1,7 +1,51 @@
 # QCSD thesis project ledger
 
-Checkpoint: **8 October 2026, Australia/Sydney (AEDT, UTC+11)**.
-This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
+Checkpoint: **9 October 2026, Australia/Sydney (AEDT, UTC+11)**.
+
+## Current approved study: 100,000 resource-domain sessions
+
+The new design is **50 exact resource hostnames × five traffic modes ×
+400 accepted fresh connections = 100,000 sessions**. Each accepted connection
+must fetch its hostname's **20 distinct fixed URLs** completely. The modes
+are ordinary traffic, FRONT, Tamaraw, BuFLO and CS-BuFLO. Preserve query
+identifiers, including Bing `th` IDs; declared reserves are
+`cdn.myanimelist.net`, then `ahrefs.com`.
+
+**New accepted sessions: 0. First formal batch: not yet created.** The
+50-row importer checks structural eligibility; no live resource admission,
+capture pass or installed new collector is claimed here. Implementation of
+the public `resource-study` prepare/capture/status/verify/export route is
+underway. The [new guide](docs/RESOURCE-DOMAIN-STUDY.md) defines the unit,
+packet evidence, 250 class/mode cells and independent recovery.
+
+Use a fresh Native process for each single-origin connection and client
+`eth0` captures before NAT. A tuple ledger prevents duplicate session credit;
+migration cannot turn one connection into two samples. The new progress
+authority is SQLite plus immutable receipts, with incremental verification.
+It does not import the old fixed-target history or require all five modes to
+be ready before an independently ready mode starts.
+
+The verified Native D2 implementation and cached client can be reused for
+Lab-only changes through a matching public SDK/runtime binding. New runtime
+installation and actual session gates remain pending. The initial budget is
+two workers, six available CPU IDs and 16 GB RAM; four-worker operation needs
+at least nine available CPU IDs and verified scheduling/timing. At an
+unmeasured illustrative 20 seconds per accepted session per worker, the total
+is 11.6 continuous days with two workers or 5.8 with four. The sparse 512 GiB
+volume and previously observed roughly 362 GiB free backing space do not
+establish that the complete corpus fits.
+
+## Historical website-study ledger
+
+The earlier study reached **392 accepted ordinary website recordings**.
+They remain preserved and verifiable on their original contracts, and count
+as **zero** toward the new resource-domain total. Earlier dated checkpoints,
+including the 264- and 328-recording stages, are retained below as history.
+No failed FRONT or other attempt is promoted by the redesign.
+
+The following text records the preceding website workflow and its dated
+engineering milestones. Its former targets and prerequisites do not replace
+the current design. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
 explains the evidence required before each capture role. The [timeline and
@@ -554,7 +598,7 @@ diagnostic evidence, not a formal trace or a pass for every site. Adopting this
 setting requires its own prospectively fixed condition, matching runtime and
 short mode-specific qualification/canary. The earlier Tamaraw traces keep their
 original settings. Evidence identities and retained failures are listed in the
-[evidence index](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+[evidence index](docs/EVIDENCE-INDEX.md).
 
 ### Earlier forty-four-recording checkpoint
 
@@ -617,7 +661,7 @@ route remains explicitly unsupported pending its own typed extension. The
 combined Source and portable action cache have no new installed/runtime or
 physical-capture claim. Current frozen flights continue on their actual Source.
 The final target remains **50 classes × five settings × 64 = 16,000**. See the
-[evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+[evidence locations](docs/EVIDENCE-INDEX.md).
 
 **Earlier checkpoint, 5 October, around 02:45 Sydney AEDT (4 October, 15:45 UTC):**
 Formal capture has begun: **12/16,000 accepted and independently verified
@@ -652,7 +696,7 @@ admissible graph. Two exposed a missing navigation step in the discovery
 operator, two failed primary DNS resolution and one attempted nonreplayable
 network egress. The navigation failures are operational defects, not scientific
 site rejections. Retained attempts add no admissions or formal recordings.
-See the [current evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+See the [current evidence locations](docs/EVIDENCE-INDEX.md).
 
 **Earlier checkpoint, 5 October, 00:13 Sydney AEDT (4 October, 13:13 UTC):**
 The accepted formal counter remains **8/16,000**, from the original two
@@ -689,7 +733,7 @@ distinct passing HOST cases**, including 48 rejection variants and failed-only
 recovery/peer preservation. Earlier fixture failures remain retained; this is
 not one all-pass suite. Native's 1,783 files and modes remain unchanged.
 These controls still need their matching installation and an actual two-worker
-capture/recovery demonstration. See the [evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+capture/recovery demonstration. See the [evidence locations](docs/EVIDENCE-INDEX.md).
 
 **Earlier checkpoint, 4 October, 23:02 Sydney AEDT (4 October, 12:02 UTC):**
 There are **8/16,000 accepted formal recordings**, all independently verified
@@ -725,7 +769,7 @@ installed deep verification and independent reopening. All visits retain the
 complete **277-resource graph across three origins**. There is one enrolled
 site and five complete ordinary-GET admissions; the final target remains
 **50 sites × five settings × 64 visits**. Historical browser traces are
-excluded. See the [evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+excluded. See the [evidence locations](docs/EVIDENCE-INDEX.md).
 
 The existing lanes retain their clean **Lab `0730fa6f` / Native `5f075d37`**
 runtime and original acceptance rules. The second public launch closed 0 in
@@ -788,7 +832,7 @@ seconds** on typed manifest access in the new settings-reading code. A narrow
 fix is underway in a separate copy; the failure remains preserved. These
 future changes are not installed or live-proved by the ordinary lane and need
 no nine-hour whole-suite restart. They leave its original source and accepted
-evidence intact. See the [current evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+evidence intact. See the [current evidence locations](docs/EVIDENCE-INDEX.md).
 
 **Earlier checkpoint, 4 October, 20:42 Sydney AEDT (4 October, 09:42 UTC):**
 The supplied-list cohort has **five admitted sites and 0/16,000 accepted formal
@@ -822,7 +866,7 @@ A separate prospective fixed 10,000-cell, 20 ms, 200-second budget and the
 FRONT/BuFLO preparation repairs are held source. They do not become installed
 or physically validated through this Lab transport repair. Their focused
 compilation, matched traffic settings and live repeats remain necessary.
-See the [current evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+See the [current evidence locations](docs/EVIDENCE-INDEX.md).
 
 **Earlier checkpoint, 4 October, 20:10 Sydney AEDT (4 October, 09:10 UTC):**
 The new supplied-list cohort has **four admitted sites and zero formal
@@ -863,7 +907,7 @@ candidate rules and exclusions**. That is not 50 verified usable classes;
 live failures mean additional genuine complete resource lists will be needed.
 All supplied graphs, original order labels and failed evidence are retained.
 The earlier eight accepted browser recordings remain historical evidence.
-See the [current supplied-list evidence](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+See the [current supplied-list evidence](docs/EVIDENCE-INDEX.md).
 
 **Earlier checkpoint, 4 October, 15:20 Sydney AEDT (4 October, 04:20 UTC):**
 Formal progress remains **8/16,000 accepted traces from one unique enrolled

@@ -65,7 +65,10 @@ class CaptureState:
         uplink_interface: str,
         client_subnet: str | None,
         require_masquerade: bool,
+        max_duration_seconds: int = 300,
     ) -> None:
+        if type(max_duration_seconds) is not int or max_duration_seconds not in {300, 740}:
+            raise ValueError("router capture maximum duration needs its declared300/740-second bound")
         if root.is_symlink() or not root.is_dir() or not root.is_absolute():
             raise ValueError("router capture root must be an existing absolute directory")
         if _SECRET.fullmatch(secret) is None:
@@ -101,6 +104,7 @@ class CaptureState:
         self.uplink_interface = uplink_interface
         self.client_subnet = client_subnet
         self.require_masquerade = require_masquerade
+        self.max_duration_seconds = max_duration_seconds
         self.capture_id: str | None = None
         self.process: subprocess.Popen[str] | None = None
         self.log_handle: Any = None
@@ -257,7 +261,7 @@ class CaptureState:
         max_megabytes = request["max_megabytes"]
         if (
             type(duration) is not int
-            or not 1 <= duration <= 300
+            or not 1 <= duration <= self.max_duration_seconds
             or type(max_megabytes) is not int
             or not 1 <= max_megabytes <= 1_024
             or self.process is not None
@@ -530,6 +534,9 @@ def main() -> None:
     raw_port = os.environ.get("QCSD_KERNEL_TX_ROUTER_CAPTURE_PORT", "19090")
     if not raw_port.isdecimal() or not 1 <= int(raw_port) <= 65_535:
         raise SystemExit("router capture service port is invalid")
+    raw_max_seconds = os.environ.get("QCSD_KERNEL_TX_ROUTER_CAPTURE_MAX_SECONDS", "300")
+    if raw_max_seconds not in {"300", "740"}:
+        raise SystemExit("router capture maximum duration is invalid")
     state = CaptureState(
         root=root,
         secret=secret,
@@ -538,6 +545,7 @@ def main() -> None:
         uplink_interface=uplink_interface,
         client_subnet=client_subnet,
         require_masquerade=require_masquerade,
+        max_duration_seconds=int(raw_max_seconds),
     )
     with _CaptureServer(("0.0.0.0", int(raw_port)), state) as server:
         server.serve_forever(poll_interval=0.1)

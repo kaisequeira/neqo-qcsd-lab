@@ -1,10 +1,53 @@
 # QCSD Lab
 
-QCSD Lab prepares reproducible HTTP/3 workloads, runs the client-side Neqo
-defences, captures traffic and runtime evidence, and verifies, seals and exports
-the results. Each admitted workload retains its complete resource graph,
-including resources from multiple origins. Servers remain ordinary HTTP/3
-endpoints.
+QCSD Lab prepares reproducible HTTP/3 workloads, runs client-side Neqo
+defenses, captures traffic and runtime evidence, and verifies and exports
+the results. Servers remain ordinary HTTP/3 endpoints.
+
+## Current study: resource-domain sessions
+
+The approved collection is **50 exact resource hostnames × five modes ×
+400 accepted fresh connections = 100,000 sessions**. Every counted connection
+must complete full GETs for its hostname's **20 distinct frozen URLs**.
+The modes are ordinary traffic, FRONT, Tamaraw, BuFLO and CS-BuFLO.
+
+**Implementation is underway; the new accepted count is zero and no first
+formal batch exists.** A structurally eligible 50-row import is not live site
+admission. The earlier **392 ordinary website recordings** remain historical
+and are excluded from this new total.
+
+Start with [the resource-domain guide](docs/RESOURCE-DOMAIN-STUDY.md).
+The planned `./qcsd-lab resource-study` route and `tools/resource_study.py`
+provide `prepare`, `capture`, `status`, `verify` and `export` actions. Consult
+the installed help for final options; no successful command run is implied
+by this documentation.
+
+One fresh Native process replays 20 URLs over one origin's connection.
+Capture is on client `eth0` before NAT. Tuple uniqueness, handshake and all
+resource completions are verified, and connection migration is never counted
+as an extra session. A SQLite ledger with immutable receipts tracks 250
+independent class/mode cells. A failed defense does not reset valid progress
+in a different mode.
+
+Budget initially for **two workers, six available CPUs and 16 GB RAM**.
+The scheduling minimum for N workers is `2N + 1` actual available CPU IDs;
+four workers need at least nine and their own successful capability checks.
+The illustrative 20-second effective rate gives 11.6 continuous days with
+two workers or 5.8 with four. Neither rate has been measured for this study.
+The 512 GiB sparse storage limit does not establish sufficient physical space
+for 100,000 sessions.
+
+Reuse the verified cached Native D2 client for Lab-only changes through a
+truthful new SDK/runtime binding. This does not require fresh Rust compilation
+or relabel old runtime evidence. See [PROJECT.md](PROJECT.md) for status and
+[AGENTS.md](AGENTS.md) for evidence and mode-scoped recovery rules.
+
+## Existing workflows and historical website study
+
+The remaining operator instructions describe existing Lab workflows. Their
+whole-page graphs, browser gates and historical class-study contracts retain
+their original meaning; they are not additional launch prerequisites for the
+prospective resource-domain study.
 
 Start with this operator guide. [PROJECT.md](PROJECT.md) records current
 progress and the thesis goal; the [class-study runbook](docs/CLASS-STUDY.md)

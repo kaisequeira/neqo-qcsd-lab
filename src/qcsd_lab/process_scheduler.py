@@ -37,12 +37,17 @@ CAPTURE_SCHEDULER_HOST_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64"
 CAPTURE_SCHEDULER_HOST_FILE_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE"
 CAPTURE_SCHEDULER_HOST_SHA256_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256"
 PEER_HOST_PARTITION_CONTRACT = "qcsd-two-lane-peer-cpu-partition-v1"
+RESOURCE_STUDY_PEER_HOST_PARTITION_CONTRACT = "qcsd-resource-study-peer-cpu-partition-v1"
 PEER_SCHEDULER_RUNTIME_SCHEMA_VERSION = 5
 PEER_SCHEDULER_RUNTIME_SOURCE = (
     "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v5"
 )
 _PEER_HOST_SCOPE = (
     "all running Docker containers and both declared workers at prelaunch; "
+    "exact worker identities use disjoint CPU pairs and all sidecars use the residual CPUs"
+)
+_RESOURCE_STUDY_HOST_SCOPE = (
+    "all running Docker containers and all declared resource-study workers at prelaunch; "
     "exact worker identities use disjoint CPU pairs and all sidecars use the residual CPUs"
 )
 _PEER_HOST_UNAVAILABLE_SCOPE = [
@@ -567,11 +572,13 @@ def _image_id(value: Any) -> bool:
 def _peer_partition_workers(value: Mapping[str, Any]) -> tuple[dict[str, Mapping[str, Any]], list[int]] | None:
     available = value.get("available_cpus")
     workers = value.get("declared_workers")
+    resource_study = value.get("peer_contract") == RESOURCE_STUDY_PEER_HOST_PARTITION_CONTRACT
     if (
         not isinstance(available, list) or len(available) < 5
         or any(not _uint(cpu) for cpu in available)
         or available != sorted(set(available))
-        or not isinstance(workers, list) or len(workers) != 2
+        or not isinstance(workers, list)
+        or (len(workers) < 2 if resource_study else len(workers) != 2)
     ):
         return None
     by_id: dict[str, Mapping[str, Any]] = {}
@@ -602,8 +609,13 @@ def _peer_partition_workers(value: Mapping[str, Any]) -> tuple[dict[str, Mapping
     return by_id, sorted(protected)
 
 
+def _peer_scope(value: Mapping[str, Any]) -> str:
+    return (_RESOURCE_STUDY_HOST_SCOPE
+        if value.get("peer_contract") == RESOURCE_STUDY_PEER_HOST_PARTITION_CONTRACT else _PEER_HOST_SCOPE)
+
+
 def _host_partition_peer_valid(value: Any) -> bool:
-    """Accept two explicitly declared workers; do not grant arbitrary overlap authority."""
+    """Validate the exact historical pair or explicit prospective resource workers."""
 
     if not isinstance(value, Mapping) or set(value) != _PEER_HOST_KEYS:
         return False
@@ -619,7 +631,7 @@ def _host_partition_peer_valid(value: Any) -> bool:
     if (
         value.get("schema_version") != 5
         or value.get("source") != "docker-inspect-all-running-containers-and-declared-workers-prelaunch-v5"
-        or value.get("peer_contract") != PEER_HOST_PARTITION_CONTRACT
+        or value.get("peer_contract") not in {PEER_HOST_PARTITION_CONTRACT, RESOURCE_STUDY_PEER_HOST_PARTITION_CONTRACT}
         or not _uint(value.get("captured_at_unix_ns")) or value["captured_at_unix_ns"] == 0
         or value.get("protected_cpus") != protected
         or value.get("owner_label") != "org.qcsd.owner=qcsd-lab"
@@ -633,7 +645,7 @@ def _host_partition_peer_valid(value: Any) -> bool:
         or not isinstance(overlaps, Mapping) or set(overlaps) != {str(cpu) for cpu in protected}
         or value.get("inspected_container_set_matches_expected") is not True
         or value.get("valid") is not True
-        or value.get("verified_scope") != _PEER_HOST_SCOPE
+        or value.get("verified_scope") != _peer_scope(value)
         or value.get("unavailable_scope") != _PEER_HOST_UNAVAILABLE_SCOPE
     ):
         return False
@@ -690,18 +702,21 @@ def _host_partition_peer_valid(value: Any) -> bool:
 def build_peer_host_partition(
     inspected: list[Mapping[str, Any]], available_cpus: list[int],
     declared_workers: list[Mapping[str, Any]], expected_sidecars: Mapping[str, str],
-    measured_container_id: str, *, docker_ncpu: int,
+    measured_container_id: str, *, docker_ncpu: int, resource_study: bool = False,
 ) -> dict[str, Any]:
     """Build a prospective proof from actual Docker inspect records after create.
 
-    The caller must supply every running container and both declared workers.
+    The caller supplies every running container and all declared workers.
+    Only explicit resource_study=True selects the prospective N-worker contract.
     Docker IDs and image IDs are observed identities, never guessed launch names.
     """
 
+    if type(resource_study) is not bool:
+        raise ValueError("resource-study partition selection must be boolean")
     value: dict[str, Any] = {
         "schema_version": 5,
         "source": "docker-inspect-all-running-containers-and-declared-workers-prelaunch-v5",
-        "peer_contract": PEER_HOST_PARTITION_CONTRACT,
+        "peer_contract": (RESOURCE_STUDY_PEER_HOST_PARTITION_CONTRACT if resource_study else PEER_HOST_PARTITION_CONTRACT),
         "captured_at_unix_ns": time.time_ns(),
         "available_cpus": list(available_cpus), "docker_ncpu": docker_ncpu,
         "owner_label": "org.qcsd.owner=qcsd-lab",
@@ -709,12 +724,13 @@ def build_peer_host_partition(
         "measured_container_id": measured_container_id,
         "expected_sidecars": dict(expected_sidecars),
         "inspected_container_set_matches_expected": True, "valid": True,
-        "verified_scope": _PEER_HOST_SCOPE,
+        "verified_scope": _RESOURCE_STUDY_HOST_SCOPE if resource_study else _PEER_HOST_SCOPE,
         "unavailable_scope": list(_PEER_HOST_UNAVAILABLE_SCOPE),
     }
     partition = _peer_partition_workers(value)
     if partition is None or not isinstance(inspected, list):
-        raise ValueError("two-worker CPU partition requires two disjoint pairs and a residual CPU pool")
+        raise ValueError("resource-study CPU partition requires disjoint pairs and a residual CPU pool"
+            if resource_study else "two-worker CPU partition requires two disjoint pairs and a residual CPU pool")
     workers, protected = partition
     value["protected_cpus"] = protected
     containers = []
@@ -1226,7 +1242,7 @@ class CaptureSchedulerMonitor:
             ),
         ]
         if self._peer:
-            verified_scope[-1] = _PEER_HOST_SCOPE
+            verified_scope[-1] = _peer_scope(self._host_partition)
             verified_scope.append("visible task affinities stay within the declared measured worker CPU pair")
         return {
             "schema_version": (
@@ -1432,7 +1448,7 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
         ),
     ]
     if peer:
-        expected_verified_scope[-1] = _PEER_HOST_SCOPE
+        expected_verified_scope[-1] = _peer_scope(host_partition)
         expected_verified_scope.append("visible task affinities stay within the declared measured worker CPU pair")
     cpu_stat = value.get("cgroup_cpu_stat")
     steal = value.get("proc_stat_steal")
