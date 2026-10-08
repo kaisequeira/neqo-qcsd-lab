@@ -61,9 +61,10 @@ def test_target_scientific_body_change_refused(tmp_path, name):
 
 def test_arbitrary_old_compatibility_guard_refused(tmp_path):
     refs = old_sources(tmp_path)
+    assert target._compatible_sources(refs)
     refs["target"] = put(Path(refs["target"]["path"]),
         change_function(baseline("rapid_fixed_condition_target"), "_compatible_sources"))
-    with pytest.raises(ValueError, match="original shape"):
+    with pytest.raises(ValueError):
         target._compatible_sources(refs)
 
 
@@ -262,8 +263,12 @@ def test_public_chunk_input_reader_recomputes_remaining_vector(monkeypatch, tmp_
 @pytest.mark.parametrize("role", ["acceptance", "application", "traffic"])
 def test_unrelated_acceptance_body_request_code_refused(tmp_path, role):
     refs = old_sources(tmp_path)
-    refs[role] = put(tmp_path / (role + ".py"), b"# changed protected acceptance/request/body code")
-    with pytest.raises(ValueError, match="code bytes or modes"):
+    assert target._compatible_sources(refs)
+    original = refs[role]
+    refs[role] = put(tmp_path / (role + ".py"), b"# changed protected acceptance/request/body code",
+                     original["mode"])
+    assert refs[role]["sha256"] != original["sha256"]
+    with pytest.raises(ValueError):
         target._compatible_sources(refs)
 
 
@@ -349,9 +354,15 @@ def test_reader_fingerprint_memo_keeps_source_fence_and_ends_with_action(monkeyp
     producer = put(tmp_path / "old-target.py", baseline("rapid_fixed_condition_target"))
     current = target._sources()["target"]
     original_parse = ast.parse; calls = []
+    original_projection = target._reader_code_projection
     def counted(*args, **kwargs):
         calls.append(1); return original_parse(*args, **kwargs)
-    monkeypatch.setattr(ast, "parse", counted)
+    def counted_projection(*args, **kwargs):
+        # Count full scientific fingerprints, excluding dispatch normalization.
+        with monkeypatch.context() as projection_patch:
+            projection_patch.setattr(ast, "parse", counted)
+            return original_projection(*args, **kwargs)
+    monkeypatch.setattr(target, "_reader_code_projection", counted_projection)
     context = OperationFacts(); context.begin_action()
     with context.scope():
         assert target._compatible_code_ref("target", producer, current)

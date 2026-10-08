@@ -141,12 +141,21 @@ def test_duration_canary_cannot_authorize_other_modes_or_multiple_settings():
 def test_duration_canary_policy_is_exactly_the_amendment_policy(original):
     a = original
     spec, canary, facts = planned(a)
-    path = rolling._open_ref(canary["plan"])
-    value = load(path); value.pop(traffic.FIELD); write(path, value)
-    canary["plan"] = rolling._ref(path)
     closed = amendment.validate_amendment(a.output, enrollment=a.enrollment, runtime=a.runtime)
+    # The planner authenticates historical indented graph facts before using
+    # the compact amendment comparator. Exercise that same stock boundary.
+    original_facts = deepcopy(facts)
+    current_facts = rolling._static_canary_facts(facts, closed)
+    assert facts == original_facts
+    assert current_facts["full_graph"]["resource_records_sha256"] == closed["workloads"][0]["resource_records_sha256"]
+    amendment.require_canary(canary, current_facts, rolling._ref(a.output), closed, mode="buflo")
+    path = rolling._open_ref(canary["plan"])
+    value = load(path)
+    assert value[traffic.FIELD] == budget.POLICY
+    value.pop(traffic.FIELD); write(path, value)
+    canary["plan"] = rolling._ref(path)
     with pytest.raises(ValueError, match="duration policy"):
-        amendment.require_canary(canary, facts, rolling._ref(a.output), closed, mode="buflo")
+        amendment.require_canary(canary, current_facts, rolling._ref(a.output), closed, mode="buflo")
 
 
 def test_cli_duration_choice_is_explicit_and_old_defaults_remain_none():

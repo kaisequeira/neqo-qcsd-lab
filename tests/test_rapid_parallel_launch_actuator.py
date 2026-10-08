@@ -126,8 +126,12 @@ def test_formal_shell_guard_rejects_wrong_lane_or_native_contract(role, version,
     assert "official rapid v5 or prospective rolling v6 formal lanes" in result.stderr
 
 
-@pytest.mark.parametrize("formal,release_failure", [(False, False), (True, False), (True, True)])
-def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path, formal, release_failure):
+@pytest.mark.parametrize("formal,release_failure,inspect_failure", [
+    (False, False, "none"), (True, False, "none"), (True, True, "none"),
+    (True, False, "worker"), (True, False, "peer"),
+])
+def test_real_shell_retires_failed_lane_while_peer_continues(
+        context, tmp_path, formal, release_failure, inspect_failure):
     project = Path(__file__).resolve().parents[1]
     source = (project / "qcsd-lab").read_text()
     block = source.split("# Two measured workers share one authenticated guardian.", 1)[1]
@@ -213,7 +217,17 @@ else:
         "parallel_python() { if [[ \"$1\" == release && \"$QCSD_TEST_FAIL_RELEASE\" == 1 ]]; then return 37; fi; /usr/bin/python3 -I -c 'import sys;sys.path.insert(0,sys.argv.pop(1)+\"/src\");from qcsd_lab.rapid_parallel_capture import main;main()' \"$ROOT\" \"$@\"; }",
         "qcsd_capture_attached_docker_output() { local -n result=$1; shift; printf '%s\\n' \"$*\" >>" + quoting(str(capture_calls)) +
         "; if [[ \" $* \" == *' formal-dns '* ]]; then result=" + quoting(dns_second) + "; else result=" + quoting(preflight) + "; fi; }",
-        '_qcsd_docker_api() { fake "$@"; }',
+        "QCSD_TEST_INSPECT_FAILURE=" + quoting(inspect_failure),
+        "INSPECT_FAILURE_MARKER=" + quoting(str(tmp_path / "transient-inspect-failure.log")),
+        r'''_qcsd_docker_api() {
+  if [[ "${1:-}" == container && "${2:-}" == inspect &&
+        "${_qcsd_parallel_inspect_role:-}" == "$QCSD_TEST_INSPECT_FAILURE" &&
+        ! -e "$INSPECT_FAILURE_MARKER" ]]; then
+    printf 'first failed observation retained before retry\n' >"$INSPECT_FAILURE_MARKER"
+    return 1
+  fi
+  fake "$@"
+}''',
         '_QCSD_LIFETIME_SIGNAL_STATUS=0',
         '_qcsd_docker_api_with_timeout() { local duration=$1; printf "%s %s\\n" "$1" "${*:2}" >>' + quoting(str(tmp_path / "removal-durations.log")) + '; shift; timeout "$duration" /usr/bin/python3 ' + quoting(str(fake)) + ' ' + quoting(str(state)) + ' ' + quoting(str(context.output)) + ' "$@"; }',
         '_qcsd_docker_exact_id_presence() { fake presence "$1"; }',
@@ -254,6 +268,17 @@ else:
         assert (completed_peer.read_bytes(), completed_peer.stat().st_mtime_ns, completed_peer.stat().st_ino) == peer_before
         return
     assert result.returncode == 1, result.stderr
+    marker = tmp_path / "transient-inspect-failure.log"
+    if inspect_failure == "none":
+        assert not marker.exists()
+    else:
+        assert marker.read_text() == "first failed observation retained before retry\n"
+        index = 0 if inspect_failure == "worker" else 1
+        assert f"qcsd-parallel-inspect-failure phase={inspect_failure} worker_index={index} attempt=1/2 status=1" in result.stderr
+        assert f"qcsd-parallel-inspect-recovered phase={inspect_failure} worker_index={index} attempt=2/2" in result.stderr
+    for index in range(2):
+        assert (context.output / f"lane-{index+1}/worker.stdout").read_text() == "test-only retained worker output\n"
+        assert (context.output / f"lane-{index+1}/worker.stderr").read_bytes() == b""
     assert (context.output / "lane-1/retirement.json").exists(), result.stderr
     first = parallel.load(context.output / "lane-1/retirement.json")
     second = parallel.load(context.output / "lane-2/retirement.json")
@@ -298,3 +323,164 @@ else:
             assert str(context.output / f"lane-{index+1}/results") + ":/lab/results:rw" in argv
             assert "inherited.example=8.8.8.8" in argv
         assert argv[argv.index("--cpuset-cpus")+1] == ("2,4" if index == 0 else "7,9")
+
+
+def _inspect_helper(source):
+    start = source.index("parallel_inspect_worker() {")
+    return source[start:source.index("\n}\n", start) + 3]
+
+
+def _inspect_case(tmp_path, codes, *, presence="present", observed=None,
+                  role="worker", index="0", cid=None, closed_stderr=False):
+    """Run only the real read-only helper; fake its bounded service I/O."""
+    cid = cid or "a" * 64
+    observed = observed if observed is not None else json.dumps([{
+        "Id": cid, "State": {"Running": False, "ExitCode": 37},
+        "Config": {"Env": ["PRIVATE_INSPECT_ENV_SENTINEL"]},
+    }], separators=(",", ":"))
+    payload = tmp_path / "inspect-payload.json"
+    payload.write_text(observed)
+    codes_file = tmp_path / "inspect-codes.txt"
+    codes_file.write_text("".join(str(code) + "\n" for code in codes))
+    calls = tmp_path / "inspect-calls.log"
+    presence_calls = tmp_path / "presence-calls.log"
+    source = (Path(__file__).resolve().parents[1] / "qcsd-lab").read_text()
+    preamble = "\n".join([
+        "set -euo pipefail",
+        "INSPECT_PAYLOAD=" + shlex.quote(str(payload)),
+        "INSPECT_CODES=" + shlex.quote(str(codes_file)),
+        "INSPECT_CALLS=" + shlex.quote(str(calls)),
+        "PRESENCE_CALLS=" + shlex.quote(str(presence_calls)),
+        "EXPECTED_ID=" + shlex.quote(cid),
+        "OBSERVED_PRESENCE=" + shlex.quote(presence),
+        r'''_qcsd_docker_api() {
+  [[ "$#" == 3 && "$1" == container && "$2" == inspect &&
+     "$3" == "$EXPECTED_ID" && "$_qcsd_api_phase" == cleanup-inspect ]] || return 73
+  printf 'inspect\n' >>"$INSPECT_CALLS"
+  local count code
+  count=$(wc -l <"$INSPECT_CALLS")
+  code=$(sed -n "${count}p" "$INSPECT_CODES")
+  [[ -n "$code" ]] || return 74
+  if (( code != 0 )); then
+    printf 'PRIVATE_FAILED_INSPECT_STDOUT_SENTINEL'
+    return "$code"
+  fi
+  cat "$INSPECT_PAYLOAD"
+}''',
+        r'''_qcsd_docker_exact_id_presence_detailed() {
+  [[ "$#" == 1 && "$1" == "$EXPECTED_ID" &&
+     "$_qcsd_api_phase" == cleanup-inspect ]] || return 75
+  printf 'presence\n' >>"$PRESENCE_CALLS"
+  printf '%s\n' "$OBSERVED_PRESENCE"
+}''',
+        _inspect_helper(source),
+    ])
+    if closed_stderr:
+        preamble = "exec 2>&-\n" + preamble
+    command = shlex.join(["parallel_inspect_worker", role, index, cid])
+    script = preamble + "\n" + (
+        'if result="$(' + command + ')"; then printf "%s" "$result"; '
+        'else status=$?; exit "$status"; fi\n')
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                            timeout=5, check=False)
+    return result, (calls.read_text().splitlines() if calls.exists() else []), (
+        presence_calls.read_text().splitlines() if presence_calls.exists() else [])
+
+
+def test_inspect_helper_preserves_exact_raw_terminal_and_nonzero_exit(tmp_path):
+    result, calls, presence = _inspect_case(tmp_path, [0])
+    value = json.loads(result.stdout)
+    assert result.returncode == 0 and result.stderr == ""
+    assert value[0]["State"] == {"Running": False, "ExitCode": 37}
+    assert calls == ["inspect"] and not presence
+    assert result.stdout == (tmp_path / "inspect-payload.json").read_text()
+
+
+@pytest.mark.parametrize("code", [1, 124])
+@pytest.mark.parametrize("role,index", [("worker", "0"), ("peer", "1")])
+def test_inspect_helper_retries_one_transient_read_and_preserves_raw_json(tmp_path, code, role, index):
+    result, calls, presence = _inspect_case(tmp_path, [code, 0], role=role, index=index)
+    assert result.returncode == 0
+    assert result.stdout == (tmp_path / "inspect-payload.json").read_text()
+    assert calls == ["inspect", "inspect"] and not presence
+    assert result.stderr.splitlines() == [
+        f"qcsd-parallel-inspect-failure phase={role} worker_index={index} attempt=1/2 status={code}",
+        f"qcsd-parallel-inspect-recovered phase={role} worker_index={index} attempt=2/2",
+    ]
+    assert "PRIVATE_INSPECT_ENV_SENTINEL" not in result.stderr
+    assert "PRIVATE_FAILED_INSPECT_STDOUT_SENTINEL" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("presence,reason", [
+    ("absent", "missing-actor"), ("present", "api-unavailable"),
+    ("unknown", "api-unavailable"), ("ambiguous", "ambiguous-identity"),
+])
+@pytest.mark.parametrize("code", [1, 124])
+def test_inspect_helper_persistent_failure_classifies_presence_without_terminal_promotion(
+        tmp_path, presence, reason, code):
+    result, calls, presence_calls = _inspect_case(tmp_path, [code, code, 0], presence=presence)
+    assert result.returncode == code and result.stdout == ""
+    assert calls == ["inspect", "inspect"] and presence_calls == ["presence"]
+    assert result.stderr.splitlines() == [
+        f"qcsd-parallel-inspect-failure phase=worker worker_index=0 attempt=1/2 status={code}",
+        f"qcsd-parallel-inspect-failure phase=worker worker_index=0 attempt=2/2 status={code}",
+        f"qcsd-parallel-inspect-refused phase=worker worker_index=0 status={code} presence={presence} reason={reason}",
+    ]
+    assert "recovered" not in result.stderr
+    assert "PRIVATE_FAILED_INSPECT_STDOUT_SENTINEL" not in result.stderr
+
+
+@pytest.mark.parametrize("code", [2, 125, 130, 137, 143, 255])
+def test_inspect_helper_never_retries_authentication_refusals_or_signals(tmp_path, code):
+    result, calls, presence = _inspect_case(tmp_path, [code, 0])
+    assert result.returncode == code and result.stdout == ""
+    assert calls == ["inspect"] and not presence
+    assert result.stderr == (
+        f"qcsd-parallel-inspect-failure phase=worker worker_index=0 attempt=1/2 status={code}\n")
+
+
+@pytest.mark.parametrize("mutation", [
+    "wrong-id", "two-actors", "integer-running", "boolean-exit", "negative-exit",
+    "large-exit", "missing-state", "invalid-json",
+])
+def test_inspect_helper_rejects_successful_malformed_or_different_actor_without_retry(tmp_path, mutation):
+    row = {"Id": "a" * 64, "State": {"Running": False, "ExitCode": 37}}
+    rows = [row]
+    if mutation == "wrong-id":
+        row["Id"] = "b" * 64
+    elif mutation == "two-actors":
+        rows.append(row.copy())
+    elif mutation == "integer-running":
+        row["State"]["Running"] = 0
+    elif mutation == "boolean-exit":
+        row["State"]["ExitCode"] = True
+    elif mutation == "negative-exit":
+        row["State"]["ExitCode"] = -1
+    elif mutation == "large-exit":
+        row["State"]["ExitCode"] = 256
+    elif mutation == "missing-state":
+        del row["State"]
+    observed = "PRIVATE_BAD_JSON_SENTINEL" if mutation == "invalid-json" else json.dumps(rows)
+    result, calls, presence = _inspect_case(tmp_path, [0, 0], observed=observed)
+    assert result.returncode == 2 and result.stdout == ""
+    assert calls == ["inspect"] and not presence
+    assert result.stderr == (
+        "qcsd-parallel-inspect-refused phase=worker worker_index=0 attempt=1/2 reason=malformed-success\n")
+    assert "PRIVATE_BAD_JSON_SENTINEL" not in result.stderr
+
+
+@pytest.mark.parametrize("role,index,cid", [
+    ("PRIVATE_ROLE_SENTINEL", "0", "a" * 64), ("worker", "2", "a" * 64),
+    ("worker", "0", "short-id"), ("peer", "01", "a" * 64),
+])
+def test_inspect_helper_rejects_unowned_requests_before_api(tmp_path, role, index, cid):
+    result, calls, presence = _inspect_case(tmp_path, [0], role=role, index=index, cid=cid)
+    assert result.returncode == 2 and result.stdout == ""
+    assert not calls and not presence
+    assert result.stderr == "qcsd-parallel-inspect-refused reason=invalid-request\n"
+
+
+def test_inspect_helper_closed_stderr_keeps_failure_and_retry_bounds(tmp_path):
+    result, calls, presence = _inspect_case(tmp_path, [1, 1, 0], closed_stderr=True)
+    assert result.returncode == 1 and result.stdout == result.stderr == ""
+    assert calls == ["inspect", "inspect"] and presence == ["presence"]

@@ -369,7 +369,8 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
                          buflo_duration_policy: str | None = None,
                          application_body_identity_policy: str | None = None,
                          qualification_delivery_compatibility: Mapping[str, str] | None = None,
-                         tamaraw_configuration_policy: str | None = None) -> bytes:
+                         tamaraw_configuration_policy: str | None = None,
+                         front_configuration_policy: str | None = None) -> bytes:
     """Render one deterministic schema-one campaign without granting authority."""
 
     if lane.role not in {"formal", "diagnostic"}:
@@ -380,7 +381,8 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
             buflo_duration_policy=buflo_duration_policy,
             application_body_identity_policy=application_body_identity_policy,
             qualification_delivery_compatibility=qualification_delivery_compatibility,
-            tamaraw_configuration_policy=tamaraw_configuration_policy)
+            tamaraw_configuration_policy=tamaraw_configuration_policy,
+            front_configuration_policy=front_configuration_policy)
     from .rapid_undefended_capture import OrdinarySite
     ordinary_only = any(isinstance(site, OrdinarySite) for site in sites)
     if ordinary_only and (lane.mode != "undefended" or lane.qualification_set is not None
@@ -464,14 +466,24 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
             or application_body_identity_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):
             raise ValueError("fixed Tamaraw configuration requires its own complete-graph serial setting")
         document[FIELD] = validate_policy(tamaraw_configuration_policy)
+    if front_configuration_policy is not None:
+        from .front_fixed_configuration import validate_policy, FIELD
+        from .application_response_policy import COMPLETE_APPLICATION_DELIVERY_POLICY
+        if (lane.mode != "front" or lane.study_version != 6 or lane.role != "formal"
+            or static_capture_limits is None or qualification_delivery_compatibility is not None
+            or application_body_identity_policy != COMPLETE_APPLICATION_DELIVERY_POLICY
+            or tamaraw_configuration_policy is not None or buflo_duration_policy is not None):
+            raise ValueError("fixed FRONT configuration requires only its complete-graph formal setting")
+        document[FIELD] = validate_policy(front_configuration_policy)
     if buflo_duration_policy is not None:
-        from .buflo_duration_budget import POLICY, PARAMETER_PATH, capture_limits
-        if (type(buflo_duration_policy) is not str or buflo_duration_policy != POLICY
+        from . import buflo_duration_budget as duration
+        from .rapid_capture_traffic import parameter_files
+        if (type(buflo_duration_policy) is not str or buflo_duration_policy not in {duration.POLICY, duration.CADENCE64_POLICY}
             or lane.study_version != 6 or lane.role != "formal" or static_capture_limits is None):
             raise ValueError("BuFLO200 campaign requires its prospective static formal contract")
         if lane.mode == "buflo":
-            document["defenses"][0]["parameters"] = "../defense-params/" + Path(PARAMETER_PATH).name
-        document["limits"] = capture_limits(lane.mode, document["limits"], policy=buflo_duration_policy)
+            document["defenses"][0]["parameters"] = "../defense-params/" + Path(parameter_files(buflo_duration_policy)[0][0]).name
+        document["limits"] = duration.capture_limits(lane.mode, document["limits"], policy=buflo_duration_policy)
     if lane.qualification_set is not None:
         document["chaff_qualification_set"] = lane.qualification_set
     return yaml.safe_dump(document, sort_keys=False, width=100).encode("utf-8")

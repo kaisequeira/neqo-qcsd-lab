@@ -7,7 +7,103 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
-## Fixed five target: current Source46 snapshot, 7 October 2026
+## Fixed five target: F264 and prospective Source65 engineering, 8 October 2026
+
+**35 classes are enrolled; 264/16,000 accepted formal traces are all ordinary.**
+The original F264 receipt and fixed target
+`166b20f3aed136ea8442b0412855857cb9dd0bf71d390e3308df1e5d1cdd3c53`
+remain unchanged. The final corpus requires 50 eligible sites × five settings
+× 64 visits. Practice, failed attempts and engineering checks add no rows;
+complete graphs and historical condition/runtime labels remain bound.
+
+Published Source64 is Lab `6bec96a35d122213b03e786451119ba2c762476d`.
+It reads the retained ordinary measurement release Source58
+`cd1793a65b1ebc5bafb0191febc2fb9ee8d28161`, Native
+`818d89398a5b0bc725e424b648d878185d18125d` and client SHA-256
+`2c9f170e1e087d116a66571e2637e605967352501131ba9a4ef0052d19321dac`.
+The consumer source and measurement source are separate roles. Each proof's
+source binding retains the actual measurement release, installed runtime,
+image and client; publishing a reader does not install it into that runtime.
+The dirty Source65 authoring reader reopened F264 with zero added credit.
+
+Prospective Native `d2c4ec0e7dcc358fb0915d7b09c9a9b91715da8c` is a clean
+successor of Native818. Its BuFLO64 setting uses a 64 ms cadence, 32 ms incoming
+service, 5 ms outgoing and 4 ms preparation, retaining all 10,000 events and
+a maximum 640-second budget with 680/740-second timeout/capture limits.
+FRONT V5 uses counts 450/600, peaks 1–4 seconds, 10 ms incoming/control and
+outgoing windows, 9 ms construction, 1 ms reserve and a 10% pure-padding
+omission ceiling. These are prospective client-only conditions with no
+paper-equivalence or formal acceptance claim. Old conditions, captures and
+failed receipts gain no new authority.
+
+The 14 compiled filters recorded 50 passing invocations, with possible overlap
+between filters. Four touched-file nightly formatting checks passed. The
+whole-workspace check returned one on untouched baseline files; no full CI
+pass is claimed. The new client, images and affected-mode canaries remain
+pending. Four source-fence memo controls passed; broader Lab plumbing
+checks passed 177 tests with one skipped. Four new-mode modules passed all
+135 cases. Historical-reader fixture corrections
+passed three focused cases and the owned-shape control passed. The container
+monitor passed 42 checks, including transient worker and peer inspection
+failures. Each inspection remains bounded to three seconds, with one retry;
+failure never invents a terminal exit. All 155 local documentation links
+resolve to tracked Lab or Native files. Release qualification requires a
+clean Lab consumer to pass a fresh check of the original F264 receipt before
+publication. Earlier failing checks remain preserved.
+
+The ordinary B4 flight's condition/profile/plans/readers/source binding,
+Source64 readiness, preparation (75.52 seconds) and authority passed. Launch
+returned two after 1,868.90 seconds at 01:38:23 UTC. Both original checkpoints
+remain marked running with 32 local accepts each: 64 unverified, uncredited
+recordings. Euronews's complete 116-resource graph retains its three HTTP 406
+failures; Flashscore Mexico's complete 233-resource graph retains twelve HTTP
+404 build assets. Missing retirement evidence prevented closure. Original-owner
+lifecycle recovery returned zero and the following actor inventory was empty.
+The strict partial reader cannot credit this layout. No checkpoint, failed
+receipt or graph has been relabelled or pruned.
+
+The closed browser batch retains Dropbox's 137-resource/six-origin graph,
+Ameblo's 69-resource/13-origin graph and three genuine failures. Dropbox's
+installed prebirth check passed; its full HTTP/3 GET is running. No new
+admission or formal credit is claimed.
+
+The following retained evidence IDs are lookup labels, not clone-local paths
+or prerequisites. SHA-256 values identify their exact bytes.
+
+| Evidence ID | Recorded result | SHA-256 |
+| --- | --- | --- |
+| F264 original `progress264.json` | 264 ordinary rows, unchanged | `daef34dddae6879d4da41b6a0bb9f269e030b95e9e0c82d89a49a969294ca84f` |
+| Source65 `genuine-f264-authoring-reopen004-closed.json` | Original 264 rows pass; zero new credit | `9c294f7e2d5a736b3f82ae4ad9fae7f32c2006ee4fa2443a5c34ea69f9269eda` |
+| Source64 `source64-frozen.json` | Reviewed reader freeze; Native818 retained | `ee5df1f0573c50a74ac1faf8b9c8417dccc2dc1d6ce959f35d89b9c6990554e4` |
+| Native64 `native64-frozen.json` | Clean d2c4ec0e source; no new client or images | `9b51c4a15a2f4e944ffcc3474ddf356238d2e5bd71739142cff4dd9eddef81e9` |
+| Native64 `postformat-focused002-closed.json` | 14 filters; 50 passing invocations | `118e65c25ceecef127c11e546d1a6b252a0a6eff88f1787fc90be75ee225e11f` |
+| Native64 `postformat-nightly-check002-1-completed.json` | Touched Rust file check, return zero | `290ad2c0d76eda8168886d0e241ad86bdf7c4386d612bc6d9e073a964c84344f` |
+| Native64 `postformat-nightly-check002-2-completed.json` | Touched Rust file check, return zero | `8c3ae3870ec203034393c87e12f6239bcac83a269142901443835736d5b0fc27` |
+| Native64 `postformat-nightly-check002-3-completed.json` | Touched Rust file check, return zero | `0a137d4ec941057bca2ebe2b6c395bf5ce1f3c11253ea0f6e07d07316efb34ee` |
+| Native64 `postformat-nightly-check002-4-completed.json` | Touched Rust file check, return zero | `a99feff29375b305d3d58544f10ae2b371dd684b780a22d9205fd638b163a192` |
+| Native64 `native-nightly-fmt-check001-completed.json` | Whole-workspace formatting, return one | `53c4063503a817aad2ee56020d07f61059d524acf27f20f82629202e61201207` |
+| B4 `practice-condition-completed.json` (Source58 continuation003) | Genuine Source58 condition, return zero | `f506171c7aa029ba531d903538d4aecd73399b363705011994320ab883799be4` |
+| B4 `host-plans-source-consumer-closed.json` | Source64 bound Source58 consumer ready; zero credit | `6bf8a1b62fdc0bca9fc3a8063531e1c86a63bf5b3589b9da405ae478cf3bc8fb` |
+| B4 `prepare-completed.json` | Return zero, 75.52 seconds | `a533384c88b9000650671e664724e02167306a2cf7f230694002ef14f08e0677` |
+| B4 `authority-completed.json` | Return zero | `c7d4a42cb59e77822c32cb52f2069fa16d0fbd6a3365eafd918046cb3cf6fefa` |
+| B4 `launch-completed.json` | Return two, 1,868.90 seconds; zero credit | `d915f2ffe1fd303f9f3dac119022f80dcb9811d4010a0741b5b45dece28b54c4` |
+| B4 original worker range 0–15 `experiment.json` | Running checkpoint, 32 local accepts; uncredited | `c58e2ff42e390b802d261ca196d073a391ced7e72e462751ba95e531cb0a4ce4` |
+| B4 original worker range 16–31 `experiment.json` | Running checkpoint, 32 local accepts; uncredited | `cb978dd4e7ccd31f07bd82343cc61678abe490d908b6a879fc61f2bec942b387` |
+| B4 `original-owner-lifecycle-recover-completed.json` | Return zero; original owner retired actors | `12bbecf596fc6469693952b72e3da0dea02f2fdfd66b3dd6906445f11f4550b7` |
+| B4 `after-owner-actors-completed.json` | Return zero, empty actor stdout | `7d0ce0e27999f6f4e79fe6921e94de0501282bca2f520c60e67356a6de99ad5f` |
+| Source65 `memo-fixture-focused011-completed.json` | Return zero; four focused cases | `292a21019c336e25c9664317f3e116c9a1a45f78572c45ba5e65ed82ccb238e0` |
+| Source65 `remaining-plumbing010-completed.json` | Return zero; 177 passes, one skip | `fc661f00da544a3bd00e0ae7e2059f4a42ab8ea654e552fc953616e7c1c4f56a` |
+| Source65 `new-mode-final-core020-completed.json` | Return zero; 135 passes across four new-mode modules | `4d0967beeb007ea8be1034a54ead59ec39af8bb9011a193342e471bb0da813ad` |
+| Source65 `remaining-tail011-completed.json` | Return one after 93 passes; compatibility failure preserved | `c72db19ac58e6c6e1e33deb7d8bd498109490c88a0aa8d06b3bb8d84ad0d7329` |
+| Dropbox `prebirth-2-started.json` | Started only, 01:47:17 UTC | `0b34696b588eec44bde83cc4e8106ce4a4007726888a31f290a44b31c9336263` |
+
+Portable source roles are documented in the
+[fixed target reader](../src/qcsd_lab/rapid_fixed_condition_target.py),
+[complete-capture audit](../src/qcsd_lab/rapid_epoch_corpus.py),
+[source-binding verifier](../src/qcsd_lab/rapid_chunk_partial_lane.py) and
+[operator path](RAPID-CAPTURE-PATH.md).
+
+## Fixed five target: earlier Source46 snapshot, 7 October 2026
 
 **35 classes are enrolled.** The current repaired fixed target ID
 `166b20f3aed136ea8442b0412855857cb9dd0bf71d390e3308df1e5d1cdd3c53`

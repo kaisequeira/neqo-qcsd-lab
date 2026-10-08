@@ -22,6 +22,9 @@ from qcsd_lab import rapid_slot_chunks as geometry
 from tests.test_rapid_target_chunks import case
 from tests.test_rapid_ordinary_parallel import current
 
+# Preserve a genuine predecessor after this consumer is itself committed.
+HISTORICAL_READER_BASE = '6bec96a35d122213b03e786451119ba2c762476d'
+
 
 @pytest.fixture
 def epoch_case(case, monkeypatch):
@@ -216,11 +219,11 @@ def test_resealed_epoch_plan_cannot_launder_old_policy_field(epoch_case):
 
 @pytest.mark.parametrize('name, projection', [
     ('rapid_rolling_capture.py', fixed._epoch_dispatch_source_projection),
-    ('rapid_chunk_partial_lane.py', fixed._epoch_dynamic_source_projection),
+    ('rapid_chunk_partial_lane.py', fixed._portable_dynamic_source_projection),
 ])
 def test_historical_dispatch_pair_preserves_residual_and_refuses_changed_bytes(name, projection):
     relative = 'src/qcsd_lab/' + name
-    old = subprocess.check_output(['git', 'show', 'HEAD:' + relative])
+    old = subprocess.check_output(['git', 'show', HISTORICAL_READER_BASE + ':' + relative])
     new = Path(relative).read_bytes()
     assert projection(old) == projection(new)
     with pytest.raises(ValueError, match='exact'): projection(new + b'\nREPLACED_SCIENTIFIC_GUARD = True\n')
@@ -229,7 +232,8 @@ def test_historical_dispatch_pair_preserves_residual_and_refuses_changed_bytes(n
 def test_original_dynamic_reader_pair_accepts_only_its_exact_published_successor(tmp_path):
     relative = 'src/qcsd_lab/rapid_chunk_partial_lane.py'
     predecessor = tmp_path / 'rapid_chunk_partial_lane.py'
-    predecessor.write_bytes(subprocess.check_output(['git', 'show', 'HEAD:' + relative]))
+    predecessor.write_bytes(subprocess.check_output(
+        ['git', 'show', HISTORICAL_READER_BASE + ':' + relative]))
     successor = Path(relative).absolute()
     assert fixed._compatible_code_ref('dynamic', fixed.reference(predecessor), fixed.reference(successor))
     predecessor.write_bytes(predecessor.read_bytes() + b'\nFORGED_SCIENTIFIC_GUARD = True\n')

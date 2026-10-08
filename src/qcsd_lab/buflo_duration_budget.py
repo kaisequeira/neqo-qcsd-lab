@@ -42,6 +42,17 @@ RECEIPT = {
     "max_events": 10_000,
     "duration_budget_us": 200_000_000,
 }
+# Separate prospective policy; historical constants and canonical bytes stay exact.
+CADENCE64_POLICY = "rapid-v7-fixed-64ms-640s-duration-budget-v1"
+CADENCE64_INPUT_POLICY = "reviewed-buflo-fixed-cadence64-duration640-study-candidate-v1"
+CADENCE64_PARAMETER_PATH = "config/defense-params/buflo-cadence64-budget640.json"
+CADENCE64_PARAMETER_SEMANTICS = (
+    "qcsd-udp1200-client-only-adaptation-with-explicit-fixed-64ms-cadence-"
+    "640-second-event-budget-and-versioned-terminal-subcell-policy"
+)
+CADENCE64_PARAMETERS = {**PARAMETERS, "interval_us": 64_000, PARAMETER_FIELD: CADENCE64_POLICY}
+CADENCE64_RECEIPT = {**RECEIPT, "policy": CADENCE64_POLICY, "interval_us": 64_000,
+                     "duration_budget_us": 640_000_000}
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -52,6 +63,13 @@ def parameter_bytes() -> bytes:
 PARAMETER_SHA256 = hashlib.sha256(parameter_bytes()).hexdigest()
 
 
+def cadence64_parameter_bytes() -> bytes:
+    return (json.dumps(CADENCE64_PARAMETERS, indent=2, allow_nan=False) + "\n").encode()
+
+
+CADENCE64_PARAMETER_SHA256 = hashlib.sha256(cadence64_parameter_bytes()).hexdigest()
+
+
 def _exact(value: Any, expected: Mapping[str, Any], label: str) -> None:
     if (not isinstance(value, Mapping) or set(value) != set(expected)
         or any(type(value[key]) is not type(item) or value[key] != item
@@ -60,13 +78,15 @@ def _exact(value: Any, expected: Mapping[str, Any], label: str) -> None:
 
 
 def validate_parameters(value: Any, *, ceiling: int = 1_200) -> None:
-    _exact(value, PARAMETERS, "BuFLO duration parameters")
+    expected = CADENCE64_PARAMETERS if isinstance(value, Mapping) and value.get(PARAMETER_FIELD) == CADENCE64_POLICY else PARAMETERS
+    _exact(value, expected, "BuFLO duration parameters")
     if type(ceiling) is not int or ceiling < 1_200:
         raise ValueError("BuFLO duration parameters exceed the UDP ceiling")
 
 
 def validate_receipt(value: Any) -> None:
-    _exact(value, RECEIPT, "Native BuFLO duration receipt")
+    expected = CADENCE64_RECEIPT if isinstance(value, Mapping) and value.get("policy") == CADENCE64_POLICY else RECEIPT
+    _exact(value, expected, "Native BuFLO duration receipt")
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -94,7 +114,7 @@ def validate_native_receipt(run: Mapping[str, Any], raw: bytes, *,
     artifact bytes provide the content proof. A live caller can additionally
     require its actual supplied path. No timing or completion guard is waived.
     """
-    parse_parameters(raw)
+    parsed = parse_parameters(raw)
     parameter = run.get("defense_parameters")
     resolved = run.get("resolved_configuration")
     defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
@@ -110,7 +130,8 @@ def validate_native_receipt(run: Mapping[str, Any], raw: bytes, *,
         or defense.get("parameters") != parameter["path"]
         or expected_path is not None and parameter["path"] != expected_path):
         raise ValueError("Native BuFLO duration receipt differs from its hashed parsed parameters")
-    validate_receipt(parameter.get(RUN_FIELD))
+    expected = CADENCE64_RECEIPT if parsed[PARAMETER_FIELD] == CADENCE64_POLICY else RECEIPT
+    _exact(parameter.get(RUN_FIELD), expected, "Native BuFLO duration receipt")
     return {RUN_FIELD: dict(parameter[RUN_FIELD]),
             "buflo_duration_budget_parameter_sha256": digest}
 
@@ -125,19 +146,23 @@ def schedule_bounds(metrics: Mapping[str, Any]) -> tuple[int, int]:
     digest = metrics.get("buflo_duration_budget_parameter_sha256")
     if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
         raise ValueError("BuFLO schedule budget has no exact parameter-byte identity")
-    return 10_000, 200_000_000
+    receipt = metrics[RUN_FIELD]
+    return receipt["max_events"], receipt["duration_budget_us"]
 
 
 def capture_limits(mode: str, original: Mapping[str, Any], *, policy: str | None) -> dict[str, Any]:
     """Derive recorder limits after an explicit prospective plan amendment."""
-    if policy is not None and (type(policy) is not str or policy != POLICY):
+    if policy is not None and (type(policy) is not str or policy not in {POLICY, CADENCE64_POLICY}):
         raise ValueError("unknown BuFLO duration budget policy")
     result = dict(original)
-    if policy == POLICY and mode == "buflo":
+    if policy in {POLICY, CADENCE64_POLICY} and mode == "buflo":
         if (type(result.get("timeout_seconds")) is not int or result["timeout_seconds"] != 120
             or type(result.get("capture_seconds")) is not int or result["capture_seconds"] != 180):
             raise ValueError("BuFLO duration limits must derive from the original 120/180-second limits")
-        result.update(timeout_seconds=240, capture_seconds=300)
+        if policy == CADENCE64_POLICY:
+            result.update(timeout_seconds=680, capture_seconds=740)
+        else:
+            result.update(timeout_seconds=240, capture_seconds=300)
     return result
 
 

@@ -55,6 +55,7 @@ from .fidelity import (
     _runner_wakeup_v19_valid,
     _runner_wakeup_v20_valid,
     _runner_wakeup_v21_valid,
+    _runner_wakeup_v22_valid,
     new_defense_terminal_receipts_valid,
     reconcile_direct_runner_artifacts,
     terminal_evidence_render_receipt_valid,
@@ -1727,7 +1728,7 @@ def _process_scheduler_bound_to_run_valid(
         }
         and defense_kind == "buflo"
         and isinstance(wakeups, Mapping)
-        and wakeups.get("schema_version") in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+        and wakeups.get("schema_version") in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
         and _runner_wakeup_metrics_valid(wakeups)
         and kernel_tx_runner_receipt_success_valid(raw)
         and kernel_tx_incoming_window_bound_to_run_valid(run)
@@ -1830,6 +1831,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 22:
+        return _runner_wakeup_v22_valid(value)
     if schema_version == 21:
         return _runner_wakeup_v21_valid(value)
     if schema_version == 20:
@@ -1974,6 +1977,26 @@ def _validate_run_binding(
         run_data, runner_directory=runner_directory,
         tamaraw_configuration_policy=getattr(context, "tamaraw_configuration_policy", None),
     )
+    from .front_fixed_configuration import (
+        validate_policy as validate_front_configuration_policy,
+        validate_configuration as validate_front_configuration,
+        validate_run as validate_front_configuration_run,
+    )
+    from .capture_acceptance_policy import FRONT_FIELD, FRONT_LIGHT_POLICY
+    selected_front = validate_front_configuration_policy(getattr(context, "front_configuration_policy", None))
+    front_path = getattr(context, "front_configuration_path", None)
+    marker = run_data.get(FRONT_FIELD)
+    native_front_v5 = isinstance(marker, Mapping) and marker.get("policy") == FRONT_LIGHT_POLICY
+    if (native_front_v5 != (selected_front is not None)
+        or selected_front is not None and (defense.kind != "front" or defense.baseline
+            or getattr(context, "qcsd_profile", None) != "research-1200"
+            or defense.parameters_path is not None or defense.schedule_path is not None
+            or getattr(context, "tamaraw_configuration_policy", None) is not None or front_path is None)
+        or selected_front is None and front_path is not None):
+        raise ValueError("Native FRONT V5 configuration lacks its exact prospective launch selection")
+    if selected_front is not None:
+        validate_front_configuration(front_path)
+        validate_front_configuration_run(run_data, selected_policy=selected_front)
     historical_candidate = historical_candidate_source is not None
     response_policy = _launch_application_response_policy(
         application_workload_source, application_response_policy
@@ -2425,7 +2448,30 @@ def _client_command(
     from .tamaraw_fixed_configuration import validate_policy, validate_configuration
     fixed_tamaraw = validate_policy(getattr(context, "tamaraw_configuration_policy", None))
     configuration_path = getattr(context, "tamaraw_configuration_path", None)
-    if fixed_tamaraw is not None:
+    from .front_fixed_configuration import (
+        validate_policy as validate_front_configuration_policy,
+        validate_configuration as validate_front_configuration,
+        validate_prepared as validate_front_prepared,
+    )
+    fixed_front = validate_front_configuration_policy(getattr(context, "front_configuration_policy", None))
+    front_path = getattr(context, "front_configuration_path", None)
+    if defense.kind == "front" and not defense.baseline:
+        from .capture_acceptance_policy import validate_front_preparation_policy, FRONT_LIGHT_POLICY
+        prepared = load_json(application_workload_source)
+        declared = validate_front_preparation_policy(prepared.get("preparation", {}))
+        if (declared == FRONT_LIGHT_POLICY) != (fixed_front is not None):
+            raise ValueError("FRONT V5 preparation differs from its prospective launch selection")
+    if fixed_front is not None and (fixed_tamaraw is not None or configuration_path is not None):
+        raise ValueError("fixed FRONT and Tamaraw configurations are mutually exclusive")
+    if fixed_front is not None:
+        if (defense.kind != "front" or defense.baseline or context.qcsd_profile != "research-1200"
+            or front_path is None or defense.parameters_path is not None or defense.schedule_path is not None):
+            raise ValueError("fixed FRONT V5 launch lacks its exact frozen configuration")
+        validate_front_prepared(load_json(application_workload_source))
+        command += ["--config", str(validate_front_configuration(front_path))]
+    elif front_path is not None:
+        raise ValueError("Native FRONT configuration requires an explicit prospective policy")
+    elif fixed_tamaraw is not None:
         if (defense.kind != "tamaraw" or defense.baseline or context.qcsd_profile != "research-1200"
             or configuration_path is None or defense.parameters_path is not None or defense.schedule_path is not None):
             raise ValueError("fixed Tamaraw launch lacks its exact frozen configuration")

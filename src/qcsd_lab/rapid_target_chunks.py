@@ -27,7 +27,8 @@ CONTRACT = 'declared-fixed-condition-progress-current-qualified-full-graph-chunk
 FIELD = 'target_chunk_policy'
 CONTROL_MODULES = ('rapid_target_chunks', 'rapid_slot_chunks', 'rapid_fixed_condition_target',
     'rapid_lane_evidence', 'rapid_rolling_capture', 'rapid_rolling_readiness', 'rapid_operation_facts',
-    'buflo_duration_budget', 'rapid_capture_traffic', 'rapid_action_local_source_facts')
+    'buflo_duration_budget', 'rapid_capture_traffic', 'rapid_action_local_source_facts',
+    'rapid_mixed_implementation_target', 'front_fixed_configuration', 'front_preparation_evidence')
 CONTROL_FILENAMES = tuple('src/qcsd_lab/' + name + '.py' for name in CONTROL_MODULES) + (
     'tools/rapid_target_chunks.py',)
 POLICY_KEYS = {'contract', 'lane_layout', 'base_spec', 'base_four_visit_plan', 'target_chunk_inputs',
@@ -52,12 +53,14 @@ def _executing_source_path(relative, runtime):
             rapid_target_parallel_schedule, rapid_ordinary_parallel_schedule,
             rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
             rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,
-            rapid_ordinary_transport_control, rapid_action_local_source_facts)
+            rapid_ordinary_transport_control, rapid_action_local_source_facts,
+            rapid_mixed_implementation_target, front_fixed_configuration, front_preparation_evidence)
         modules = {module.__name__.rsplit('.', 1)[-1]: module for module in (
             rapid_target_chunks, rapid_slot_chunks, rapid_fixed_condition_target,
             rapid_lane_evidence, rapid_rolling_capture, rapid_rolling_readiness,
             rapid_operation_facts, buflo_duration_budget, rapid_capture_traffic,
-            rapid_action_local_source_facts,
+            rapid_action_local_source_facts, rapid_mixed_implementation_target,
+            front_fixed_configuration, front_preparation_evidence,
             rapid_target_parallel_schedule, rapid_ordinary_parallel_schedule,
             rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
             rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,
@@ -151,9 +154,21 @@ def _condition(spec, sites, base, mode):
     run = lanes._load(_read(run_path))
     configuration = experiment['configuration']
     identity = target.condition_identity(configuration, run, mode)
+    from . import front_fixed_configuration as fixed_front
+    selected_front = fixed_front.policy(base)
+    marker = identity.get('capture_policies', {}).get(target.FRONT_FIELD)
+    prospective_front = isinstance(marker, dict) and marker.get('policy') == target._mixed_epoch().FRONT_POLICY
+    if prospective_front != (selected_front is not None):
+        raise ValueError('target FRONT V5 canary and serial base changed their explicit fixed selection')
+    if prospective_front:
+        target._mixed_epoch().front5_condition(identity)
+        fixed_front.validate_source_artifacts({key: spec.serializable()[key] for key in rolling.RUNTIME_FIELDS})
     limits = target._capture_limits(mode, base['capture_limits'], identity)
     if limits != base['capture_limits']:
-        if (target.traffic.declared(base) != target.duration.POLICY
+        selected_policy = target.duration.POLICY
+        if identity['defense'].get('parameters_sha256') == '5c35c9a6c0ce9d424b3e9cfc9e05a48713b9260fd1385dfba2d79048f58f283e':
+            selected_policy = target._mixed_epoch().BUFLO_POLICY
+        if (target.traffic.declared(base) != selected_policy
                 or not target._typed_equal(configuration.get('limits'), {**limits, 'max_attempts': 1})):
             raise ValueError('target BuFLO200 canary requires its declared duration and exact practice caps')
     if application_body_identity_policy(configuration) != application_body_identity_policy(base):
@@ -216,6 +231,12 @@ def _derive(spec, inputs_ref, canonical_ref):
     controls = _checked_sources(runtime, source_files, CONTROL_FILENAMES)
     declaration = target.validate_target(inputs['target'])
     identity = declaration['target_identity']
+    if target._mixed_epoch().is_declaration(declaration):
+        identity = target.mode_implementation(declaration, mode)
+        expected_source = declaration['implementations'][mode]['measurement_source']
+        if ({**canonical['source'], 'image_digest': canonical['collection_image_digest']} != expected_source
+                or spec.collection_image_digest != identity['image_digest']):
+            raise ValueError('mixed target chunk changed its exact declared per-mode Source/image')
     if (canonical['source']['neqo_commit'] != identity['native_head']
             or canonical['source']['neqo_pinned_commit'] != identity['native_head']
             or canonical['installed_client_sha256'] != identity['client_sha256']

@@ -488,6 +488,14 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
     tamaraw_configuration_policy = fixed_tamaraw_policy(experiment["configuration"])
     if tamaraw_configuration_policy is not None:
         validate_configuration(root / experiment["configuration"]["tamaraw_configuration"])
+    from .front_fixed_configuration import (
+        policy as fixed_front_policy, validate_configuration as validate_front_configuration,
+        validate_run as validate_front_configuration_run,
+    )
+    from .capture_acceptance_policy import FRONT_FIELD, FRONT_LIGHT_POLICY
+    front_configuration_policy = fixed_front_policy(experiment["configuration"])
+    if front_configuration_policy is not None:
+        validate_front_configuration(root / experiment["configuration"]["front_configuration"])
     complete_delivery = body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY
 
     prepared_by_id: dict[str, dict[str, Any]] = {}
@@ -522,6 +530,11 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
         validate_buflo_source_binding(prepared, run, runner_directory=run_path.parent)
         validate_tamaraw_source_binding(prepared, run)
         validate_front_source_binding(prepared, run)
+        front_marker = run.get(FRONT_FIELD)
+        native_front_v5 = isinstance(front_marker, Mapping) and front_marker.get("policy") == FRONT_LIGHT_POLICY
+        if native_front_v5 != (front_configuration_policy is not None):
+            raise ValueError("accepted FRONT V5 run differs from its prospective campaign configuration")
+        validate_front_configuration_run(run, selected_policy=front_configuration_policy)
         validate_terminal_primary_source_binding(prepared, run, runner_directory=run_path.parent,
             tamaraw_configuration_policy=tamaraw_configuration_policy)
         if complete_delivery or application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:

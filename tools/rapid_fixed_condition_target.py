@@ -16,6 +16,7 @@ def main(argv=None):
     actions=parser.add_subparsers(dest='action',required=True)
     condition=actions.add_parser('condition')
     target=actions.add_parser('target')
+    mixed_target=actions.add_parser('mixed-target')
     complete=actions.add_parser('audit-complete')
     partial=actions.add_parser('audit-partial')
     initial=actions.add_parser('initialize-progress')
@@ -28,14 +29,14 @@ def main(argv=None):
             action.add_argument('--'+name,type=Path,required=True)
             action.add_argument('--'+name+'-sha256',required=True)
     bound(condition,'configuration','run');condition.add_argument('--mode',choices=reader.MODES,required=True)
-    bound(target,'request');bound(complete,'source-binding','closures');bound(partial,'receipt')
+    bound(target,'request');bound(mixed_target,'request');bound(complete,'source-binding','closures');bound(partial,'receipt')
     bound(initial,'target','proofs');bound(append,'progress','proofs')
     append.add_argument('--target',type=Path);append.add_argument('--target-sha256')
     for p in (check,chunk,final):bound(p,'progress')
     chunk.add_argument('--classes',nargs='+',type=int,required=True)
     chunk.add_argument('--mode',choices=reader.MODES,required=True)
     chunk.add_argument('--maximum',type=int,default=16)
-    for p in (condition,target,complete,partial,initial,append,chunk,final):
+    for p in (condition,target,mixed_target,complete,partial,initial,append,chunk,final):
         p.add_argument('--output',type=Path,required=True)
     for p in (complete,partial):p.add_argument('--audit-root',type=Path,required=True)
     args=parser.parse_args(argv)
@@ -58,6 +59,13 @@ def main(argv=None):
                     {'namespace','enrollment','conditions','native_head','client_sha256','history','parent'}):
                     raise ValueError('fixed condition target request has another schema')
                 result=reader.publish_target(**request,output=args.output.absolute())
+            elif args.action=='mixed-target':
+                request=data('request')
+                required={'namespace','retained_progress','buflo_condition','implementations'}
+                if (not isinstance(request,dict) or not required <= set(request)
+                        or not set(request) <= required | {'enrollment','parent','front_condition'}):
+                    raise ValueError('mixed target request has another prospective schema')
+                result=reader._mixed_epoch().publish_target(**request,output=args.output.absolute())
             elif args.action=='audit-complete':
                 result=reader.audit_complete(source_binding=ref('source-binding'),closures=data('closures'),
                     audit_root=args.audit_root.absolute(),output=args.output.absolute())

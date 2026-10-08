@@ -499,6 +499,14 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
              or config.get("tamaraw_configuration_sha256") != configuration_sha256()
              or receipt.get("tamaraw_configuration_sha256") != configuration_sha256())):
         raise ValueError("canary plan, configuration and deep receipt changed the fixed Tamaraw condition")
+    from . import front_fixed_configuration as front
+    fixed_front = front.policy(plan)
+    if (front.policy(config) != fixed_front or front.policy(receipt) != fixed_front
+        or fixed_front is not None and (mode != "front" or plan.get("reuse") is not None
+            or "qualification_delivery_compatibility" in plan
+            or config.get("front_configuration_sha256") != front.CONFIGURATION_SHA256
+            or receipt.get("front_configuration_sha256") != front.CONFIGURATION_SHA256)):
+        raise ValueError("canary plan/configuration/deep changed its fixed FRONT V5 condition")
     if (config.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")
         or receipt.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")):
         raise ValueError("canary plan, configuration and deep receipt changed qualification delivery witness")
@@ -536,6 +544,9 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
         or graph != plan["full_graph"] or receipt.get("full_graph") != graph):
         raise ValueError("canary did not retain its whole frozen resource and origin graph")
     run = _json(_read(_child(result, samples[0]["path"] + "/neqo/run.json")))
+    if fixed_front is not None:
+        front.validate_prepared(manifest)
+        front.validate_run(run, selected_policy=fixed_front)
     response = validate_application_responses(manifest, run, body_identity_policy=body_policy)
     identity = application_response_identity_signature(manifest, response["response_signature"], body_identity_policy=body_policy)
     if (receipt.get("response_identity_sha256") != _sha(_encoded(identity))
@@ -575,6 +586,9 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
             "fresh_deep_verification_performed": False, **ZERO}
     if "application_body_identity_policy" in plan:
         facts["application_body_identity_policy"] = body_policy
+    if fixed_front is not None:
+        facts.update(front_configuration_policy=fixed_front,
+                     front_configuration_sha256=front.CONFIGURATION_SHA256)
     if fixed_tamaraw is not None:
         facts.update(tamaraw_configuration_policy=fixed_tamaraw,
                      tamaraw_configuration_sha256=configuration_sha256())

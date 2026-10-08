@@ -8,12 +8,16 @@ from typing import Any
 
 POLICY = "rapid-v5-half-period-10000us-v1"
 ACK_START_POLICY = "rapid-v5-half-period-10000us-ack-start-v2"
+CADENCE64_ACK_START_POLICY = "rapid-v7-half-period-32000us-ack-start-v1"
+CADENCE64_KERNEL_PREPARATION_POLICY = "rapid-v7-buflo-cadence64ms-kernel-preparation-cutoff-release-plus-4000us-reserve-1000us-v1"
 FIELD = "buflo_incoming_credit_release_policy"
 BUFLO_KERNEL_PREPARATION_FIELD = "buflo_kernel_preparation_policy"
 BUFLO_KERNEL_PREPARATION_POLICY = "rapid-v6-buflo-kernel-preparation-cutoff-release-plus-4000us-reserve-1000us-v1"
 TAMARAW_FIELD = "tamaraw_capture_policy"
 TAMARAW_POLICY = "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1"
 TAMARAW_CREDIT_SEMANTICS = "explicit-physical-ownership-with-pending-retry-v1"
+FRONT_LIGHT_POLICY = "rapid-v7-front-450-600-sigma1-4-incoming10000us-padding-10pct-window10000us-reserve1000us-v5"
+FRONT_LIGHT_CONFIGURATION_SHA256 = "910c4988276b74e25cfba20bcaefdaf2f7b25032e6110711145e197ddb4d6996"
 FRONT_FIELD = "front_capture_policy"
 FRONT_POLICY = "rapid-v5-front-bounded-outgoing-congestion-omission-1pct-v1"
 FRONT_PADDING_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-1pct-v2"
@@ -35,17 +39,19 @@ def validate_buflo_kernel_preparation_policy(preparation: Mapping[str, Any]) -> 
     """Opt into preparation reserve without changing physical traffic deadlines."""
     if BUFLO_KERNEL_PREPARATION_FIELD not in preparation:
         return None
+    policy = preparation[BUFLO_KERNEL_PREPARATION_FIELD]
+    incoming = CADENCE64_ACK_START_POLICY if policy == CADENCE64_KERNEL_PREPARATION_POLICY else ACK_START_POLICY
     if (type(preparation[BUFLO_KERNEL_PREPARATION_FIELD]) is not str
-        or preparation[BUFLO_KERNEL_PREPARATION_FIELD] != BUFLO_KERNEL_PREPARATION_POLICY
-        or preparation.get(FIELD) != ACK_START_POLICY
-        or validate_buflo_preparation_policy(preparation) != ACK_START_POLICY):
+        or policy not in {BUFLO_KERNEL_PREPARATION_POLICY, CADENCE64_KERNEL_PREPARATION_POLICY}
+        or preparation.get(FIELD) != incoming
+        or validate_buflo_preparation_policy(preparation) != incoming):
         raise ValueError("BuFLO kernel preparation reserve requires the explicit ACK-start rapid contract")
-    return BUFLO_KERNEL_PREPARATION_POLICY
+    return policy
 
 
 def apply_buflo_kernel_preparation_policy(manifest: Mapping[str, Any], *, policy: str) -> dict[str, Any]:
     """Derive a fresh opt-in before hashing and qualification; never rewrite evidence."""
-    if type(policy) is not str or policy != BUFLO_KERNEL_PREPARATION_POLICY:
+    if type(policy) is not str or policy not in {BUFLO_KERNEL_PREPARATION_POLICY, CADENCE64_KERNEL_PREPARATION_POLICY}:
         raise ValueError("BuFLO kernel preparation requires an explicit supported policy")
     preparation = manifest.get("preparation")
     if (not isinstance(preparation, Mapping) or BUFLO_KERNEL_PREPARATION_FIELD in preparation
@@ -67,6 +73,8 @@ def validate_buflo_kernel_preparation_marker(marker: Any) -> Mapping[str, Any]:
         "rolling_preparation_after_release_us": 4_000, "outgoing_physical_window_us": 5_000,
         "preparation_reserve_us": 1_000, "tick_zero_before_release": True,
         "allow_omissions": False, "paper_equivalent": False, "scientific_credit": False}
+    if isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_KERNEL_PREPARATION_POLICY:
+        expected.update(policy=CADENCE64_KERNEL_PREPARATION_POLICY, period_us=64_000)
     if not isinstance(marker, Mapping) or not _exact_json(marker, expected):
         raise ValueError("invalid source-bound BuFLO kernel preparation reserve marker")
     return marker
@@ -80,20 +88,24 @@ def validate_buflo_kernel_preparation_source_binding(prepared: Mapping[str, Any]
     buflo = isinstance(defense, Mapping) and defense.get("kind") == "buflo"
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    new_raw = isinstance(raw, Mapping) and raw.get("schema_version") == 12
+    new_raw = isinstance(raw, Mapping) and type(raw.get("schema_version")) is int and raw["schema_version"] in {12, 13}
     if BUFLO_KERNEL_PREPARATION_FIELD in run:
         if declared is None or not buflo:
             raise ValueError("native BuFLO preparation reserve lacks matching prepared source")
         marker = validate_buflo_kernel_preparation_marker(run[BUFLO_KERNEL_PREPARATION_FIELD])
+        prospective = declared == CADENCE64_KERNEL_PREPARATION_POLICY
+        if marker["policy"] != declared:
+            raise ValueError("Native BuFLO preparation policy differs from its prospective prepared source")
         incoming = run.get(FIELD)
-        if (not new_raw or type(wakeups.get("schema_version")) is not int or wakeups["schema_version"] != 21
+        if (not new_raw or type(wakeups.get("schema_version")) is not int or wakeups["schema_version"] != (22 if prospective else 21)
+            or raw.get("schema_version") != (13 if prospective else 12)
             or not _exact_json(raw.get("preparation_policy"), marker)
-            or not isinstance(incoming, Mapping) or incoming.get("policy") != ACK_START_POLICY
-            or buflo_incoming_release_window(run) != 10_000):
+            or not isinstance(incoming, Mapping) or incoming.get("policy") != (CADENCE64_ACK_START_POLICY if prospective else ACK_START_POLICY)
+            or buflo_incoming_release_window(run) != (32_000 if prospective else 10_000)):
             raise ValueError("BuFLO reserve run marker differs from its opted-in raw kernel receipt")
     elif declared is not None and buflo:
         raise ValueError("prepared BuFLO kernel reserve lacks its native marker")
-    elif new_raw or isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 21:
+    elif new_raw or isinstance(wakeups, Mapping) and wakeups.get("schema_version") in {21, 22}:
         raise ValueError("new BuFLO kernel reserve receipt lacks its prepared and native markers")
 
 
@@ -424,7 +436,7 @@ def validate_front_preparation_policy(preparation: Mapping[str, Any]) -> str | N
     if FRONT_FIELD not in preparation:
         return None
     value = preparation[FRONT_FIELD]
-    if (type(value) is not str or value not in {FRONT_POLICY, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY}
+    if (type(value) is not str or value not in {FRONT_POLICY, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY}
         or preparation.get("primary_document_identity_policy") != VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
         or preparation.get("application_response_policy") != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
         or preparation.get("qualified_chaff_origin_policy") != APPROVED_ORIGINS_CHAFF_POLICY):
@@ -441,19 +453,24 @@ def validate_front_capture_marker(marker: Any) -> Mapping[str, Any]:
         "packet_size": 1200, "n_client_packets": 900, "n_server_packets": 1200,
         "paper_equivalent": False, "scientific_credit": False,
     }
-    if isinstance(marker, Mapping) and marker.get("policy") in (FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY):
+    if isinstance(marker, Mapping) and marker.get("policy") in (FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY):
         expected.update(schema_version=2, policy=FRONT_PADDING_POLICY)
         del expected["outgoing_omission_reason"]
         expected["outgoing_omission_reasons"] = ["CongestionLimited", "DeadlineExpired"]
         expected["require_pure_padding"] = True
-        if marker["policy"] in (FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY):
+        if marker["policy"] in (FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY):
             expected.update(schema_version=3, policy=FRONT_WINDOW_POLICY,
                 outgoing_omission_ratio_denominator=10, outgoing_release_window_us=10000,
                 historical_outgoing_release_window_us=5000)
-            if marker["policy"] == FRONT_RESERVE_POLICY:
+            if marker["policy"] in (FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY):
                 expected.update(schema_version=4, policy=FRONT_RESERVE_POLICY,
                     outgoing_construction_window_us=9000, outgoing_preparation_reserve_us=1000,
                     expired_construction_target="not-built-not-sent")
+                if marker["policy"] == FRONT_LIGHT_POLICY:
+                    expected.update(schema_version=5, policy=FRONT_LIGHT_POLICY,
+                        n_client_packets=450, n_server_packets=600, peak_minimum_seconds=1.0,
+                        peak_maximum_seconds=4.0, control_interval_us=10000,
+                        incoming_release_window_us=10000, configuration_sha256=FRONT_LIGHT_CONFIGURATION_SHA256)
     if (not isinstance(marker, Mapping) or set(marker) != set(expected)
         or any(type(marker[key]) is not type(value) or marker[key] != value
                for key, value in expected.items())):
@@ -463,6 +480,16 @@ def validate_front_capture_marker(marker: Any) -> Mapping[str, Any]:
 
 def validate_front_capture_run(run: Mapping[str, Any]) -> Mapping[str, Any]:
     marker = validate_front_capture_marker(run.get(FRONT_FIELD))
+    if marker["policy"] == FRONT_LIGHT_POLICY:
+        from .front_fixed_configuration import POLICY as CONFIGURATION_POLICY, configuration_sha256, validate_run
+        if CONFIGURATION_POLICY != FRONT_LIGHT_POLICY or configuration_sha256() != FRONT_LIGHT_CONFIGURATION_SHA256:
+            raise ValueError("FRONT V5 configuration authority differs from its exact registered bytes")
+        validate_run(run, selected_policy=CONFIGURATION_POLICY)
+        if (run.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
+            or run.get("application_response_policy") != "completed-terminal-http-errors-v1"
+            or run.get("defense_parameters") is not None):
+            raise ValueError("FRONT V5 capture differs from its complete source-bound configuration")
+        return marker
     resolved = run.get("resolved_configuration")
     defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
     expected = {"kind": "front", "n_client_packets": 900, "n_server_packets": 1200,
@@ -571,10 +598,12 @@ def _startup_present(run: Mapping[str, Any]) -> bool:
             or isinstance(diagnostics, Mapping) and "buflo_incoming_startup" in diagnostics)
 
 
-def validate_buflo_startup_receipt(value: Any, *, require_armed: bool = True) -> Mapping[str, Any]:
+def validate_buflo_startup_receipt(value: Any, *, require_armed: bool = True, period_us: int = 20_000) -> Mapping[str, Any]:
     """Validate the actual DTO, including an honest unarmed failure snapshot."""
+    if type(period_us) is not int or period_us not in {20_000, 64_000}:
+        raise ValueError("unsupported source-bound BuFLO startup cadence")
     fixed = {"schema_version": 1, "policy": STARTUP_POLICY, "time_basis": STARTUP_TIME_BASIS,
-             "period_us": 20_000, "packet_size_bytes": 1_200}
+             "period_us": period_us, "packet_size_bytes": 1_200}
     keys = {*fixed, "armed", "startup_suppressed_opportunities", *_STARTUP_NULLABLE}
     if (not isinstance(value, Mapping) or set(value) != keys
         or any(type(value[key]) is not type(expected) or value[key] != expected
@@ -590,9 +619,9 @@ def validate_buflo_startup_receipt(value: Any, *, require_armed: bool = True) ->
         or value["ready_resource_id"] == 0 or value["request_stream_final_size"] == 0
         or value["eligible_exact_capacity_bytes"] < 1_200
         or value["ready_at_us"] < value["ack_observed_at_us"]
-        or value["armed_at_us"] != (value["ready_at_us"] // 20_000 + 1) * 20_000
+        or value["armed_at_us"] != (value["ready_at_us"] // period_us + 1) * period_us
         or value["armed_at_us"] > _U64_MAX
-        or value["startup_suppressed_opportunities"] != value["armed_at_us"] // 20_000):
+        or value["startup_suppressed_opportunities"] != value["armed_at_us"] // period_us):
         raise ValueError("BuFLO incoming startup violates its ACK, capacity or strict cadence barrier")
     return value
 
@@ -601,26 +630,29 @@ def validate_buflo_preparation_policy(preparation: Mapping[str, Any]) -> str | N
     if FIELD not in preparation:
         return None
     policy = preparation[FIELD]
-    if (not isinstance(policy, str) or policy not in {POLICY, ACK_START_POLICY}
+    if (not isinstance(policy, str) or policy not in {POLICY, ACK_START_POLICY, CADENCE64_ACK_START_POLICY}
         or preparation.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
         or preparation.get("application_response_policy") != "completed-terminal-http-errors-v1"
-        or policy == ACK_START_POLICY
+        or policy in {ACK_START_POLICY, CADENCE64_ACK_START_POLICY}
         and preparation.get("qualified_chaff_origin_policy") != "prepared-approved-origins-v1"):
         raise ValueError("BufLO incoming release policy requires the explicit rapid preparation contract")
+    if policy == CADENCE64_ACK_START_POLICY and preparation.get(BUFLO_KERNEL_PREPARATION_FIELD) != CADENCE64_KERNEL_PREPARATION_POLICY:
+        raise ValueError("prospective 64ms BuFLO requires its exact preparation reserve")
     return policy
 
 
 def incoming_release_window_from_policy(marker: Any) -> int:
     policy = marker.get("policy") if isinstance(marker, Mapping) else None
+    period_us = 64_000 if policy == CADENCE64_ACK_START_POLICY else 20_000
     expected = {"schema_version": 1, "source": "bound-preparation-v1", "policy": policy,
-                "incoming_release_window_us": 10_000, "period_us": 20_000,
+                "incoming_release_window_us": period_us // 2, "period_us": period_us,
                 "cell_bytes": 1_200, "scientific_credit": False}
-    if (not isinstance(policy, str) or policy not in {POLICY, ACK_START_POLICY}
+    if (not isinstance(policy, str) or policy not in {POLICY, ACK_START_POLICY, CADENCE64_ACK_START_POLICY}
         or not isinstance(marker, Mapping) or set(marker) != set(expected)
         or any(type(marker[key]) is not type(value) or marker[key] != value
                for key, value in expected.items())):
         raise ValueError("invalid BufLO incoming release policy receipt")
-    return 10_000
+    return period_us // 2
 
 
 def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
@@ -638,13 +670,35 @@ def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
         or run.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
         or run.get("application_response_policy") != "completed-terminal-http-errors-v1"):
         raise ValueError("BufLO incoming release policy is outside its native rapid contract")
-    if run[FIELD]["policy"] == ACK_START_POLICY:
+    if run[FIELD]["policy"] in {ACK_START_POLICY, CADENCE64_ACK_START_POLICY}:
         if (not isinstance(resolved, Mapping) or resolved_kind != "buflo"
             or type(resolved.get("control_interval_us")) is not int
             or resolved["control_interval_us"] != 5_000):
             raise ValueError("BuFLO ACK-start policy changes the fixed outgoing deadline")
+        prospective = run[FIELD]["policy"] == CADENCE64_ACK_START_POLICY
+        if prospective:
+            from .buflo_duration_budget import CADENCE64_RECEIPT, CADENCE64_PARAMETER_SHA256, RUN_FIELD, validate_receipt
+            validate_receipt(parameters.get(RUN_FIELD))
+            wakeups = run.get("runner_wakeup_metrics")
+            raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+            marker = validate_buflo_kernel_preparation_marker(run.get(BUFLO_KERNEL_PREPARATION_FIELD))
+            if (not _exact_json(parameters[RUN_FIELD], CADENCE64_RECEIPT)
+                or run.get("method") != "GET"
+                or parameters.get("sha256") != CADENCE64_PARAMETER_SHA256
+                or not isinstance(parameters.get("path"), str) or not parameters["path"]
+                or defense.get("parameters") != parameters["path"]
+                or parameters.get("implementation_scope") != "client_only_quic"
+                or parameters.get("paper_equivalent") is not False
+                or marker["policy"] != CADENCE64_KERNEL_PREPARATION_POLICY
+                or not isinstance(raw, Mapping) or type(raw.get("schema_version")) is not int
+                or raw["schema_version"] != 13
+                or not isinstance(wakeups, Mapping) or type(wakeups.get("schema_version")) is not int
+                or wakeups["schema_version"] != 22
+                or not _exact_json(raw.get("preparation_policy"), marker)):
+                raise ValueError("64ms BuFLO lacks matching Native parameters, preparation and13/22 receipts")
         summary = run.get("buflo_summary")
-        validate_buflo_startup_receipt(summary.get("incoming_startup") if isinstance(summary, Mapping) else None)
+        validate_buflo_startup_receipt(summary.get("incoming_startup") if isinstance(summary, Mapping) else None,
+            period_us=64_000 if prospective else 20_000)
     elif _startup_present(run):
         raise ValueError("BuFLO incoming startup lacks its V2 policy")
     return window
@@ -667,7 +721,7 @@ def validate_buflo_source_binding(prepared: Mapping[str, Any], run: Mapping[str,
         buflo_incoming_release_window(run)
         if run[FIELD]["policy"] != policy:
             raise ValueError("native BufLO incoming release policy differs from its prepared source opt-in")
-        if policy == ACK_START_POLICY:
+        if policy in {ACK_START_POLICY, CADENCE64_ACK_START_POLICY}:
             validate_buflo_startup_evidence(run, runner_directory=runner_directory, prepared=prepared)
     elif FIELD in run:
         raise ValueError("native BufLO incoming release policy lacks matching prepared source opt-in")
@@ -693,9 +747,9 @@ def _regular_child(directory: Path, name: str) -> Path:
     return path
 
 
-def validate_buflo_startup_schedule(startup: Mapping[str, Any], rows: list[Mapping[str, Any]]) -> None:
+def validate_buflo_startup_schedule(startup: Mapping[str, Any], rows: list[Mapping[str, Any]], *, period_us: int = 20_000) -> None:
     """Reopen the actual target sets; suppressed startup opportunities have no rows."""
-    validate_buflo_startup_receipt(startup)
+    validate_buflo_startup_receipt(startup, period_us=period_us)
     targets: dict[str, list[int]] = {"outgoing": [], "incoming": []}
     for row in rows:
         direction = row.get("direction")
@@ -705,7 +759,7 @@ def validate_buflo_startup_schedule(startup: Mapping[str, Any], rows: list[Mappi
     for direction, first in (("outgoing", 0), ("incoming", startup["armed_at_us"])):
         ordered = sorted(targets[direction])
         if (not ordered or ordered[0] != first
-            or any(current - previous != 20_000
+            or any(current - previous != period_us
                    for previous, current in zip(ordered, ordered[1:]))):
             raise ValueError("BuFLO startup schedule violates its actual first tick or active cadence")
     if (len(targets["outgoing"]) - len(targets["incoming"]) != startup["startup_suppressed_opportunities"]
@@ -718,7 +772,7 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
                                   schedule_rows: list[Mapping[str, Any]] | None = None) -> Mapping[str, Any]:
     """Re-derive terminal ACK coverage from paired production/reduction records."""
     marker = run.get(FIELD)
-    if not isinstance(marker, Mapping) or marker.get("policy") != ACK_START_POLICY:
+    if not isinstance(marker, Mapping) or marker.get("policy") not in {ACK_START_POLICY, CADENCE64_ACK_START_POLICY}:
         raise ValueError("BuFLO startup evidence requires its source-bound V2 marker")
     buflo_incoming_release_window(run)
     startup = run["buflo_summary"]["incoming_startup"]
@@ -846,5 +900,6 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
     if schedule_rows is None:
         with _regular_child(Path(runner_directory), "schedule.csv").open(newline="", encoding="utf-8") as source:
             schedule_rows = list(csv.DictReader(source))
-    validate_buflo_startup_schedule(startup, schedule_rows)
+    validate_buflo_startup_schedule(startup, schedule_rows,
+        period_us=64_000 if marker["policy"] == CADENCE64_ACK_START_POLICY else 20_000)
     return startup

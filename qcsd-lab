@@ -5687,6 +5687,73 @@ for key,value in sorted(environment.items()):
     print(key+"\t"+base64.b64encode(value.encode()).decode())
 '
 }
+parallel_inspect_worker() {
+  local role="${1:-}" index="${2:-}" cid="${3:-}"
+  local attempt status observation presence reason
+  local _qcsd_api_phase=cleanup-inspect
+  local _qcsd_parallel_inspect_role="${role}"
+  if (( $# != 3 )) || [[ "${role}" != worker && "${role}" != peer ]] ||
+     [[ "${index}" != 0 && "${index}" != 1 ]] ||
+     [[ ! "${cid}" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'qcsd-parallel-inspect-refused reason=invalid-request\n' >&2 || true
+    return 2
+  fi
+  # Only failed read-only observations are retryable. Each service retains its
+  # ordinary three-second bound; no mutation, terminal result or peer is guessed.
+  for (( attempt = 1; attempt <= 2; attempt++ )); do
+    if observation="$(_qcsd_docker_api container inspect "${cid}")"; then
+      if ! builtin printf '%s' "${observation}" | /usr/bin/python3 -I -c '
+import json,sys
+try:
+    rows=json.load(sys.stdin)
+    if not isinstance(rows,list) or len(rows)!=1 or not isinstance(rows[0],dict):
+        raise ValueError()
+    row=rows[0]; state=row.get("State")
+    if (row.get("Id")!=sys.argv[1] or not isinstance(state,dict)
+        or type(state.get("Running")) is not bool
+        or type(state.get("ExitCode")) is not int
+        or not 0<=state["ExitCode"]<=255):
+        raise ValueError()
+except (ValueError,TypeError,KeyError):
+    raise SystemExit(2)
+' "${cid}"; then
+        printf 'qcsd-parallel-inspect-refused phase=%s worker_index=%s attempt=%d/2 reason=malformed-success\n' \
+          "${role}" "${index}" "${attempt}" >&2 || true
+        return 2
+      fi
+      if (( attempt > 1 )); then
+        printf 'qcsd-parallel-inspect-recovered phase=%s worker_index=%s attempt=%d/2\n' \
+          "${role}" "${index}" "${attempt}" >&2 || true
+      fi
+      builtin printf '%s' "${observation}"
+      return 0
+    else
+      status=$?
+    fi
+    # Record the first failure before waiting for the fresh bounded observation.
+    printf 'qcsd-parallel-inspect-failure phase=%s worker_index=%s attempt=%d/2 status=%d\n' \
+      "${role}" "${index}" "${attempt}" "${status}" >&2 || true
+    case "${status}" in
+      1|124) (( attempt < 2 )) && continue ;;
+      *) return "${status}" ;;
+    esac
+    break
+  done
+  # A failed inspect is not an absence proof. The detailed, authenticated list
+  # query separates actual absence from unavailable or contradictory API data.
+  if ! presence="$(_qcsd_docker_exact_id_presence_detailed "${cid}")"; then
+    presence=unknown
+  fi
+  case "${presence}" in
+    absent) reason=missing-actor ;;
+    present|unknown) reason=api-unavailable ;;
+    ambiguous) reason=ambiguous-identity ;;
+    *) presence=unknown; reason=api-unavailable ;;
+  esac
+  printf 'qcsd-parallel-inspect-refused phase=%s worker_index=%s status=%d presence=%s reason=%s\n' \
+    "${role}" "${index}" "${status}" "${presence}" "${reason}" >&2 || true
+  return "${status}"
+}
 if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run" ]]; then
   if (( $# != 3 )); then
     echo "${1} requires AUTHORITY.json and a fresh operator output root" >&2
@@ -11796,7 +11863,7 @@ put(root/"actual-launch.json",dict(workers=workers,sidecars=sidecars,lane_resour
     for parallel_index in 0 1; do
       (( ! parallel_retired[parallel_index] )) || continue
       parallel_worker_id="${parallel_worker_ids[parallel_index]}"
-      parallel_state="$(_qcsd_docker_api container inspect "${parallel_worker_id}")"
+      parallel_state="$(parallel_inspect_worker worker "${parallel_index}" "${parallel_worker_id}")" || exit $?
       parallel_exit_code="$(builtin printf '%s' "${parallel_state}" | /usr/bin/python3 -I -c '
 import json,sys
 x=json.load(sys.stdin)[0]
@@ -11807,7 +11874,7 @@ print("running" if x["State"]["Running"] else x["State"]["ExitCode"])
       (set -C; _qcsd_docker_api logs "${parallel_worker_id}" \
         >"${parallel_lane}/worker.stdout" 2>"${parallel_lane}/worker.stderr")
       if (( ! parallel_retired[1-parallel_index] )); then
-        parallel_peer_state="$(_qcsd_docker_api container inspect "${parallel_worker_ids[1-parallel_index]}")"
+        parallel_peer_state="$(parallel_inspect_worker peer "$((1-parallel_index))" "${parallel_worker_ids[1-parallel_index]}")" || exit $?
       else
         parallel_peer_state="null"
       fi

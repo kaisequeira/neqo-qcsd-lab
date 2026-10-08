@@ -212,8 +212,22 @@ def test_exact_held_native_policy_and_receipt_oracle():
     native = Path(os.environ["QCSD_DURATION_NATIVE_SOURCE"])
     runner = native / "neqo-bin/src/qcsd/mod.rs"
     config = native / "neqo-csdef/src/config.rs"
-    assert hashlib.sha256(runner.read_bytes()).hexdigest() == "60d8b59f85818d5e40c70e5d3c539253cd2b3180dc14002ad667a756ecb24f53"
-    assert hashlib.sha256(config.read_bytes()).hexdigest() == "f58b9d46f28057aafd406f6b641464a17c4539b011c7a1ddfa497f425a466c95"
+    # Keep the original held source pair and the published Native818 pair as
+    # distinct finite oracles. Both must retain the same legacy 20 ms policy.
+    actual_pair = (
+        hashlib.sha256(runner.read_bytes()).hexdigest(),
+        hashlib.sha256(config.read_bytes()).hexdigest(),
+    )
+    assert actual_pair in {
+        (
+            "60d8b59f85818d5e40c70e5d3c539253cd2b3180dc14002ad667a756ecb24f53",
+            "f58b9d46f28057aafd406f6b641464a17c4539b011c7a1ddfa497f425a466c95",
+        ),
+        (
+            "45d6f09bbeb33e9c77c787944e22cb77fc1c43e4785c30115ec740f85b63759f",
+            "e60c25ec771fa3385ba5c67a2b2349d4bf839c83a5a16deec203ae7a7f1586af",
+        ),
+    }
     source = runner.read_text(); start = source.index("fn buflo_duration_budget_evidence(")
     function = source[start:source.index("\n#[derive", start)]
     for field in ("interval_us", "minimum_duration_us", "packet_size", "max_events"):

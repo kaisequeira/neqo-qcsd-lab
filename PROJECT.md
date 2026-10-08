@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **7 October 2026, Australia/Sydney (AEDT, UTC+11)**.
+Checkpoint: **8 October 2026, Australia/Sydney (AEDT, UTC+11)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -49,7 +49,69 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest verified checkpoint: 7 October, Source46
+### Latest verified checkpoint: 8 October, F264 and prospective Source65
+
+**35 classes are enrolled, with 264/16,000 accepted formal traces, all
+ordinary.** The original F264 progress receipt is unchanged. All 50 eligible
+sites, all five settings and 64 independently verified visits per site and
+setting remain required. Complete resource graphs, historical conditions and
+failed attempts retain their original evidence and labels.
+
+Published Lab Source64 `6bec96a3…` is the external reader. The ordinary
+measurement release remains Source58 `cd1793a6…`, Native `818d8939…` and
+client `2c9f170e…`. A source binding records the measurement checkout,
+installed runtime, image and client separately from the reader's source.
+Source65's authoring reader passed a fresh check of the original 264 rows;
+that check added no credit and does not establish an installed Source65
+runtime. The [evidence index](docs/EVIDENCE-INDEX.md#fixed-five-target-f264-and-prospective-source65-engineering-8-october-2026)
+records the exact identities and receipts.
+
+The clean Native successor `d2c4ec0e…` is frozen for prospective BuFLO64
+and FRONT V5 engineering. BuFLO64 declares a 64 ms cadence, a 32 ms incoming
+service window, and the existing 5 ms outgoing window with 4 ms preparation.
+Its 10,000-event budget permits at most 640 seconds, with timeout/capture
+limits of 680/740 seconds; this is a maximum, not an observed average.
+FRONT V5 declares client/server counts of 450/600, peaks of 1–4 seconds,
+10 ms incoming/control and outgoing windows, 9 ms construction and 1 ms
+reserve, and at most 10% pure-padding omissions. These prospective client
+adaptations do not establish paper-equivalent behaviour or add formal rows.
+
+Fourteen compiled Native test filters recorded 50 passing test invocations;
+the filters may overlap. Nightly formatting checks passed for the four
+changed Rust files. The whole-workspace formatting check failed on untouched
+baseline files, so no full-workspace CI pass is claimed. The new client,
+images and affected-mode canaries remain pending.
+
+Four focused source-fence memo controls passed. The broader Lab plumbing
+checks passed 177 tests with one skipped, and the four new-mode modules
+passed all 135 cases. The historical-reader fixture
+corrections passed three focused cases and the owned-shape control passed.
+Earlier passing prefixes and failed checks remain recorded. The updated
+container monitor passed 42 checks, including transient worker and peer
+inspection failures; each inspection keeps its three-second bound and permits
+one retry. All 155 local documentation links resolve to tracked Lab or Native
+files. Release qualification requires a clean Lab consumer to pass a fresh
+check of the original F264 receipt before publication.
+
+The ordinary flight planned 160 traces for classes 12–16 on the retained
+Source58/Native818 runtime. Its condition, profile, two plans, readers,
+runtime/source binding, Source64 consumer readiness, preparation (75.52
+seconds) and authority checks passed. Launch failed after 1,868.90 seconds
+at 01:38:23 UTC. The preserved worker checkpoints each show 32 local accepts,
+so 64 recordings remain unverified and uncredited. Euronews returned HTTP
+406 for three resources in its complete 116-resource graph; Flashscore
+Mexico returned HTTP 404 for twelve build assets in its complete 233-resource
+graph. No graph or failed attempt was pruned. Missing retirement evidence
+also prevented closure. Original-owner lifecycle recovery passed and found
+no remaining actors. The current strict partial reader cannot credit this
+flight layout; checkpoint states and evidence remain unchanged.
+
+The closed browser batch retains complete Dropbox (137 resources, six
+origins) and Ameblo (69 resources, 13 origins) graphs and three genuine
+failures. Dropbox's installed prebirth check passed; its full HTTP/3 GET is
+running. No new site admission or formal credit is claimed.
+
+### Earlier verified checkpoint: 7 October, Source46
 
 **35 classes are enrolled.** The current repaired fixed target `166b20f3…`
 has **8/16,000 accepted formal traces**, all ordinary. The broader joined

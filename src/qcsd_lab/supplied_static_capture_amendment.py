@@ -31,7 +31,7 @@ ORIGINAL_POLICIES = {capture.FIELD: capture.ACK_START_POLICY,
     capture.FRONT_FIELD: capture.FRONT_WINDOW_POLICY,
     capture.TERMINAL_PRIMARY_FIELD: capture.TERMINAL_PRIMARY_POLICY}
 SOURCE_FILES = {name: "src/qcsd_lab/" + name + ".py" for name in (
-    "supplied_static_capture_amendment", "manifest", "application_response_policy",
+    "supplied_static_capture_amendment", "manifest", "application_response_policy", "front_fixed_configuration",
     "capture_acceptance_policy", "fidelity", "kernel_tx", "capture_session",
     "experiment", "buflo_handoff", "front_preparation_evidence", "static_evidence_transport")}
 DURATION_SOURCE_FILES = {name: "src/qcsd_lab/" + name + ".py" for name in (
@@ -46,19 +46,43 @@ ROW_FIELDS = {"candidate_id", "workload_id", "original_terminal", "original_mani
     "original_get_proof", "original_capture_policies", "resource_records_sha256", "capture_manifest_path"}
 
 
+CADENCE64_ROLE = "supplied-static-complete-get-amended-buflo-cadence64-budget640-preparation-v1"
+CADENCE64_CONTRACT = "unchanged-admitted-static-get-and-graph-with-explicit-fixed-buflo-cadence64-budget640-policy-v1"
+
+
+def capture_role(duration: str | None) -> str:
+    selected = traffic.policy(duration)
+    return CADENCE64_ROLE if selected == traffic.budget.CADENCE64_POLICY else DURATION_ROLE if selected else ROLE
+
+
+def capture_contract(duration: str | None) -> str:
+    selected = traffic.policy(duration)
+    return CADENCE64_CONTRACT if selected == traffic.budget.CADENCE64_POLICY else DURATION_CONTRACT if selected else CONTRACT
+
+
 def is_amended(value: Any) -> bool:
     from .static_budget_capture_amendment import is_amended as is_budget_amended
     from .whole_graph_capture_amendment import is_amended as is_whole_amended
     from .selected_capture_amendment import is_amended as is_selected_amended
     from .per_class_selected_capture_amendment import is_amended as is_per_class_amended
-    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE} or is_whole_amended(value) or is_budget_amended(value) or is_selected_amended(value) or is_per_class_amended(value)
+    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE, CADENCE64_ROLE} or is_whole_amended(value) or is_budget_amended(value) or is_selected_amended(value) or is_per_class_amended(value)
 
 
-def policies(*, front_policy: str | None = None, buflo_policy: str | None = None) -> dict[str, str]:
+def policies(*, front_policy: str | None = None, buflo_policy: str | None = None,
+             buflo_duration_policy: str | None = None) -> dict[str, str]:
+    duration = traffic.policy(buflo_duration_policy)
+    if duration == traffic.budget.CADENCE64_POLICY:
+        if (front_policy is not None or type(buflo_policy) is not str
+            or buflo_policy != capture.CADENCE64_KERNEL_PREPARATION_POLICY):
+            raise ValueError("64 ms BuFLO amendment requires only its paired incoming/preparation policies")
+        return {capture.BUFLO_KERNEL_PREPARATION_FIELD: buflo_policy,
+                capture.FIELD: capture.CADENCE64_ACK_START_POLICY}
     selected = {}
     if front_policy is not None:
-        if type(front_policy) is not str or front_policy != capture.FRONT_RESERVE_POLICY:
+        if type(front_policy) is not str or front_policy not in {capture.FRONT_RESERVE_POLICY, capture.FRONT_LIGHT_POLICY}:
             raise ValueError("static FRONT amendment requires the explicit V4 reserve policy")
+        if front_policy == capture.FRONT_LIGHT_POLICY and buflo_policy is not None:
+            raise ValueError("FRONT V5 amendment requires only its prospective FRONT setting")
         selected[capture.FRONT_FIELD] = front_policy
     if buflo_policy is not None:
         if type(buflo_policy) is not str or buflo_policy != capture.BUFLO_KERNEL_PREPARATION_POLICY:
@@ -69,7 +93,13 @@ def policies(*, front_policy: str | None = None, buflo_policy: str | None = None
     return selected
 
 
-def _policies(value: Any) -> dict[str, str]:
+def _policies(value: Any, *, buflo_duration_policy: str | None = None) -> dict[str, str]:
+    if traffic.policy(buflo_duration_policy) == traffic.budget.CADENCE64_POLICY:
+        expected = policies(buflo_policy=capture.CADENCE64_KERNEL_PREPARATION_POLICY,
+                            buflo_duration_policy=buflo_duration_policy)
+        if not isinstance(value, dict) or graph.canonical_bytes(value) != graph.canonical_bytes(expected):
+            raise ValueError("64 ms BuFLO amendment changed its exact paired policies")
+        return expected
     if not isinstance(value, dict) or not set(value) <= {capture.FRONT_FIELD, capture.BUFLO_KERNEL_PREPARATION_FIELD}:
         raise ValueError("static capture amendment changes unapproved policy fields")
     expected = policies(front_policy=value.get(capture.FRONT_FIELD),
@@ -131,7 +161,7 @@ def _derived(original: Mapping[str, Any], declaration_ref: Mapping[str, str], se
     if not preparation.is_static(original.get("preparation")):
         raise ValueError("static capture amendment needs its original complete GET preparation")
     value = deepcopy(dict(original))
-    value["preparation"].update(data_role=DURATION_ROLE if traffic.policy(duration_policy) is not None else ROLE,
+    value["preparation"].update(data_role=capture_role(duration_policy),
                                 **{FIELD: dict(declaration_ref)}, **dict(selected))
     capture.validate_front_preparation_policy(value["preparation"])
     capture.validate_buflo_kernel_preparation_policy(value["preparation"])
@@ -161,10 +191,10 @@ def _declaration(path: Path, *, enrollment: Path | None = None, runtime: Mapping
         if duration_policy is None:
             raise ValueError("static duration amendment requires its explicit fixed policy")
     rolling._keys(value, fields, "static capture declaration")
-    selected = _policies(value["policies"])
-    if (value["contract"] != (DURATION_CONTRACT if duration_policy else CONTRACT)
+    selected = _policies(value["policies"], buflo_duration_policy=duration_policy)
+    if (value["contract"] != (capture_contract(duration_policy))
         or value["original_data_role"] != preparation.ROLE
-        or value["capture_data_role"] != (DURATION_ROLE if duration_policy else ROLE)
+        or value["capture_data_role"] != (capture_role(duration_policy))
         or value["modes"] != _modes(selected) or duration_policy and value["modes"] != ["buflo"]
         or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
         or value["scientific_credit"] is not False):
@@ -263,7 +293,8 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
         from .whole_graph_capture_amendment import publish_amendment as publish_whole_amendment
         return publish_whole_amendment(enrollment, runtime, output, front_policy=front_policy,
             buflo_policy=buflo_policy, buflo_duration_policy=buflo_duration_policy)
-    selected = policies(front_policy=front_policy, buflo_policy=buflo_policy)
+    selected = policies(front_policy=front_policy, buflo_policy=buflo_policy,
+                        buflo_duration_policy=buflo_duration_policy)
     duration_policy = traffic.policy(buflo_duration_policy)
     if duration_policy and _modes(selected) != ["buflo"]:
         raise ValueError("fixed BuFLO200 amendment authorizes only its separately ready BuFLO setting")
@@ -278,8 +309,8 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
     rows = _rows(enrollment, runtime, batch, classes)
     if any(Path(row["capture_manifest_path"]).exists() or Path(row["capture_manifest_path"]).is_symlink() for row in rows):
         raise ValueError("static capture amendment never overwrites an original or previous capture workload")
-    payload = {"contract": DURATION_CONTRACT if duration_policy else CONTRACT,
-        "original_data_role": preparation.ROLE, "capture_data_role": DURATION_ROLE if duration_policy else ROLE,
+    payload = {"contract": capture_contract(duration_policy),
+        "original_data_role": preparation.ROLE, "capture_data_role": capture_role(duration_policy),
         "policies": selected, "modes": _modes(selected), "enrollment": rolling._ref(enrollment),
         "admission_provenance": rolling._ref(Path(batch["admission_root"]) / "provenance.json"),
         "runtime": dict(runtime), "runtime_artifacts": {key: rolling._ref(Path(runtime[key])) for key in

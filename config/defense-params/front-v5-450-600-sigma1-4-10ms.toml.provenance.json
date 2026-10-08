@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "artifact_type": "qcsd-prospective-front-fixed-configuration-provenance-v1",
+  "policy": "rapid-v7-front-450-600-sigma1-4-incoming10000us-padding-10pct-window10000us-reserve1000us-v5",
+  "configuration": {
+    "path": "front-v5-450-600-sigma1-4-10ms.toml",
+    "sha256": "910c4988276b74e25cfba20bcaefdaf2f7b25032e6110711145e197ddb4d6996"
+  },
+  "resolved_configuration": {
+    "schema_version": 2,
+    "control_interval_us": 10000,
+    "initial_max_stream_data": 16,
+    "automatic_receive_window": 1048576,
+    "max_chaff_streams": 5,
+    "low_watermark": 1000000,
+    "use_empty_resources": false,
+    "max_stream_data_excess": 1000,
+    "max_udp_payload_size": 1200,
+    "drop_unsatisfied_events": false,
+    "keep_alive_lead_time_us": 100000,
+    "tail_wait_us": 0,
+    "defense": {
+      "kind": "front",
+      "n_client_packets": 450,
+      "n_server_packets": 600,
+      "packet_size": 1200,
+      "peak_minimum_seconds": 1,
+      "peak_maximum_seconds": 4
+    }
+  },
+  "schedule_sampling": "unchanged-SplitMix64-uniform-positive-count-and-Rayleigh-inverse-sigma-v1",
+  "implementation_scope": "client_only_quic",
+  "paper_equivalent": false,
+  "scientific_credit": false,
+  "resource_graph_policy": "preserve-all-original-occurrences-dependencies-headers-origins-and-complete-tail-v1",
+  "application_body_identity_policy": "complete-current-application-delivery-v1",
+  "outgoing_omission_ratio": {
+    "numerator": 1,
+    "denominator": 10,
+    "rounding": "exact-cross-multiplication-no-minimum-one"
+  },
+  "outgoing_physical_window_us": 10000,
+  "outgoing_construction_window_us": 9000,
+  "outgoing_preparation_reserve_us": 1000,
+  "incoming_release_window_us": 10000
+}

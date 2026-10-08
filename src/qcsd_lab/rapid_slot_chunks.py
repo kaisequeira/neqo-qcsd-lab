@@ -421,6 +421,8 @@ def render(lane: ChunkLane, sites: Sequence[legacy.Site], **options) -> bytes:
     checked_lane(asdict(lane))
     if lane.mode != "tamaraw" and "tamaraw_configuration_policy" in options:
         options = {**options, "tamaraw_configuration_policy": None}
+    if lane.mode != "front" and "front_configuration_policy" in options:
+        options = {**options, "front_configuration_policy": None}
     selected = tuple(site for workload in lane.workload_ids for site in sites if site.workload_id == workload)
     if len(selected) != len(lane.workload_ids):
         raise ValueError("chunk campaign changed its complete selected workload graph")
@@ -443,6 +445,7 @@ def _render_options(value: Mapping[str, Any]) -> dict[str, Any]:
             "buflo_duration_policy": value.get("buflo_duration_policy"),
             "application_body_identity_policy": value.get("application_body_identity_policy"),
             "tamaraw_configuration_policy": value.get("tamaraw_configuration_policy"),
+            "front_configuration_policy": value.get("front_configuration_policy"),
             "qualification_delivery_compatibility": value.get("qualification_delivery_compatibility")}
 
 

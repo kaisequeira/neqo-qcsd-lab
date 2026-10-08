@@ -785,13 +785,17 @@ def _runner_kernel_tx_requirement(
     wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
     schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
     if required and not isinstance(raw, Mapping):
         raise ValueError("kernel-TX BuFLO handoff sample has no raw runner receipt")
     if required and not _runner_wakeup_metrics_valid(wakeups):
         raise ValueError("kernel-TX BuFLO handoff runner-wakeup/raw schema pairing is invalid")
     if not required and raw is not None:
         raise ValueError("non-kernel handoff sample carries a raw kernel-TX receipt")
+    if schema == 22:
+        from .kernel_tx import kernel_tx_incoming_window_bound_to_run_valid
+        if not required or not kernel_tx_incoming_window_bound_to_run_valid(run):
+            raise ValueError("prospective BuFLO handoff lacks its exact64ms Native policy/parameter binding")
     return required, raw if isinstance(raw, Mapping) else None
 
 
@@ -1602,7 +1606,11 @@ def _direction_algorithm_metrics(
     *,
     direction: str,
     runtime_kind: str,
+    buflo_period_us: int = 20_000,
 ) -> dict[str, Any]:
+    if (type(buflo_period_us) is not int or buflo_period_us not in {20_000, 64_000}
+        or runtime_kind != "buflo" and buflo_period_us != 20_000):
+        raise ValueError("unsupported bound BuFLO diagnostic cadence")
     selected = [row for row in rows if row["direction"] == direction]
     credit_delays: list[int] = []
     credit_consumption_delays: list[int] = []
@@ -1656,7 +1664,7 @@ def _direction_algorithm_metrics(
     deltas = [current - previous for previous, current in zip(targets, targets[1:])]
     nominal_intervals: list[int] = []
     if runtime_kind == "buflo":
-        nominal_intervals = [20_000 for _ in deltas]
+        nominal_intervals = [buflo_period_us for _ in deltas]
     elif runtime_kind == "cs_buflo":
         nominal_intervals = [_nearest_cs_interval(delta) for delta in deltas]
     jitter = [delta - nominal for delta, nominal in zip(deltas, nominal_intervals, strict=True)]
@@ -2238,6 +2246,32 @@ def _buflo_stop_drain_ledger(
     return evidence
 
 
+def _buflo_diagnostic_period_us(run: Mapping[str, Any], *, runtime_kind: str) -> int:
+    from .buflo_duration_budget import CADENCE64_RECEIPT, CADENCE64_PARAMETER_SHA256, RUN_FIELD
+    from .capture_acceptance_policy import CADENCE64_ACK_START_POLICY, FIELD
+    wakeups = run.get("runner_wakeup_metrics")
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    parameter = run.get("defense_parameters")
+    marker = run.get(FIELD)
+    prospective = (
+        isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22
+        or isinstance(raw, Mapping) and raw.get("schema_version") == 13
+        or isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_ACK_START_POLICY
+        or isinstance(parameter, Mapping) and isinstance(parameter.get(RUN_FIELD), Mapping)
+        and parameter[RUN_FIELD].get("policy") == CADENCE64_RECEIPT["policy"]
+    )
+    if not prospective:
+        return 20_000
+    required, _ = _runner_kernel_tx_requirement(run, runtime_kind=runtime_kind)
+    if (not required or not isinstance(wakeups, Mapping) or wakeups.get("schema_version") != 22
+        or run.get("method") != "GET" or not isinstance(parameter, Mapping)
+        or parameter.get("sha256") != CADENCE64_PARAMETER_SHA256
+        or not isinstance(parameter.get(RUN_FIELD), Mapping)
+        or parameter[RUN_FIELD] != CADENCE64_RECEIPT):
+        raise ValueError("64ms diagnostics lack exact declared Native parameter and receipt identity")
+    return 64_000
+
+
 def _algorithm_diagnostics(
     run: Any,
     *,
@@ -2254,6 +2288,7 @@ def _algorithm_diagnostics(
     require_current_trace = require_latest_cs if runtime_kind == "cs_buflo" else require_current
     if not isinstance(run, Mapping):
         raise ValueError("study handoff runner receipt is invalid")
+    buflo_period_us = _buflo_diagnostic_period_us(run, runtime_kind=runtime_kind)
     schedule_rows = _read_extended_runner_csv(
         schedule_path,
         SCHEDULE_PREFIX_FIELDS,
@@ -2622,7 +2657,9 @@ def _algorithm_diagnostics(
                 and summary.get("terminal_schedule_stop_policy") != BUFLO_SCHEDULE_STOP_POLICY
             )
             or summary.get("diagnostics") != diagnostics
-            or not buflo_terminal_diagnostics_valid(diagnostics, require_current=stop_drain_current)
+            or not buflo_terminal_diagnostics_valid(diagnostics, require_current=stop_drain_current,
+                incoming_startup=summary.get("incoming_startup") if buflo_period_us == 64_000 else None,
+                buflo_period_us=buflo_period_us)
             or receipt_cancellations != streams
             or len(cancellation_events) != streams
             or len(typed_cancellation_events) != streams
@@ -3056,7 +3093,8 @@ def _algorithm_diagnostics(
         },
         "directions": {
             direction: _direction_algorithm_metrics(
-                schedule_rows, direction=direction, runtime_kind=runtime_kind
+                schedule_rows, direction=direction, runtime_kind=runtime_kind,
+                buflo_period_us=buflo_period_us
             )
             for direction in ("outgoing", "incoming")
         },

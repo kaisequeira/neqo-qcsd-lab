@@ -161,6 +161,9 @@ _OPTIONAL_CONFIGURATION_KEYS = {
     "tamaraw_configuration_policy",
     "tamaraw_configuration",
     "tamaraw_configuration_sha256",
+    "front_configuration_policy",
+    "front_configuration",
+    "front_configuration_sha256",
     "application_body_identity_policy",
     "qualification_delivery_compatibility",
     "chaff_qualification_set",
@@ -635,13 +638,19 @@ def validate_accepted_scheduler_runtime_receipt(
     runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     if (
         _buflo_study_experiment(experiment)
-        and runner_schema not in {10, 15, 16, 17, 18, 19, 20, 21}
+        and runner_schema not in {10, 15, 16, 17, 18, 19, 20, 21, 22}
         and not _historical_buflo_v36_experiment(experiment)
     ):
         raise ValueError(
             "current BuFLO-study sample requires runner-wakeup schema 10/15/16/17/18/19/20/21 or an exact "
             "pinned v36 experiment ledger"
         )
+    if runner_schema == 22:
+        from .capture_session import _process_scheduler_bound_to_run_valid
+        scheduler = run.get("process_scheduler")
+        contract = scheduler.get("contract") if isinstance(scheduler, Mapping) else None
+        if not _process_scheduler_bound_to_run_valid(run, expected_contract=contract):
+            raise ValueError("prospective BuFLO scheduler sample lacks its exact64ms Native policy/parameter binding")
     configuration = experiment.get("configuration")
     current_class_role = bool(
         isinstance(configuration, Mapping) and "evidence_role" in configuration
@@ -659,13 +668,13 @@ def validate_accepted_scheduler_runtime_receipt(
     ):
         raise ValueError("accepted sample has invalid terminal evidence rendering state")
     if current_class_role and runtime_kind == "buflo":
-        if runner_schema not in {17, 18, 19, 20, 21}:
+        if runner_schema not in {17, 18, 19, 20, 21, 22}:
             raise ValueError(
                 "current class-study BuFLO sample requires runner-wakeup schema 17/18/19/20/21 "
                 "with kernel-TX evidence"
             )
     elif current_buflo_role and runtime_kind == "buflo":
-        if runner_schema not in {15, 16, 17, 18, 19, 20, 21}:
+        if runner_schema not in {15, 16, 17, 18, 19, 20, 21, 22}:
             raise ValueError(
                 "BuFLO-study sample requires runner-wakeup schema 15/16/17/18/19/20/21 "
                 "with kernel-TX evidence"
@@ -673,7 +682,7 @@ def validate_accepted_scheduler_runtime_receipt(
     elif (current_buflo_role or current_class_role) and runtime_kind == "cs_buflo":
         if runner_schema != 10:
             raise ValueError("current CS-BuFLO sample requires runner-wakeup schema 10")
-    elif current_class_role and runner_schema not in {10, 17, 18, 19, 20, 21}:
+    elif current_class_role and runner_schema not in {10, 17, 18, 19, 20, 21, 22}:
         raise ValueError("current class-study sample requires runner-wakeup schema 10/17/18/19/20/21")
     required = scheduler_runtime_receipt_required(run, experiment)
     if not required:
@@ -852,7 +861,7 @@ def validate_accepted_kernel_tx_evidence(
         17,
         18,
         19,
-        20, 21,
+        20, 21, 22,
     }
     retained, target = _kernel_tx_sidecar_reference(root, sample)
     if not required:
@@ -873,6 +882,10 @@ def validate_accepted_kernel_tx_evidence(
 
     if not _runner_wakeup_metrics_valid(wakeups):
         raise ValueError("kernel-TX BuFLO runner-wakeup/raw schema pairing is invalid")
+    if runner_schema == 22:
+        from .kernel_tx import kernel_tx_incoming_window_bound_to_run_valid
+        if not kernel_tx_incoming_window_bound_to_run_valid(run):
+            raise ValueError("prospective BuFLO kernel sample lacks its exact64ms Native policy/parameter binding")
     files = _validate_kernel_tx_sidecar_files(root, sample, retained, target)
     router_receipt = load_json(files["router-receipt.json"])
     evidence = load_json(files["kernel-tx-evidence.json"])
@@ -1120,6 +1133,20 @@ def _validate_configuration(value: object) -> None:
             or application_body_identity_policy(value) != COMPLETE_APPLICATION_DELIVERY_POLICY
             or "qualification_delivery_compatibility" in value):
             raise ValueError("configuration fixed Tamaraw condition is not fully bound")
+    fixed_front_fields = {"front_configuration_policy", "front_configuration", "front_configuration_sha256"}
+    if set(value) & fixed_front_fields:
+        from .front_fixed_configuration import policy as fixed_front_policy, INPUT, configuration_sha256
+        from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+        if (not fixed_front_fields <= set(value) or fixed_front_policy(value) is None
+            or value["front_configuration"] != "inputs/" + INPUT
+            or value["front_configuration_sha256"] != configuration_sha256()
+            or value["profile"] != "research-1200"
+            or len(value["defenses"]) != 1 or value["defenses"][0].get("kind") != "front"
+            or value["defenses"][0].get("baseline") is not False
+            or set(value) & fixed_tamaraw_fields
+            or application_body_identity_policy(value) != COMPLETE_APPLICATION_DELIVERY_POLICY
+            or "qualification_delivery_compatibility" in value):
+            raise ValueError("configuration fixed FRONT V5 condition is not fully bound")
     if not isinstance(value["limits"], Mapping):
         raise ValueError("configuration limits are invalid")
     if "chaff_qualification_set" in value and (

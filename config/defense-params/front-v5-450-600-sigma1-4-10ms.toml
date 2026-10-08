@@ -1,0 +1,20 @@
+schema_version = 2
+control_interval_us = 10000
+initial_max_stream_data = 16
+automatic_receive_window = 1048576
+max_chaff_streams = 5
+low_watermark = 1000000
+use_empty_resources = false
+max_stream_data_excess = 1000
+max_udp_payload_size = 1200
+drop_unsatisfied_events = false
+keep_alive_lead_time_us = 100000
+tail_wait_us = 0
+
+[defense]
+kind = "front"
+n_client_packets = 450
+n_server_packets = 600
+packet_size = 1200
+peak_minimum_seconds = 1.0
+peak_maximum_seconds = 4.0

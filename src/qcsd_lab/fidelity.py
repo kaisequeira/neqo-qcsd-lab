@@ -19,6 +19,9 @@ from .kernel_tx import (
     KERNEL_TX_PROTECTED_SELECTION_WAIT_V2_SEMANTICS,
     KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS,
     KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+    KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
+    KERNEL_TX_CADENCE64_TX_SEMANTICS,
+    KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS,
     KERNEL_TX_RESERVE_TX_SEMANTICS,
     KERNEL_TX_RUNNER_V10_SCHEMA_VERSION,
     KERNEL_TX_RUNNER_V10_SEMANTICS,
@@ -426,17 +429,43 @@ def buflo_terminal_state_valid(value: Any) -> bool:
     )
 
 
+def _buflo_run_period_us(run: Mapping[str, Any]) -> int:
+    """Select64 only after the exact Native/raw/policy tuple has authenticated."""
+    from .capture_acceptance_policy import CADENCE64_ACK_START_POLICY, FIELD
+    from .buflo_duration_budget import CADENCE64_POLICY, RUN_FIELD
+    wakeups = run.get("runner_wakeup_metrics")
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    marker = run.get(FIELD)
+    parameters = run.get("defense_parameters")
+    receipt = parameters.get(RUN_FIELD) if isinstance(parameters, Mapping) else None
+    prospective = (isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22
+        or isinstance(raw, Mapping) and raw.get("schema_version") == 13
+        or isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_ACK_START_POLICY
+        or isinstance(receipt, Mapping) and receipt.get("policy") == CADENCE64_POLICY)
+    if not prospective:
+        return 20_000
+    if (not isinstance(wakeups, Mapping) or type(wakeups.get("schema_version")) is not int
+        or wakeups["schema_version"] != 22
+        or not kernel_tx_incoming_window_bound_to_run_valid(run)):
+        raise ValueError("64ms terminal diagnostics lack their exact Native/raw/policy binding")
+    return 64_000
+
+
 def buflo_terminal_diagnostics_valid(
     diagnostics: Mapping[str, Any], *, require_current: bool = False,
     incoming_startup: Mapping[str, Any] | None = None,
+    buflo_period_us: int = 20_000,
 ) -> bool:
     """Validate the version-inferred flat BuFLO terminal diagnostic contract."""
 
+    if (type(buflo_period_us) is not int or buflo_period_us not in {20_000, 64_000}
+        or buflo_period_us == 64_000 and incoming_startup is None):
+        return False
     if incoming_startup is not None:
         from .capture_acceptance_policy import validate_buflo_startup_receipt
         try:
-            validate_buflo_startup_receipt(incoming_startup)
-            validate_buflo_startup_receipt(diagnostics.get("buflo_incoming_startup"))
+            validate_buflo_startup_receipt(incoming_startup, period_us=buflo_period_us)
+            validate_buflo_startup_receipt(diagnostics.get("buflo_incoming_startup"), period_us=buflo_period_us)
         except ValueError:
             return False
         if diagnostics.get("buflo_incoming_startup") != incoming_startup:
@@ -1938,7 +1967,7 @@ def _terminal_primary_partial_allowance(defense: str, schedule: Mapping[str, Any
 
 def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
     """Keep raw misses; prove the exact prospective outgoing omission policy."""
-    from .capture_acceptance_policy import FRONT_FIELD, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, validate_front_capture_run
+    from .capture_acceptance_policy import FRONT_FIELD, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY, validate_front_capture_run
     try:
         run = load_json(schedule_path.with_name("run.json"))
     except (OSError, ValueError):
@@ -1946,8 +1975,8 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
     if not isinstance(run, Mapping) or FRONT_FIELD not in run:
         return {}
     marker = validate_front_capture_run(run)
-    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY}
-    reserve_policy = marker["policy"] == FRONT_RESERVE_POLICY
+    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY}
+    reserve_policy = marker["policy"] in {FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY}
     outgoing_window_us = marker.get("outgoing_release_window_us", 5000)
     allowed_reasons = {"CongestionLimited", "DeadlineExpired"} if padding_policy else {"CongestionLimited"}
     start_ns = run.get("defense_start_monotonic_ns")
@@ -2108,14 +2137,14 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
 
 def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Mapping[str, Any],
                                     resolved: Mapping[str, Any] | None) -> bool:
-    from .capture_acceptance_policy import FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, validate_front_capture_marker
+    from .capture_acceptance_policy import FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY, validate_front_capture_marker
     try:
         marker = validate_front_capture_marker(schedule.get("front_capture_policy"))
     except ValueError:
         return False
     count = schedule.get("scheduled_events")
     outgoing, incoming = schedule.get("scheduled_outgoing_events"), schedule.get("scheduled_incoming_events")
-    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY}
+    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY}
     missed = schedule.get("front_outgoing_padding_omissions" if padding_policy else "front_outgoing_congestion_omissions")
     integer_fields = ("scheduled_events", "scheduled_outgoing_events", "scheduled_incoming_events",
         "satisfied_events", "missed_events", "outgoing_size_mismatch_events", "outgoing_size_absolute_error_bytes",
@@ -2133,7 +2162,7 @@ def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Ma
             return False
         reasons = {key: value for key, value in (("CongestionLimited", congestion), ("DeadlineExpired", expired)) if value}
     if (any(type(value) is not int or value < 0 for value in (count, outgoing, incoming, missed))
-        or not 1 <= outgoing <= 900 or not 1 <= incoming <= 1200 or count != incoming + outgoing
+        or not 1 <= outgoing <= marker["n_client_packets"] or not 1 <= incoming <= marker["n_server_packets"] or count != incoming + outgoing
         or missed * marker["outgoing_omission_ratio_denominator"] > outgoing * marker["outgoing_omission_ratio_numerator"]
         or schedule.get("missed_events") != missed
         or schedule.get("satisfied_events") != count - missed
@@ -2150,7 +2179,7 @@ def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Ma
     hashes = ("front_outgoing_congestion_omission_events_sha256", "front_outgoing_release_packets_sha256")
     if padding_policy:
         hashes += ("front_outgoing_padding_action_events_sha256",)
-    if marker["policy"] == FRONT_RESERVE_POLICY:
+    if marker["policy"] in {FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY}:
         before_registration = schedule.get("front_outgoing_pre_registration_omissions")
         if (type(before_registration) is not int or not 0 <= before_registration <= schedule["front_outgoing_deadline_omissions"]
             or type(schedule.get("front_outgoing_preparation_window_events")) is not int
@@ -2174,6 +2203,24 @@ def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Ma
             or not isinstance(targets.get(direction), list) or len(targets[direction]) != expected
             or any(type(target) is not int or target < 0 for target in targets[direction])):
             return False
+    if marker["policy"] == FRONT_LIGHT_POLICY:
+        from .front_fixed_configuration import POLICY as CONFIGURATION_POLICY, validate_run
+        try:
+            validate_run({"resolved_configuration": resolved, "front_capture_policy": marker}, selected_policy=CONFIGURATION_POLICY)
+        except (ValueError, TypeError, KeyError):
+            return False
+        if (schedule.get("front_incoming_credit_release_policy") != marker
+            or type(schedule.get("incoming_credit_release_window_us")) is not int
+            or schedule["incoming_credit_release_window_us"] != 10000
+            or type(schedule.get("incoming_credit_release_timing_events")) is not int
+            or schedule["incoming_credit_release_timing_events"] != incoming
+            or type(schedule.get("incoming_credit_release_window_violations")) is not int
+            or schedule["incoming_credit_release_window_violations"] != 0
+            or type(schedule.get("incoming_credit_release_original_5000us_violations")) is not int
+            or not 0 <= schedule["incoming_credit_release_original_5000us_violations"] <= incoming):
+            return False
+        return all(diagnostics.get(key) == incoming * 1200 for key in (
+            "scheduled_incoming_requested_bytes", "scheduled_incoming_advertised_bytes", "scheduled_incoming_consumed_bytes"))
     defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
     expected_defense = {"kind": "front", "n_client_packets": 900, "n_server_packets": 1200,
                         "packet_size": 1200, "peak_minimum_seconds": 0.1, "peak_maximum_seconds": 2.5}
@@ -2286,14 +2333,21 @@ def _buflo_schedule_release_window(metrics: Mapping[str, Any]) -> int:
 
 
 def _buflo_metric_startup(metrics: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    from .capture_acceptance_policy import ACK_START_POLICY, validate_buflo_startup_receipt
+    from .capture_acceptance_policy import ACK_START_POLICY, CADENCE64_ACK_START_POLICY, validate_buflo_startup_receipt
     marker = metrics.get("incoming_credit_release_policy")
-    if not isinstance(marker, Mapping) or marker.get("policy") != ACK_START_POLICY:
+    if not isinstance(marker, Mapping) or marker.get("policy") not in {ACK_START_POLICY, CADENCE64_ACK_START_POLICY}:
         if "buflo_incoming_startup" in metrics or "buflo_incoming_startup_events_sha256" in metrics:
             raise ValueError("BuFLO startup metrics lack their V2 policy")
         return None
     _buflo_schedule_release_window(metrics)
-    startup = validate_buflo_startup_receipt(metrics.get("buflo_incoming_startup"))
+    period_us = 64_000 if marker["policy"] == CADENCE64_ACK_START_POLICY else 20_000
+    if period_us == 64_000:
+        from .buflo_duration_budget import RUN_FIELD, CADENCE64_RECEIPT, CADENCE64_PARAMETER_SHA256, validate_receipt
+        validate_receipt(metrics.get(RUN_FIELD))
+        if (metrics[RUN_FIELD] != CADENCE64_RECEIPT
+            or metrics.get("buflo_duration_budget_parameter_sha256") != CADENCE64_PARAMETER_SHA256):
+            raise ValueError("64ms startup metrics differ from exact Native duration provenance")
+    startup = validate_buflo_startup_receipt(metrics.get("buflo_incoming_startup"), period_us=period_us)
     digest = metrics.get("buflo_incoming_startup_events_sha256")
     if (not isinstance(digest, str) or len(digest) != 64
         or any(character not in "0123456789abcdef" for character in digest)):
@@ -2313,7 +2367,7 @@ def _buflo_kernel_credit_release_intervals(
     """
     from .kernel_tx import (
         KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION,
-        KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+        KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
         kernel_tx_incoming_window_bound_to_run_valid,
         kernel_tx_runner_receipt_success_valid,
     )
@@ -2327,7 +2381,7 @@ def _buflo_kernel_credit_release_intervals(
         or type(raw.get("schema_version")) is not int
         or raw["schema_version"] not in {
             KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION,
-            KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+            KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
         }
         or not kernel_tx_runner_receipt_success_valid(raw)
         or not kernel_tx_incoming_window_bound_to_run_valid(run)):
@@ -2397,10 +2451,18 @@ def _incoming_credit_release_metrics(
     if type(start_ns) is not int or start_ns < 0:
         return {}
 
-    from .capture_acceptance_policy import ACK_START_POLICY, FIELD, buflo_incoming_release_window, validate_buflo_startup_evidence
+    from .capture_acceptance_policy import ACK_START_POLICY, CADENCE64_ACK_START_POLICY, FIELD, buflo_incoming_release_window, validate_buflo_startup_evidence
     window_us = buflo_incoming_release_window(run)
+    from .capture_acceptance_policy import FRONT_FIELD, FRONT_LIGHT_POLICY, validate_front_capture_run
+    front_marker = run.get(FRONT_FIELD)
+    front_v5 = isinstance(front_marker, Mapping) and front_marker.get("policy") == FRONT_LIGHT_POLICY
+    if front_v5:
+        front_marker = validate_front_capture_run(run)
+        if FIELD in run:
+            raise ValueError("FRONT V5 cannot borrow a BuFLO incoming window")
+        window_us = front_marker["incoming_release_window_us"]
     startup = None
-    if FIELD in run and run[FIELD]["policy"] == ACK_START_POLICY:
+    if FIELD in run and run[FIELD]["policy"] in {ACK_START_POLICY, CADENCE64_ACK_START_POLICY}:
         startup = validate_buflo_startup_evidence(run, runner_directory=schedule_path.parent, schedule_rows=rows)
     kernel_intervals = _buflo_kernel_credit_release_intervals(run, rows)
 
@@ -2447,6 +2509,10 @@ def _incoming_credit_release_metrics(
             "incoming_credit_release_window_us": window_us,
             "incoming_credit_release_original_5000us_violations": historical_window_violations}
            if FIELD in run else {}),
+        **({"front_incoming_credit_release_policy": front_marker,
+            "incoming_credit_release_window_us": window_us,
+            "incoming_credit_release_original_5000us_violations": historical_window_violations}
+           if front_v5 else {}),
         "incoming_credit_release_timing_events": timing_events,
         "incoming_credit_release_window_violations": window_violations,
         "incoming_credit_release_lateness_upper_bound_us_max": max(
@@ -3207,6 +3273,14 @@ RUNNER_WAKEUP_V21_SEMANTICS = (
     f"buflo_kernel_protected_selection_wait_semantics={KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS}; "
     "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
 )
+RUNNER_WAKEUP_V22_SEMANTICS = (
+    f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
+    "runner_schema22_retains_schema21_layout_for_non_kernel_metrics_and_requires_opted_in_kernel_schema13=true; "
+    "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+    f"buflo_kernel_tx_raw_semantics={KERNEL_TX_CADENCE64_TX_SEMANTICS}; "
+    f"buflo_kernel_protected_selection_wait_semantics={KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS}; "
+    "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+)
 RUNNER_WAKEUP_V12_REQUIRED_KEYS = RUNNER_WAKEUP_V11_REQUIRED_KEYS
 RUNNER_WAKEUP_V13_REQUIRED_KEYS = RUNNER_WAKEUP_V12_REQUIRED_KEYS
 RUNNER_WAKEUP_V14_REQUIRED_KEYS = RUNNER_WAKEUP_V13_REQUIRED_KEYS
@@ -3217,6 +3291,7 @@ RUNNER_WAKEUP_V18_REQUIRED_KEYS = RUNNER_WAKEUP_V17_REQUIRED_KEYS
 RUNNER_WAKEUP_V19_REQUIRED_KEYS = RUNNER_WAKEUP_V18_REQUIRED_KEYS
 RUNNER_WAKEUP_V20_REQUIRED_KEYS = RUNNER_WAKEUP_V19_REQUIRED_KEYS
 RUNNER_WAKEUP_V21_REQUIRED_KEYS = RUNNER_WAKEUP_V20_REQUIRED_KEYS
+RUNNER_WAKEUP_V22_REQUIRED_KEYS = RUNNER_WAKEUP_V21_REQUIRED_KEYS
 
 
 def _runner_wakeup_v10_checked_u64_sum(*values: int) -> int | None:
@@ -3690,7 +3765,9 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
 }
 
 
-def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bool:
+def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any], *, buflo_period_us: int = 20_000) -> bool:
+    if type(buflo_period_us) is not int or buflo_period_us not in {20_000, 64_000}:
+        return False
     defense = _canonical_fidelity_defense(defense)
     contract = _DIAGNOSTIC_CONTRACTS.get(defense)
     if contract is None:
@@ -3727,7 +3804,7 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
     if defense == "buflo" and "buflo_incoming_startup" in selected:
         from .capture_acceptance_policy import validate_buflo_startup_receipt
         try:
-            validate_buflo_startup_receipt(selected.pop("buflo_incoming_startup"))
+            validate_buflo_startup_receipt(selected.pop("buflo_incoming_startup"), period_us=buflo_period_us)
         except ValueError:
             return False
     if defense == "buflo" and (
@@ -4166,6 +4243,10 @@ def new_defense_terminal_receipts_valid(
     canonical = {"buflo": "buflo", "cs_buflo": "cs-buflo"}.get(defense_kind)
     if canonical is None:
         return False
+    try:
+        buflo_period_us = _buflo_run_period_us(run) if defense_kind == "buflo" else 20_000
+    except (ValueError, TypeError, KeyError):
+        return False
     resolved = run.get("resolved_configuration")
     resolved_defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
     diagnostics = run.get("defense_diagnostics")
@@ -4183,23 +4264,23 @@ def new_defense_terminal_receipts_valid(
         or not isinstance(resolved_defense, Mapping)
         or resolved_defense.get("kind") != defense_kind
         or not isinstance(diagnostics, dict)
-        or not _diagnostics_match_contract(canonical, diagnostics)
+        or not _diagnostics_match_contract(canonical, diagnostics, buflo_period_us=buflo_period_us)
         or not _runner_wakeup_metrics_valid(run.get("runner_wakeup_metrics"))
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    current_runner_schemas = {17, 18, 19, 20, 21} if defense_kind == "buflo" else {10}
+    current_runner_schemas = {17, 18, 19, 20, 21, 22} if defense_kind == "buflo" else {10}
     if require_current_schema and wakeup_metrics["schema_version"] not in current_runner_schemas:
         return False
     if (
-        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
         and defense_kind != "buflo"
         and wakeup_metrics["buflo_kernel_tx"] is not None
     ):
         return False
     if (
         wakeup_metrics["schema_version"]
-        in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+        in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
         and defense_kind != "buflo"
         and any(
             wakeup_metrics[key]
@@ -4215,7 +4296,7 @@ def new_defense_terminal_receipts_valid(
         return False
     if (
         wakeup_metrics["schema_version"]
-        in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+        in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
         and defense_kind != "buflo"
         and any(
             wakeup_metrics[key]
@@ -4229,7 +4310,7 @@ def new_defense_terminal_receipts_valid(
         return False
     if (
         wakeup_metrics["schema_version"]
-        in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+        in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
         and defense_kind != "cs_buflo"
         and any(
             wakeup_metrics[key]
@@ -4284,7 +4365,7 @@ def new_defense_terminal_receipts_valid(
         ):
             return False
     if (
-        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
         and defense_kind == "buflo"
     ):
         scheduled_outgoing = diagnostics.get("buflo_scheduled_outgoing_cells")
@@ -4340,9 +4421,9 @@ def new_defense_terminal_receipts_valid(
     if defense_kind == "buflo" and summary_schema == 4:
         expected_fields.add("terminal_schedule_stop_policy")
     incoming_startup = None
-    from .capture_acceptance_policy import ACK_START_POLICY, FIELD, validate_buflo_startup_evidence
+    from .capture_acceptance_policy import ACK_START_POLICY, CADENCE64_ACK_START_POLICY, FIELD, validate_buflo_startup_evidence
     marker = run.get(FIELD)
-    if isinstance(marker, Mapping) and marker.get("policy") == ACK_START_POLICY:
+    if isinstance(marker, Mapping) and marker.get("policy") in {ACK_START_POLICY, CADENCE64_ACK_START_POLICY}:
         if defense_kind != "buflo" or summary_schema != 4:
             return False
         try:
@@ -4397,7 +4478,7 @@ def new_defense_terminal_receipts_valid(
             == ("buflo_terminal_subcell_pending_application_parser_boundaries_at_latch" in selected)
             and stop_drain_current == stop_drain_present
             and buflo_terminal_diagnostics_valid(selected, require_current=stop_drain_current,
-                                                  incoming_startup=incoming_startup)
+                                                  incoming_startup=incoming_startup, buflo_period_us=buflo_period_us)
             and (
                 not parser_current
                 or receipt_cancellations == selected["buflo_terminal_subcell_stream_cancellations"]
@@ -6993,6 +7074,25 @@ def _runner_wakeup_v21_valid(value: Any) -> bool:
     )
 
 
+def _runner_wakeup_v22_valid(value: Any) -> bool:
+    """Validate prospective64ms preparation reserve with unchanged physical evidence."""
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != RUNNER_WAKEUP_V22_REQUIRED_KEYS
+        or type(value.get("schema_version")) is not int or value["schema_version"] != 22
+        or value.get("semantics") != RUNNER_WAKEUP_V22_SEMANTICS
+        or not _runner_wakeup_v10_valid(_runner_wakeup_v11_project_schema_ten(value))
+    ):
+        return False
+    kernel_tx = value.get("buflo_kernel_tx")
+    return bool(
+        isinstance(kernel_tx, Mapping)
+        and kernel_tx.get("schema_version") == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION == 13
+        and kernel_tx_runner_receipt_valid(kernel_tx)
+        and _runner_wakeup_v11_legacy_buflo_metrics_neutral(value)
+    )
+
+
 def _runner_wakeup_v7_valid(value: Any) -> bool:
     """Validate historical schema-seven exact-release timing evidence."""
 
@@ -7028,6 +7128,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 22:
+        return _runner_wakeup_v22_valid(value)
     if schema_version == 21:
         return _runner_wakeup_v21_valid(value)
     if schema_version == 20:
@@ -7141,13 +7243,21 @@ def fidelity_eligible(
     defense = _canonical_fidelity_defense(defense)
     if not sample_eligible:
         return False
+    buflo_period_us = 20_000
+    if defense == "buflo" and isinstance(schedule_metrics, Mapping):
+        try:
+            bound_startup = _buflo_metric_startup(schedule_metrics)
+        except (ValueError, TypeError, KeyError):
+            return False
+        if bound_startup is not None:
+            buflo_period_us = bound_startup["period_us"]
     allowance = _terminal_primary_partial_allowance(defense, schedule_metrics)
     if allowance is None:
         return False
     partial, retired = allowance
     if defense == "front" and isinstance(schedule_metrics, Mapping) and "front_capture_policy" in schedule_metrics:
         return (_scheduled_incoming_diagnostics_match(diagnostics)
-            and _diagnostics_match_contract(defense, diagnostics)
+            and _diagnostics_match_contract(defense, diagnostics, buflo_period_us=buflo_period_us)
             and type(missed_events) is int and missed_events == schedule_metrics.get("missed_events")
             and type(outgoing_size_mismatches) is int and outgoing_size_mismatches == 0
             and _front_capture_activation_valid(diagnostics, schedule_metrics, resolved_configuration))
@@ -7168,7 +7278,7 @@ def fidelity_eligible(
         and not _scheduled_incoming_diagnostics_match(diagnostics, allowed_retired_bytes=retired)
     ):
         return False
-    if not _diagnostics_match_contract(defense, diagnostics):
+    if not _diagnostics_match_contract(defense, diagnostics, buflo_period_us=buflo_period_us):
         return False
     if (
         require_defense_activation
@@ -7241,7 +7351,7 @@ def fidelity_eligible(
             and diagnostics["buflo_application_complete"] is True
             and diagnostics["buflo_minimum_duration_reached"] is True
             and diagnostics["buflo_event_guard_triggered"] is False
-            and buflo_terminal_diagnostics_valid(diagnostics, incoming_startup=incoming_startup)
+            and buflo_terminal_diagnostics_valid(diagnostics, incoming_startup=incoming_startup, buflo_period_us=buflo_period_us)
             and diagnostics["buflo_scheduled_outgoing_cells"]
             == diagnostics["buflo_full_outgoing_cells"]
             and isinstance(schedule_metrics, Mapping)
@@ -7322,6 +7432,10 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any], *,
         startup = _buflo_metric_startup(schedule)
         from .buflo_duration_budget import schedule_bounds
         maximum_events, duration_budget_us = schedule_bounds(schedule)
+        period_us = schedule.get("buflo_duration_budget", {}).get("interval_us", 20_000)
+        if period_us == 64_000 and (startup is None or startup["period_us"] != period_us):
+            return False
+        minimum_tick_us = ((10_000_000 + period_us - 1) // period_us) * period_us
     except ValueError:
         return False
     total = 0
@@ -7348,11 +7462,11 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any], *,
             # reach terminal state out of target order.  Canonical cadence is
             # a property of the complete target set, not terminal CSV order.
             or ordered_targets[0] != (startup["armed_at_us"] if startup is not None and direction == "incoming" else 0)
-            or (10_000_000 not in ordered_targets
-                and (startup is None or direction == "outgoing" or startup["armed_at_us"] <= 10_000_000))
+            or (minimum_tick_us not in ordered_targets
+                and (startup is None or direction == "outgoing" or startup["armed_at_us"] <= minimum_tick_us))
             or any(size != 1_200 for size in directional_sizes)
             or any(
-                current - previous != 20_000
+                current - previous != period_us
                 for previous, current in zip(ordered_targets[:-1], ordered_targets[1:], strict=True)
             )
         ):

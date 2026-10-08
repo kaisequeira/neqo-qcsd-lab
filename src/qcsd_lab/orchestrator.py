@@ -145,6 +145,7 @@ CLASS_STUDY_HISTORICAL_PRE_ENV = "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT"
 REQUEST_POLICIES = {"as-defined", "half-duplex"}
 LEGACY_CAMPAIGN_KEYS = {
     "tamaraw_configuration_policy",
+    "front_configuration_policy",
     "application_body_identity_policy",
     "qualification_delivery_compatibility",
     "schema",
@@ -267,6 +268,8 @@ class Campaign:
     qualification_delivery_compatibility: Mapping[str, str] | None = None
     tamaraw_configuration_policy: str | None = None
     tamaraw_configuration_path: Path | None = None
+    front_configuration_policy: str | None = None
+    front_configuration_path: Path | None = None
 
     @property
     def udp_payload_ceiling(self) -> int:
@@ -281,6 +284,8 @@ class _RunContext:
     udp_payload_ceiling: int
     tamaraw_configuration_policy: str | None = None
     tamaraw_configuration_path: Path | None = None
+    front_configuration_policy: str | None = None
+    front_configuration_path: Path | None = None
 
 
 def _slug(value: str) -> str:
@@ -576,6 +581,10 @@ def _load_campaign(
     body_policy = application_body_identity_policy(value)
     from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
     tamaraw_configuration_policy = fixed_tamaraw_policy(value)
+    from .front_fixed_configuration import policy as fixed_front_policy
+    front_configuration_policy = fixed_front_policy(value)
+    if front_configuration_policy is not None and tamaraw_configuration_policy is not None:
+        raise ValueError("fixed FRONT and Tamaraw configurations are distinct settings")
     delivery_compatibility = value.get("qualification_delivery_compatibility")
     if "qualification_delivery_compatibility" in value:
         if delivery_compatibility is None:
@@ -839,6 +848,12 @@ def _load_campaign(
     tamaraw_configuration_path = None
     if tamaraw_configuration_policy is not None and frozen_inputs is not None:
         tamaraw_configuration_path = validate_configuration(frozen_inputs / TAMARAW_CONFIG_INPUT)
+    from .front_fixed_configuration import validate_campaign as validate_fixed_front_campaign, validate_configuration as validate_front_configuration, INPUT as FRONT_CONFIG_INPUT
+    validate_fixed_front_campaign(selected_policy=front_configuration_policy, profile=profile,
+        defenses=defenses, body_policy=body_policy, qualification_compatibility=delivery_compatibility)
+    front_configuration_path = None
+    if front_configuration_policy is not None and frozen_inputs is not None:
+        front_configuration_path = validate_front_configuration(frozen_inputs / FRONT_CONFIG_INPUT)
     if any(_uses_schema_six_walkie_talkie(defense) for defense in defenses):
         if not all(workload.chaff_manifest_data is not None for workload in workloads):
             raise ValueError("schema-six Walkie-Talkie requires qualified chaff for every workload")
@@ -877,6 +892,10 @@ def _load_campaign(
         from .tamaraw_fixed_configuration import validate_prepared as validate_fixed_tamaraw_prepared
         for workload in workloads:
             validate_fixed_tamaraw_prepared(workload.data)
+    if front_configuration_policy is not None:
+        from .front_fixed_configuration import validate_prepared as validate_fixed_front_prepared
+        for workload in workloads:
+            validate_fixed_front_prepared(workload.data)
     campaign = Campaign(
         path=path,
         source_bytes=source_bytes,
@@ -892,6 +911,8 @@ def _load_campaign(
         qualification_delivery_compatibility=delivery_compatibility,
         tamaraw_configuration_policy=tamaraw_configuration_policy,
         tamaraw_configuration_path=tamaraw_configuration_path,
+        front_configuration_policy=front_configuration_policy,
+        front_configuration_path=front_configuration_path,
         chaff_qualification_set=qualification_set,
         defense_order_scheme=defense_order_scheme,
         defense_order_block=defense_order_block,
@@ -4286,6 +4307,12 @@ def _materialize_inputs(
         tamaraw_configuration_path = inputs / INPUT
         tamaraw_configuration_path.write_bytes(configuration_bytes())
         validate_configuration(tamaraw_configuration_path)
+    front_configuration_path = None
+    if campaign.front_configuration_policy is not None:
+        from .front_fixed_configuration import INPUT as FRONT_CONFIG_INPUT, configuration_bytes as front_configuration_bytes, validate_configuration as validate_front_configuration
+        front_configuration_path = inputs / FRONT_CONFIG_INPUT
+        front_configuration_path.write_bytes(front_configuration_bytes())
+        validate_front_configuration(front_configuration_path)
     if campaign.qualification_delivery_compatibility is not None:
         from .rapid_rolling_readiness import _reference
         witness = _reference(campaign.qualification_delivery_compatibility)[1]
@@ -4617,6 +4644,7 @@ def _materialize_inputs(
         workloads=tuple(runtime_workloads),
         defenses=tuple(runtime_defenses),
         tamaraw_configuration_path=tamaraw_configuration_path,
+        front_configuration_path=front_configuration_path,
         class_study_cohort_path=class_study_cohort_destination,
         class_study_cohort_sha256=(
             sha256_file(class_study_cohort_destination)
@@ -4957,6 +4985,8 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                             campaign.udp_payload_ceiling,
                             campaign.tamaraw_configuration_policy,
                             campaign.tamaraw_configuration_path,
+                            campaign.front_configuration_policy,
+                            campaign.front_configuration_path,
                         )
                         # Preserve the established collector seam for campaigns
                         # without qualified inputs.  Current defended campaigns
@@ -6350,6 +6380,14 @@ def _frozen_configuration(
         configuration.update(tamaraw_configuration_policy=campaign.tamaraw_configuration_policy,
             tamaraw_configuration=path.relative_to(root).as_posix(),
             tamaraw_configuration_sha256=configuration_sha256())
+    if campaign.front_configuration_policy is not None:
+        from .front_fixed_configuration import validate_configuration as validate_front_configuration, configuration_sha256 as front_configuration_sha256
+        if campaign.front_configuration_path is None:
+            raise ValueError("fixed FRONT campaign lacks its frozen configuration")
+        path = validate_front_configuration(campaign.front_configuration_path)
+        configuration.update(front_configuration_policy=campaign.front_configuration_policy,
+            front_configuration=path.relative_to(root).as_posix(),
+            front_configuration_sha256=front_configuration_sha256())
     if campaign.qualification_delivery_compatibility is not None:
         configuration["qualification_delivery_compatibility"] = dict(campaign.qualification_delivery_compatibility)
     if campaign.chaff_qualification_set is not None:

@@ -508,6 +508,21 @@ def checked_setup(args):
     from qcsd_lab.application_response_policy import application_body_identity_policy
     body_policy = application_body_identity_policy(setup)
     from qcsd_lab import rapid_ael_fifteen_qualification as ael
+    from qcsd_lab import rapid_capture_traffic as traffic
+    if "buflo_duration_policy" in setup:
+        selected = traffic.policy(setup["buflo_duration_policy"])
+        if (selected is None or setup["mode"] != "buflo"
+            or selected == traffic.budget.CADENCE64_POLICY and body_policy != "complete-current-application-delivery-v1"):
+            raise ValueError("setup changed its explicit prospective BuFLO condition")
+    from qcsd_lab import front_fixed_configuration as front
+    selected_front = front.policy(setup)
+    if selected_front is not None:
+        if (setup["mode"] != "front" or setup["reuse"] is not None
+            or body_policy != "complete-current-application-delivery-v1"
+            or "qualification_delivery_compatibility" in setup or "buflo_duration_policy" in setup):
+            raise ValueError("setup changed its explicit prospective FRONT condition")
+        from qcsd_lab.rapid_rolling_capture import load_runtime
+        front.validate_source_artifacts(load_runtime(output / "runtime-spec.json"))
     ael.validate_scope(setup, setup["mode"])
     from qcsd_lab.tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
     fixed_tamaraw = fixed_tamaraw_policy(setup)
@@ -580,6 +595,13 @@ def stage(args):
         **({"ordinary_renewal": True} if getattr(args, "ordinary_renewal", None) is not None else {})}, args.mode) if getattr(args, "response_qualification_policy", None) is not None else None
     from qcsd_lab.tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy
     fixed_tamaraw = validate_fixed_tamaraw_policy(getattr(args, "tamaraw_configuration_policy", None))
+    from qcsd_lab.front_fixed_configuration import validate_policy as validate_fixed_front_policy
+    fixed_front = validate_fixed_front_policy(getattr(args, "front_configuration_policy", None))
+    if fixed_front is not None and (args.mode != "front" or fixed_tamaraw is not None
+            or body_policy != "complete-current-application-delivery-v1"
+            or getattr(args, "qualification_delivery_compatibility", None) is not None
+            or getattr(args, "reuse_qualification", None) is not None):
+        raise ValueError("fixed FRONT V5 flight requires its own current whole-group qualification")
     if fixed_tamaraw is not None and (args.mode != "tamaraw"
             or body_policy != "complete-current-application-delivery-v1"
             or getattr(args, "qualification_delivery_compatibility", None) is not None
@@ -592,7 +614,14 @@ def stage(args):
         validate(witness, body_policy=body_policy, canonical=canonical)
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import capture_acceptance_policy as capture
-    from qcsd_lab.buflo_duration_budget import POLICY
+    from qcsd_lab.buflo_duration_budget import POLICY, CADENCE64_POLICY
+    from qcsd_lab.rapid_capture_traffic import policy as duration_policy
+    requested_duration = getattr(args, "buflo_duration_policy", None)
+    selected_duration = duration_policy(requested_duration)
+    if selected_duration is not None and args.mode != "buflo":
+        raise ValueError("explicit BuFLO duration choice requires only the BuFLO setting")
+    if selected_duration == CADENCE64_POLICY and body_policy != "complete-current-application-delivery-v1":
+        raise ValueError("prospective 64 ms BuFLO requires complete current application delivery")
     enrollment = args.enrollment.absolute()
     renewal_path = getattr(args, "ordinary_renewal", None)
     renewal = None if renewal_path is None else ref(renewal_path)
@@ -680,10 +709,12 @@ def stage(args):
         command = prefix + ["static-amendment", "--enrollment", str(enrollment),
                             "--runtime-spec", str(runtime_path), "--output", str(amendment)]
         if args.mode == "front":
-            command += ["--front-policy", capture.FRONT_RESERVE_POLICY]
+            command += ["--front-policy", fixed_front or capture.FRONT_RESERVE_POLICY]
         else:
-            command += ["--buflo-policy", capture.BUFLO_KERNEL_PREPARATION_POLICY,
-                        "--buflo-duration-policy", POLICY]
+            duration = selected_duration or POLICY
+            preparation = (capture.CADENCE64_KERNEL_PREPARATION_POLICY if duration == CADENCE64_POLICY
+                           else capture.BUFLO_KERNEL_PREPARATION_POLICY)
+            command += ["--buflo-policy", preparation, "--buflo-duration-policy", duration]
     create(output / "amendment-commands.json", encode({"amend": command}))
     reuse = None
     if reuse_manifest is not None:
@@ -706,10 +737,14 @@ def stage(args):
         from qcsd_lab import rapid_enrolled_subgroup as subgroup
         batch, classes, _ = rolling._verify_enrollment(enrollment)
         setup[subgroup.FIELD] = subgroup.declare(enrollment, batch, classes, args.class_indices)
+    if requested_duration is not None:
+        setup["buflo_duration_policy"] = selected_duration
     if requested_body_policy is not None:
         setup["application_body_identity_policy"] = body_policy
     if response_policy is not None:
         setup[ael.FIELD] = response_policy
+    if fixed_front is not None:
+        setup["front_configuration_policy"] = fixed_front
     if fixed_tamaraw is not None:
         setup["tamaraw_configuration_policy"] = fixed_tamaraw
     if witness is not None:
@@ -778,7 +813,7 @@ def finalize(args):
             ael.selection(current_manifest, row["workload_id"])
     selected_policy = None if authority is None else authority.get(traffic.FIELD)
     limits = budget.capture_limits(mode, setup["original_limits"], policy=selected_policy)
-    if (mode == "buflo" and selected_policy != budget.POLICY
+    if (mode == "buflo" and selected_policy != setup.get(traffic.FIELD, budget.POLICY)
         or mode != "buflo" and selected_policy is not None):
         raise ValueError("setting changed its prospective traffic policy")
     canary, manifest = current[0], manifests[0]
@@ -787,7 +822,7 @@ def finalize(args):
     name = "rapid-curated-tranco50-v2-diagnostic-v12-" + setup["name"] + "-" + mode
     defense = {"name": mode, "kind": "none" if mode == "undefended" else mode}
     if mode == "buflo":
-        defense["parameters"] = "../defense-params/buflo-duration200.json"
+        defense["parameters"] = "../defense-params/" + Path(traffic.parameter_files(selected_policy)[0][0]).name
     elif mode in PARAMETER_REFERENCES:
         defense["parameters"] = PARAMETER_REFERENCES[mode]
     campaign = {"schema": 1, "name": name, "purpose": "smoke", "seed": setup["campaign_seed"],
@@ -805,6 +840,13 @@ def finalize(args):
         if mode != "tamaraw" or setup["reuse"] is not None or "qualification_delivery_compatibility" in setup:
             raise ValueError("fixed Tamaraw setup changed its prospective current condition")
         campaign["tamaraw_configuration_policy"] = fixed_tamaraw
+    from qcsd_lab.front_fixed_configuration import policy as fixed_front_policy
+    fixed_front = fixed_front_policy(setup)
+    if fixed_front is not None:
+        if (mode != "front" or setup["reuse"] is not None or "qualification_delivery_compatibility" in setup
+            or authority is None or authority["policies"].get("front_capture_policy") != fixed_front):
+            raise ValueError("fixed FRONT setup changed its prospective amendment/condition")
+        campaign["front_configuration_policy"] = fixed_front
     if "qualification_delivery_compatibility" in setup:
         campaign["qualification_delivery_compatibility"] = setup["qualification_delivery_compatibility"]
     import yaml
@@ -848,6 +890,8 @@ def finalize(args):
         plan["application_body_identity_policy"] = body_policy
     if response_policy is not None:
         plan[ael.FIELD] = response_policy
+    if fixed_front is not None:
+        plan["front_configuration_policy"] = fixed_front
     if fixed_tamaraw is not None:
         plan["tamaraw_configuration_policy"] = fixed_tamaraw
     if "qualification_delivery_compatibility" in setup:
@@ -877,6 +921,8 @@ def finalize(args):
         commands["plan"] += ["--static-capture-amendment", setup["amendment_path"]]
     if "application_body_identity_policy" in setup:
         commands["plan"] += ["--application-body-identity-policy", body_policy]
+    if fixed_front is not None:
+        commands["plan"] += ["--front-configuration-policy", fixed_front]
     if fixed_tamaraw is not None:
         commands["plan"] += ["--tamaraw-configuration-policy", fixed_tamaraw]
     if "selected_input_renewal" in setup:
@@ -1009,6 +1055,24 @@ def checked_plan(args, *, image=False):
             or fixed_tamaraw_policy(configured) != fixed_tamaraw
             or body_policy != "complete-current-application-delivery-v1"):
             raise ValueError("canary plan changed its fixed Tamaraw condition")
+    from qcsd_lab import front_fixed_configuration as front
+    fixed_front = front.policy(plan)
+    if fixed_front is not None:
+        import yaml
+        configured = yaml.safe_load(read(execution / campaign["campaign_relative"]))
+        if (mode != "front" or plan["reuse"] is not None
+            or "qualification_delivery_compatibility" in plan
+            or front.policy(configured) != fixed_front
+            or body_policy != "complete-current-application-delivery-v1"
+            or traffic.canary_policy(plan, mode) is not None):
+            raise ValueError("canary plan changed its fixed FRONT V5 configuration authority")
+        front.validate_prepared(manifest)
+        for root in (clean, execution):
+            for relative, expected in ((front.CONFIGURATION_PATH, front.CONFIGURATION_SHA256),
+                                       (front.PROVENANCE_PATH, front.PROVENANCE_SHA256)):
+                artifact = root / relative
+                if artifact.stat().st_mode & 0o7777 != 0o644 or digest(read(artifact)) != expected:
+                    raise ValueError("canary FRONT configuration/provenance bytes or full mode changed")
     witness = plan.get("qualification_delivery_compatibility")
     if "qualification_delivery_compatibility" in plan and witness is None:
         raise ValueError("explicit canary qualification delivery witness cannot be null")
@@ -1168,9 +1232,10 @@ def image_action(args):
             capture.validate_front_preparation_policy(preparation)
             capture.validate_buflo_kernel_preparation_policy(preparation)
         if mode == "buflo":
-            from qcsd_lab.buflo_duration_budget import PARAMETER_PATH
+            from qcsd_lab import rapid_capture_traffic as traffic
             from qcsd_lab.parameters import validate_parameter_artifact
-            validate_parameter_artifact(execution / PARAMETER_PATH, expected_kind="buflo",
+            parameter_path = traffic.parameter_files(traffic.canary_policy(plan, mode))[0][0]
+            validate_parameter_artifact(execution / parameter_path, expected_kind="buflo",
                 allow_study_candidate=True, expected_qcsd_profile="research-1200",
                 expected_udp_payload_ceiling=1200)
         create(output / "preamble-complete.json", encode({"completed_at": now(),
@@ -1288,6 +1353,11 @@ def image_action(args):
     fixed_tamaraw = fixed_tamaraw_policy(plan)
     if fixed_tamaraw_policy(config) != fixed_tamaraw:
         raise ValueError("actual canary changed its fixed Tamaraw condition")
+    from qcsd_lab.front_fixed_configuration import policy as fixed_front_policy, validate_run as validate_fixed_front_run, configuration_sha256 as front_configuration_sha256
+    fixed_front = fixed_front_policy(plan)
+    if fixed_front_policy(config) != fixed_front:
+        raise ValueError("actual canary changed its fixed FRONT condition")
+    validate_fixed_front_run(run, selected_policy=fixed_front)
     validate_terminal_primary_source_binding(manifest, run, runner_directory=result_root / sample["path"] / "neqo",
         tamaraw_configuration_policy=fixed_tamaraw)
     if sorted(str(row["origin"]).rstrip("/") for row in run["endpoints"]) != plan["full_graph"]["origins"]:
@@ -1305,6 +1375,9 @@ def image_action(args):
     if "application_body_identity_policy" in plan:
         deep_receipt["application_body_identity_policy"] = body_policy
         deep_receipt["content_equality_across_visits_claimed"] = False
+    if fixed_front is not None:
+        deep_receipt.update(front_configuration_policy=fixed_front,
+                            front_configuration_sha256=front_configuration_sha256())
     if fixed_tamaraw is not None:
         deep_receipt.update(tamaraw_configuration_policy=fixed_tamaraw,
                             tamaraw_configuration_sha256=configuration_sha256())
@@ -1426,6 +1499,12 @@ def main():
     item.add_argument("--name", required=True)
     item.add_argument("--campaign-seed", type=int, required=True)
     item.add_argument("--mode", choices=MODES, required=True)
+    from qcsd_lab.buflo_duration_budget import POLICY, CADENCE64_POLICY
+    from qcsd_lab.front_fixed_configuration import POLICY as FRONT_LIGHT_POLICY
+    item.add_argument("--front-configuration-policy", choices=(FRONT_LIGHT_POLICY,),
+                      help="explicit prospective lighter FRONT V5; default retains V4")
+    item.add_argument("--buflo-duration-policy", choices=(POLICY, CADENCE64_POLICY),
+                      help="explicit prospective BuFLO cadence/event budget; default retains the fixed20ms/200s flight")
     item.add_argument("--class-indices", type=int, nargs="+",
                       help="ordered current-batch subgroup with fresh qualification and canary")
     item.add_argument("--ordinary-renewal", type=Path)

@@ -126,13 +126,19 @@ def test_exact_old_source_remains_compatible_and_owned_mutation_is_refused(tmp_p
 
 
 def test_current_owned_shape_is_exact_and_other_science_stays_in_projection():
+    def projection(value):
+        # Match the stock compatibility path before checking residual science.
+        value = target._mixed_implementation_source_projection(value)
+        value = target._parallel_partial_source_projection(value)
+        return target._reader_code_projection(value, "target")
+
     raw = Path(target.__file__).read_bytes()
     with pytest.raises(ValueError, match="action boundary"):
-        target._reader_code_projection(_change_owned(raw), "target")
+        projection(_change_owned(raw))
     tree = ast.parse(raw)
     owned = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_owned")
     assert hashlib.sha256(ast.dump(owned, include_attributes=False).encode()).hexdigest() == (
         "4e2825b98c6221ea6c4f66da8e7503ec6eb12d3da7319764334144c41ac5b45b")
-    baseline = target._reader_code_projection(raw, "target")
+    baseline = projection(raw)
     changed_science = raw.replace(b"def _identity(value):", b"def _identity(value):\n    pass", 1)
-    assert target._reader_code_projection(changed_science, "target") != baseline
+    assert projection(changed_science) != baseline

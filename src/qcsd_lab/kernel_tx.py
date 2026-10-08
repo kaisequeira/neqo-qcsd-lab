@@ -33,6 +33,9 @@ from .process_scheduler import (
 
 KERNEL_TX_RUNNER_SCHEMA_VERSION = 11
 KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION = 12
+KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION = 13
+KERNEL_TX_CADENCE64_NS = 64_000_000
+KERNEL_TX_CADENCE64_INCOMING_WINDOW_NS = 32_000_000
 KERNEL_TX_RUNNER_V10_SCHEMA_VERSION = 10
 KERNEL_TX_RUNNER_V9_SCHEMA_VERSION = 9
 KERNEL_TX_RUNNER_V8_SCHEMA_VERSION = 8
@@ -71,6 +74,7 @@ _KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA = {
     KERNEL_TX_RUNNER_V10_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
     KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
+    KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
 }
 
 KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS = (
@@ -330,6 +334,9 @@ KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V10_SEMANTICS.replace(
 KERNEL_TX_RESERVE_TX_SEMANTICS = "client_only_buflo_kernel_timed_egress_v12; historical_schema11_default_unchanged=true; rolling_selection_and_dispatch_deadline=release_plus_4ms; preparation_reserve_ns=1000000; physical_deadline=release_plus_5ms; tick_zero_selection_and_dispatch_deadline=release; admission=release_minus_10ms; nominal_selection=release_minus_5ms; period_ns=20000000; packet_bytes=1200; incoming_window=unchanged_bound_preparation; truthful_main_construction_lateness_us_lt_5000=true; enqueue_cutoff=release_plus_5ms; scm_txtime=release_plus_10ms; etf_delta=10ms; deadline_mode=false; no_catch_up=true; omission_allowance=false; clock_regression_fatal=true; exact_kernel_TX_and_post_veth_required=true; paper_equivalent=false"
 KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS = "CLOCK_TAI_is_authoritative; admission=release_minus_10ms; nominal_selection=release_minus_5ms; rolling_preparation_deadline=release_plus_4ms; tick_zero_preparation_deadline=release; completed_and_confirmed_before_recorded_preparation_deadline=true; preparation_reserve_ns=1000000; physical_deadline_unchanged_release_plus_5ms=true; exact_read_counts_and_failure_evidence=true; no_omissions_or_catch_up=true"
 KERNEL_TX_RESERVE_PREBUILD_SELECTION_SEMANTICS = "CLOCK_TAI_selection_readiness_enters_during_release_minus_10ms_to_recorded_preparation_deadline; application_and_transport_state_selected_for_nominal_release; nominal_selection_boundary=release_minus_5ms; rolling_selection_and_fresh_dispatch_confirmation_before_release_plus_4ms; tick_zero_selection_staging_and_dispatch_before_release; late_entry_records_actual_zero_wait; preparation_reserve_ns=1000000_before_unchanged_release_plus_5ms_physical_deadline; truthful_construction_lateness_retained; runner_freezes_until_kernel_tx_software_receipt; preparation_expiry_and_clock_failure_fail_closed; client_only_adaptation; paper_equivalent=false"
+
+KERNEL_TX_CADENCE64_TX_SEMANTICS = "client_only_buflo_kernel_timed_egress_v13; historical_schema11_and12_unchanged=true; rolling_selection_and_dispatch_deadline=release_plus_4ms; preparation_reserve_ns=1000000; physical_deadline=release_plus_5ms; tick_zero_selection_and_dispatch_deadline=release; admission=release_minus_10ms; nominal_selection=release_minus_5ms; period_ns=64000000; packet_bytes=1200; incoming_window=bound_half_period_32000000ns; truthful_main_construction_lateness_us_lt_5000=true; enqueue_cutoff=release_plus_5ms; scm_txtime=release_plus_10ms; etf_delta=10ms; deadline_mode=false; no_catch_up=true; omission_allowance=false; clock_regression_fatal=true; exact_kernel_TX_and_post_veth_required=true; paper_equivalent=false"
+KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS = "CLOCK_TAI_is_authoritative; admission=release_minus_10ms; nominal_selection=release_minus_5ms; rolling_preparation_deadline=release_plus_4ms; tick_zero_preparation_deadline=release; completed_and_confirmed_before_recorded_preparation_deadline=true; preparation_reserve_ns=1000000; physical_deadline_unchanged_release_plus_5ms=true; exact_read_counts_and_failure_evidence=true; no_omissions_or_catch_up=true; cadence_ns=64000000_bound_to_exact_prospective_parameters"
 
 KERNEL_TX_EVIDENCE_SEMANTICS = (
     "buflo_kernel_timed_egress_lab_reconciliation_v1; "
@@ -1803,7 +1810,7 @@ def _runtime_contract_valid(
     contract = _exact_mapping(value, _RUNTIME_CONTRACT_KEYS)
     expected_prebuild_semantics = (
         KERNEL_TX_RESERVE_PREBUILD_SELECTION_SEMANTICS
-        if runner_schema_version == KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION
+        if runner_schema_version in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
         else
         KERNEL_TX_PROTECTED_PREBUILD_SELECTION_V2_SEMANTICS
         if runner_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
@@ -1968,7 +1975,7 @@ def _qdisc_contract_valid(value: Any, *, runner_schema_version: int) -> bool:
             runner_schema_version
             in {KERNEL_TX_RUNNER_V7_SCHEMA_VERSION, KERNEL_TX_RUNNER_V8_SCHEMA_VERSION,
                 KERNEL_TX_RUNNER_V9_SCHEMA_VERSION, KERNEL_TX_RUNNER_V10_SCHEMA_VERSION,
-                KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION}
+                KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
             or contract["delta_ns"] < min(KERNEL_TX_ADAPTER_WINDOW_NS)
         )
         and contract.get("deadline_mode") is False
@@ -2546,7 +2553,8 @@ def _runner_job_valid(
     runner_schema_version: int,
     incoming_credit_release_window_ns: int,
 ) -> tuple[bool, int]:
-    modern = runner_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION}
+    cadence_ns = KERNEL_TX_CADENCE64_NS if runner_schema_version == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION else KERNEL_TX_CADENCE_NS
+    modern = runner_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
     job = _exact_mapping(value, _JOB_V2_KEYS if modern else _JOB_KEYS)
     if (
         job is None
@@ -2618,8 +2626,8 @@ def _runner_job_valid(
     ):
         return False, expected_first_item_id
     if previous_job is not None and (
-        job["release_monotonic_ns"] - previous_job["release_monotonic_ns"] != KERNEL_TX_CADENCE_NS
-        or job["release_tai_ns"] - previous_job["release_tai_ns"] != KERNEL_TX_CADENCE_NS
+        job["release_monotonic_ns"] - previous_job["release_monotonic_ns"] != cadence_ns
+        or job["release_tai_ns"] - previous_job["release_tai_ns"] != cadence_ns
     ):
         return False, expected_first_item_id
     outgoing_tx_tai_upper_ns: int | None = None
@@ -3128,9 +3136,10 @@ def _unmapped_runner_jobs_valid(
 ) -> bool:
     if jobs and (defense_start_monotonic_ns is None or defense_start_tai_ns is None):
         return False
+    cadence_ns = KERNEL_TX_CADENCE64_NS if runner_schema_version == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION else KERNEL_TX_CADENCE_NS
     expected_item_id = 0
     for expected_job_id, value in enumerate(jobs):
-        modern = runner_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION}
+        modern = runner_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
         job = _exact_mapping(value, _JOB_V2_KEYS if modern else _JOB_KEYS)
         if (
             job is None
@@ -3154,9 +3163,9 @@ def _unmapped_runner_jobs_valid(
                 job, window_ns=incoming_credit_release_window_ns, mapping=None,
             )
             or job["release_monotonic_ns"]
-            != defense_start_monotonic_ns + expected_job_id * KERNEL_TX_CADENCE_NS
+            != defense_start_monotonic_ns + expected_job_id * cadence_ns
             or job["release_tai_ns"]
-            != defense_start_tai_ns + expected_job_id * KERNEL_TX_CADENCE_NS
+            != defense_start_tai_ns + expected_job_id * cadence_ns
             or not isinstance(job.get("items"), list)
             or any(not isinstance(item, Mapping) for item in job["items"])
             or not isinstance(job.get("credit_identities"), list)
@@ -4048,12 +4057,44 @@ def _protected_selection_wait_v3_valid(
     jobs: Sequence[Mapping[str, Any]],
     success: bool,
 ) -> bool:
+    return _protected_selection_wait_with_cadence_valid(value, defense_start_tai_ns=defense_start_tai_ns,
+        jobs=jobs, success=success, schema_version=3, semantics=KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS,
+        cadence_ns=KERNEL_TX_CADENCE_NS)
+
+
+def _protected_selection_wait_v4_valid(
+    value: Any,
+    *,
+    defense_start_tai_ns: int | None,
+    jobs: Sequence[Mapping[str, Any]],
+    success: bool,
+) -> bool:
+    return _protected_selection_wait_with_cadence_valid(value, defense_start_tai_ns=defense_start_tai_ns,
+        jobs=jobs, success=success, schema_version=4, semantics=KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS,
+        cadence_ns=KERNEL_TX_CADENCE64_NS)
+
+
+def _protected_selection_wait_with_cadence_valid(
+    value: Any,
+    *,
+    defense_start_tai_ns: int | None,
+    jobs: Sequence[Mapping[str, Any]],
+    success: bool,
+    schema_version: int,
+    semantics: str,
+    cadence_ns: int,
+) -> bool:
     """Validate measured wait or immediate readiness under the explicit rolling preparation reserve."""
+    if (schema_version, semantics, cadence_ns) not in {
+        (3, KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS, KERNEL_TX_CADENCE_NS),
+        (4, KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS, KERNEL_TX_CADENCE64_NS),
+    }:
+        return False
     wait = _exact_mapping(value, _PROTECTED_SELECTION_WAIT_KEYS)
     if (
         wait is None
-        or not _schema(wait, 3)
-        or wait.get("semantics") != KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS
+        or not _schema(wait, schema_version)
+        or wait.get("semantics") != semantics
         or not isinstance(wait.get("entries"), list)
         or any(
             not _u64(wait.get(key))
@@ -4088,7 +4129,7 @@ def _protected_selection_wait_v3_valid(
         expected_release = (
             None
             if defense_start_tai_ns is None
-            else defense_start_tai_ns + index * KERNEL_TX_CADENCE_NS
+            else defense_start_tai_ns + index * cadence_ns
         )
         if (
             entry is None
@@ -4326,10 +4367,10 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     receipt_schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
     receipt_keys = (
         _RUNNER_V10_RECEIPT_KEYS | {"preparation_policy"}
-        if receipt_schema_version == KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION
+        if receipt_schema_version in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
         else
         _RUNNER_V10_RECEIPT_KEYS
-        if receipt_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION}
+        if receipt_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
         else _RUNNER_V6_RECEIPT_KEYS
         if receipt_schema_version
         in {
@@ -4338,14 +4379,14 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
             KERNEL_TX_RUNNER_V8_SCHEMA_VERSION,
             KERNEL_TX_RUNNER_V9_SCHEMA_VERSION,
             KERNEL_TX_RUNNER_V10_SCHEMA_VERSION,
-            KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
         }
         else _RUNNER_RECEIPT_KEYS
     )
     receipt = _exact_mapping(value, receipt_keys)
     nested_schema_version = (
         6
-        if receipt_schema_version in {KERNEL_TX_RUNNER_V9_SCHEMA_VERSION, KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION}
+        if receipt_schema_version in {KERNEL_TX_RUNNER_V9_SCHEMA_VERSION, KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
         else KERNEL_TX_RUNNER_V5_SCHEMA_VERSION
         if receipt_schema_version
         in {
@@ -4354,7 +4395,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
             KERNEL_TX_RUNNER_V8_SCHEMA_VERSION,
             KERNEL_TX_RUNNER_V9_SCHEMA_VERSION,
             KERNEL_TX_RUNNER_V10_SCHEMA_VERSION,
-            KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
         }
         else receipt_schema_version
     )
@@ -4373,13 +4414,15 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         KERNEL_TX_RUNNER_V10_SCHEMA_VERSION: KERNEL_TX_RUNNER_V10_SEMANTICS,
         KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_RUNNER_SEMANTICS,
         KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION: KERNEL_TX_RESERVE_TX_SEMANTICS,
+        KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION: KERNEL_TX_CADENCE64_TX_SEMANTICS,
     }.get(receipt_schema_version)
     if (
         receipt is None
-        or receipt_schema_version == KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION and (
+        or receipt_schema_version in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION} and (
             type(receipt_schema_version) is not int
             or not _reserve_marker_valid(receipt.get("preparation_policy"))
-            or receipt.get("incoming_credit_release_window_ns") != KERNEL_TX_INCOMING_CREDIT_RELEASE_WINDOW_NS
+            or receipt.get("preparation_policy", {}).get("period_us") != (64_000 if receipt_schema_version == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION else 20_000)
+            or receipt.get("incoming_credit_release_window_ns") != (KERNEL_TX_CADENCE64_INCOMING_WINDOW_NS if receipt_schema_version == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION else KERNEL_TX_INCOMING_CREDIT_RELEASE_WINDOW_NS)
         )
         or expected_semantics is None
         or receipt.get("semantics") != expected_semantics
@@ -4409,12 +4452,14 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
             and not _clock_mapping_valid(receipt["clock_mapping"])
         )
         or not isinstance(receipt.get("jobs"), list)
-        or receipt_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION} and (
+        or receipt_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION} and (
             type(receipt_schema_version) is not int
             or type(receipt.get("incoming_credit_release_window_ns")) is not int
-            or receipt["incoming_credit_release_window_ns"] not in {
+            or receipt["incoming_credit_release_window_ns"] not in ({
+                KERNEL_TX_CADENCE64_INCOMING_WINDOW_NS,
+            } if receipt_schema_version == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION else {
                 KERNEL_TX_REALIZATION_WINDOW_NS, KERNEL_TX_INCOMING_CREDIT_RELEASE_WINDOW_NS,
-            }
+            })
         )
     ):
         return False
@@ -4422,7 +4467,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     jobs = receipt["jobs"]
     incoming_credit_release_window_ns = (
         receipt["incoming_credit_release_window_ns"]
-        if receipt_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION}
+        if receipt_schema_version in {KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
         else KERNEL_TX_REALIZATION_WINDOW_NS
     )
     if receipt_schema_version in {
@@ -4431,9 +4476,10 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         KERNEL_TX_RUNNER_V8_SCHEMA_VERSION,
         KERNEL_TX_RUNNER_V9_SCHEMA_VERSION,
         KERNEL_TX_RUNNER_V10_SCHEMA_VERSION,
-        KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+        KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
     } and not (
-        (_protected_selection_wait_v3_valid if receipt_schema_version == KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION
+        (_protected_selection_wait_v4_valid if receipt_schema_version == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION
+         else _protected_selection_wait_v3_valid if receipt_schema_version == KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION
          else _protected_selection_wait_v2_valid if receipt_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
          else _protected_selection_wait_valid)(
             receipt.get("protected_selection_wait"),
@@ -4619,13 +4665,13 @@ def kernel_tx_incoming_window_bound_to_run_valid(run: Mapping[str, Any]) -> bool
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
     if not isinstance(raw, Mapping) or raw.get("schema_version") not in {
-        KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+        KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
     }:
         return True
     from .capture_acceptance_policy import (buflo_incoming_release_window,
         BUFLO_KERNEL_PREPARATION_FIELD, validate_buflo_kernel_preparation_marker, _exact_json)
 
-    if raw.get("schema_version") == KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION:
+    if raw.get("schema_version") in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}:
         try:
             marker = validate_buflo_kernel_preparation_marker(run.get(BUFLO_KERNEL_PREPARATION_FIELD))
         except (TypeError, ValueError):

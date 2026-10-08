@@ -315,6 +315,116 @@ def _quick_buflo_parameter_fixture(value: dict[str, Any]) -> str:
     return Path(budget.PARAMETER_PATH).name
 
 
+def _target_buflo_cadence64_parameter_fixture(value: dict[str, Any]) -> str:
+    """Select the exact new tuple only through two current target chunk workers."""
+    from . import rapid_lane_evidence as lanes
+    from . import rapid_target_parallel_schedule as workers
+    from . import rapid_capture_traffic as traffic
+    from . import buflo_duration_budget as budget
+    from .rapid_operation_facts import OperationFacts, current_context
+    if current_context() is None:
+        context = OperationFacts()
+        with context.scope():
+            result = _target_buflo_cadence64_parameter_fixture(value)
+            context.check()
+            return result
+    if (value.get("artifact_type") != "qcsd-two-worker-formal-lane-authority"
+        or not isinstance(value.get("lane_specs"), list) or len(value["lane_specs"]) != 2
+        or not isinstance(value.get("campaigns"), list) or len(value["campaigns"]) != 2):
+        raise ValueError("64 ms BuFLO requires two current typed target chunk workers")
+    facts = []
+    for index, reference in enumerate(value["lane_specs"]):
+        if (not isinstance(reference, dict) or set(reference) != {"path", "sha256"}
+            or not isinstance(reference["path"], str) or not Path(reference["path"]).is_absolute()):
+            raise ValueError("64 ms target worker specification reference is malformed")
+        path = Path(reference["path"])
+        if sha(current_context().watch_file(path)) != reference["sha256"]:
+            raise ValueError("64 ms target worker specification bytes changed")
+        spec = lanes.load_capture_spec(path)
+        sites, payload = workers.verify_plan(spec, require_current=True)
+        capsule = workers.require_plan(payload)
+        selected = traffic.declared(payload)
+        if (capsule["mode"] != "buflo" or selected != budget.CADENCE64_POLICY
+            or {key: spec.serializable()[key] for key in RUNTIME_KEYS} != value["runtime"]):
+            raise ValueError("64 ms target worker changed its mode, exact policy or runtime")
+        campaign = value["campaigns"][index]
+        if (not isinstance(campaign, dict) or set(campaign) != {"path", "sha256"}
+            or not isinstance(campaign["path"], str)):
+            raise ValueError("64 ms target worker campaign reference is malformed")
+        matching = [row for row in payload["lanes"] if str(spec.campaign_dir / (row["campaign_name"] + ".yml")) == campaign["path"]]
+        if (len(matching) != 1 or matching[0]["mode"] != "buflo"
+            or matching[0]["campaign_sha256"] != campaign["sha256"]
+            or sha(current_context().watch_file(Path(campaign["path"]))) != campaign["sha256"]):
+            raise ValueError("64 ms target worker changed its exact campaign bytes")
+        lane = workers.prepared_lane({key: item for key, item in matching[0].items() if key != "campaign_sha256"})
+        workers.require_worker(payload, lane, sites, spec)
+        facts.append((spec, payload, lane, sites))
+        for key in ("buflo_parameters_sha256", "buflo_parameter_provenance_sha256"):
+            relative, expected = traffic.plan_files(payload)[key]
+            for root in (spec.runtime_source_root, spec.module_root, spec.execution_root):
+                supplied = root / relative
+                raw = current_context().watch_file(supplied)
+                if sha(raw) != expected or supplied.stat().st_mode & 0o7777 != 0o644:
+                    raise ValueError("64 ms target parameter/provenance bytes or full mode changed")
+                if key == "buflo_parameters_sha256":
+                    budget.parse_parameters(raw)
+    workers.require_disjoint(facts)
+    return Path(budget.CADENCE64_PARAMETER_PATH).name
+
+
+def _target_front_v5_parameter_fixture(value: dict[str, Any]) -> str:
+    from . import rapid_lane_evidence as lanes
+    from . import rapid_target_parallel_schedule as workers
+    from . import rapid_capture_traffic as traffic
+    from . import front_fixed_configuration as front
+    from .rapid_operation_facts import OperationFacts, current_context
+    if current_context() is None:
+        context = OperationFacts()
+        with context.scope():
+            result = _target_front_v5_parameter_fixture(value)
+            context.check()
+            return result
+    if (value.get("artifact_type") != "qcsd-two-worker-formal-lane-authority"
+        or not isinstance(value.get("lane_specs"), list) or len(value["lane_specs"]) != 2
+        or not isinstance(value.get("campaigns"), list) or len(value["campaigns"]) != 2):
+        raise ValueError("FRONT V5 requires two current typed target chunk workers")
+    facts = []
+    for index, reference in enumerate(value["lane_specs"]):
+        if (not isinstance(reference, dict) or set(reference) != {"path", "sha256"}
+            or not isinstance(reference["path"], str) or not Path(reference["path"]).is_absolute()):
+            raise ValueError("FRONT V5 target worker reference is malformed")
+        spec_path = Path(reference["path"])
+        if sha(current_context().watch_file(spec_path)) != reference["sha256"]:
+            raise ValueError("FRONT V5 target worker specification changed")
+        spec = lanes.load_capture_spec(spec_path)
+        sites, payload = workers.verify_plan(spec, require_current=True)
+        capsule = workers.require_plan(payload)
+        if (capsule["mode"] != "front" or traffic.front_declared(payload) != front.POLICY
+            or {key: spec.serializable()[key] for key in RUNTIME_KEYS} != value["runtime"]):
+            raise ValueError("FRONT V5 fixture lacks its exact target-mode policy")
+        campaign = value["campaigns"][index]
+        if not isinstance(campaign, dict) or set(campaign) != {"path", "sha256"}:
+            raise ValueError("FRONT V5 worker campaign reference is malformed")
+        matching = [row for row in payload["lanes"] if str(spec.campaign_dir / (row["campaign_name"] + ".yml")) == campaign["path"]]
+        if (len(matching) != 1 or matching[0]["mode"] != "front"
+            or matching[0]["campaign_sha256"] != campaign["sha256"]
+            or sha(current_context().watch_file(Path(campaign["path"]))) != campaign["sha256"]):
+            raise ValueError("FRONT V5 worker campaign bytes/path changed")
+        lane = workers.prepared_lane({key: item for key, item in matching[0].items() if key != "campaign_sha256"})
+        workers.require_worker(payload, lane, sites, spec)
+        front.validate_source_artifacts(payload["runtime"])
+        for name in ("execution_root", "runtime_source_root", "module_root"):
+            root = Path(payload["runtime"][name])
+            for relative, digest in ((front.CONFIGURATION_PATH, front.CONFIGURATION_SHA256),
+                                     (front.PROVENANCE_PATH, front.PROVENANCE_SHA256)):
+                artifact = root / relative
+                if artifact.stat().st_mode & 0o7777 != 0o644 or sha(current_context().watch_file(artifact)) != digest:
+                    raise ValueError("FRONT V5 source/execution parameter/provenance changed")
+        facts.append((spec, payload, lane, sites))
+    workers.require_disjoint(facts)
+    return Path(front.CONFIGURATION_PATH).name
+
+
 def _execution_parameter_context(value: dict[str, Any]):
     """Keep source identity separate from identical execution fixture copies.
 
@@ -341,12 +451,18 @@ def _execution_parameter_context(value: dict[str, Any]):
             campaign = yaml.safe_load(read(path))
             if not isinstance(campaign, dict) or not isinstance(campaign.get("defenses"), list):
                 raise ValueError("parallel input context requires an explicit campaign defense list")
+            from .front_fixed_configuration import policy as fixed_front_policy
+            if fixed_front_policy(campaign) is not None:
+                _target_front_v5_parameter_fixture(value)
             for defense in campaign.get("defenses", ()):
                 if isinstance(defense, dict) and "parameters" in defense:
                     filename = canonical.get(defense.get("kind"))
                     if (defense.get("kind") == "buflo" and isinstance(defense["parameters"], str)
                         and Path(defense["parameters"]).name == "buflo-duration200.json"):
                         filename = _quick_buflo_parameter_fixture(value)
+                    elif (defense.get("kind") == "buflo" and isinstance(defense["parameters"], str)
+                          and Path(defense["parameters"]).name == "buflo-cadence64-budget640.json"):
+                        filename = _target_buflo_cadence64_parameter_fixture(value)
                     if (filename is None or not isinstance(defense["parameters"], str)
                         or Path(defense["parameters"]).is_absolute()):
                         raise ValueError("parallel campaign must select its canonical execution parameter fixture")

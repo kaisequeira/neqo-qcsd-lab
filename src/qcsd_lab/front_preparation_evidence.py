@@ -4,7 +4,7 @@ from collections.abc import Mapping
 import json
 from typing import Any
 
-from .capture_acceptance_policy import FRONT_RESERVE_POLICY
+from .capture_acceptance_policy import FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY, validate_front_capture_run
 
 _U64_MAX = 2**64 - 1
 _ACTION_FIELDS = {"type", "endpoint", "packet", "slot", "deadline_after_us", "allow_stream_data"}
@@ -42,6 +42,10 @@ def validate_windows(run: Mapping[str, Any], outgoing: Mapping[int, Mapping[str,
                      omissions: Mapping[int, Mapping[str, str]],
                      events: list[dict[str, str]]) -> tuple[dict[int, dict[str, Any]], set[int]]:
     """Bind every original action to its shorter construction and original socket windows."""
+    marker = validate_front_capture_run(run)
+    if marker["policy"] not in {FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY}:
+        raise ValueError("FRONT construction evidence requires its exact V4 or V5 source policy")
+    expected_policy = marker["policy"]
     start = run["defense_start_monotonic_ns"]
     actions, windows = {}, {}
     for event in events:
@@ -64,7 +68,7 @@ def validate_windows(run: Mapping[str, Any], outgoing: Mapping[int, Mapping[str,
                                       if expired else {"transport_action"})
             if (event.get("outcome") not in {"registered", "expired_before_registration"}
                 or set(detail) != fields or type(detail.get("schema_version")) is not int
-                or detail["schema_version"] != 1 or detail.get("policy") != FRONT_RESERVE_POLICY
+                or detail["schema_version"] != 1 or detail.get("policy") != expected_policy
                 or type(detail.get("preparation_reserve_us")) is not int or detail["preparation_reserve_us"] != 1000):
                 raise ValueError("FRONT V4 construction window changes its closed contract")
             action = detail["original_action" if expired else "transport_action"]

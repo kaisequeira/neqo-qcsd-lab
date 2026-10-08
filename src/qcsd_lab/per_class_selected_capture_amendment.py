@@ -33,8 +33,22 @@ DECLARATION_FIELDS = old.DECLARATION_FIELDS | {"renewals", "capture_limits", "tr
 ROW_FIELDS = old.ROW_FIELDS | {"current_selected_input", "current_selected_manifest", "class_index"}
 
 
+CADENCE64_ROLE = "per-class-selected-graph-amended-buflo-cadence64-budget640-preparation-v1"
+CADENCE64_CONTRACT = "unchanged-per-class-selected-graphs-with-fixed-buflo-cadence64-budget640-setting-v1"
+
+
+def capture_role(duration: str | None) -> str:
+    selected = traffic.policy(duration)
+    return CADENCE64_ROLE if selected == traffic.budget.CADENCE64_POLICY else DURATION_ROLE if selected else ROLE
+
+
+def capture_contract(duration: str | None) -> str:
+    selected = traffic.policy(duration)
+    return CADENCE64_CONTRACT if selected == traffic.budget.CADENCE64_POLICY else CONTRACT
+
+
 def is_amended(value: Any) -> bool:
-    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE}
+    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE, CADENCE64_ROLE}
 
 
 def is_receipt(path: Path) -> bool:
@@ -141,7 +155,7 @@ def _derived(original, reference, policies, duration):
     if not selected.is_selected(original.get("preparation")):
         raise ValueError("selected amendment needs its current complete selected preparation")
     value = deepcopy(original)
-    value["preparation"].update(data_role=DURATION_ROLE if duration else ROLE,
+    value["preparation"].update(data_role=capture_role(duration),
         **{old.FIELD: dict(reference)}, **dict(policies))
     old.capture.validate_front_preparation_policy(value["preparation"])
     old.capture.validate_buflo_kernel_preparation_policy(value["preparation"])
@@ -153,17 +167,17 @@ def _declaration(path: Path, *, enrollment=None, runtime=None) -> dict:
     duration = traffic.policy(value.get(traffic.FIELD))
     fields = set(DECLARATION_FIELDS) | ({traffic.FIELD} if duration else set())
     rolling._keys(value, fields, "selected capture declaration")
-    policies = old._policies(value["policies"])
+    policies = old._policies(value["policies"], buflo_duration_policy=duration)
     modes = old._modes(policies)
     actual_runtime = rolling._runtime(value["runtime"])
     actual_enrollment = rolling._open_ref(value["enrollment"])
     batch, classes, policy = rolling._verify_enrollment(actual_enrollment)
     rows = _rows(batch, classes, policy, actual_runtime, value["renewals"])
     study = rolling._open_ref(batch["policy"]).parent
-    if (value["contract"] != CONTRACT or value["original_data_role"] != selected.ROLE
-        or value["capture_data_role"] != (DURATION_ROLE if duration else ROLE)
+    if (value["contract"] != capture_contract(duration) or value["original_data_role"] != selected.ROLE
+        or value["capture_data_role"] != (capture_role(duration))
         or len(modes) != 1 or value["modes"] != modes
-        or modes == ["buflo"] and duration != traffic.budget.POLICY
+        or modes == ["buflo"] and duration not in {traffic.budget.POLICY, traffic.budget.CADENCE64_POLICY}
         or modes == ["front"] and duration is not None
         or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
         or value["scientific_credit"] is not False
@@ -202,7 +216,7 @@ def validate_amendment(path: Path, *, enrollment=None, runtime=None) -> dict:
     value = old.receipts._unpack(lanes._read(path), RECEIPT_TYPE)
     rolling._keys(value, old.RECEIPT_FIELDS, "selected capture amendment")
     declaration = _declaration(rolling._open_ref(value["declaration"]), enrollment=enrollment, runtime=runtime)
-    if (value["contract"] != CONTRACT or Path(declaration["receipt_path"]) != path.absolute()
+    if (value["contract"] != declaration["contract"] or Path(declaration["receipt_path"]) != path.absolute()
         or value["scientific_credit"] is not False or type(value["formal_accepted_trace_count"]) is not int
         or value["formal_accepted_trace_count"] != 0
         or not old.receipts._utc(declaration["published_at"]) <= old.receipts._utc(value["published_at"]) <= old.receipts._utc(old.receipts._now())):
@@ -224,10 +238,11 @@ def validate_amendment(path: Path, *, enrollment=None, runtime=None) -> dict:
 
 def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path, *,
                       front_policy=None, buflo_policy=None, buflo_duration_policy=None) -> Path:
-    policies = old.policies(front_policy=front_policy, buflo_policy=buflo_policy)
+    policies = old.policies(front_policy=front_policy, buflo_policy=buflo_policy,
+                            buflo_duration_policy=buflo_duration_policy)
     duration = traffic.policy(buflo_duration_policy)
     modes = old._modes(policies)
-    if len(modes) != 1 or modes == ["buflo"] and duration != traffic.budget.POLICY or modes == ["front"] and duration is not None:
+    if len(modes) != 1 or modes == ["buflo"] and duration not in {traffic.budget.POLICY, traffic.budget.CADENCE64_POLICY} or modes == ["front"] and duration is not None:
         raise ValueError("selected amendment needs one explicit FRONT V4 or fixed BuFLO200 setting")
     runtime = rolling._runtime(dict(runtime))
     batch, classes, policy = rolling._verify_enrollment(enrollment)
@@ -262,8 +277,8 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
             selected.prepare_input(new_input, new_manifest)
             renewals[row["candidate_id"]] = {"input": selected.reference(new_input), "manifest": selected.reference(new_manifest)}
     rows = _rows(batch, classes, policy, runtime, renewals)
-    value = {"contract": CONTRACT, "original_data_role": selected.ROLE,
-        "capture_data_role": DURATION_ROLE if duration else ROLE, "policies": policies, "modes": modes,
+    value = {"contract": capture_contract(duration), "original_data_role": selected.ROLE,
+        "capture_data_role": capture_role(duration), "policies": policies, "modes": modes,
         "enrollment": rolling._ref(enrollment), "admission_provenance": batch["admission_provenance"],
         "runtime": dict(runtime), "runtime_artifacts": {key: rolling._ref(Path(runtime[key])) for key in (
             "source_manifest", "client_binary", "base_launcher", "host_launcher")},
@@ -280,7 +295,7 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
         target = Path(row["capture_manifest_path"])
         old.receipts.durable_create(target, graph.canonical_bytes(_derived(current, ref, policies, duration)))
         captured.append({**row, "capture_manifest": rolling._ref(target)})
-    rolling._write(output, RECEIPT_TYPE, {"contract": CONTRACT, "declaration": ref, "workloads": captured,
+    rolling._write(output, RECEIPT_TYPE, {"contract": value["contract"], "declaration": ref, "workloads": captured,
         "published_at": old.receipts._now(), "scientific_credit": False, "formal_accepted_trace_count": 0})
     validate_amendment(output, enrollment=enrollment, runtime=runtime)
     return output

@@ -147,6 +147,7 @@ def run(args, *, _context=None):
                                     static_capture_amendment=getattr(args, "static_capture_amendment", None),
                                     application_body_identity_policy=getattr(args, "application_body_identity_policy", None),
                                     tamaraw_configuration_policy=getattr(args, "tamaraw_configuration_policy", None),
+                                    front_configuration_policy=getattr(args, "front_configuration_policy", None),
                                     selected_input_renewal=getattr(args, "selected_input_renewal", None),
                                     class_indices=getattr(args, "class_indices", None),
                                     qualification_delivery_compatibility=(rolling._ref(args.qualification_delivery_compatibility)
@@ -260,6 +261,8 @@ def _parser():
             item.add_argument("--qualification-delivery-compatibility", type=Path)
             from qcsd_lab.tamaraw_fixed_configuration import POLICY as TAMARAW_CONFIGURATION_POLICY
             item.add_argument("--tamaraw-configuration-policy", choices=(TAMARAW_CONFIGURATION_POLICY,))
+            from qcsd_lab.front_fixed_configuration import POLICY as FRONT_LIGHT_CONFIGURATION_POLICY
+            item.add_argument("--front-configuration-policy", choices=(FRONT_LIGHT_CONFIGURATION_POLICY,))
             item.add_argument("--output", type=Path, required=True)
             item.add_argument("--spec-output", type=Path, required=True)
         elif name == "front-amendment":
@@ -269,14 +272,14 @@ def _parser():
             item.add_argument("--output", type=Path, required=True)
             item.add_argument("--capture-policy", choices=(CAPTURE_POLICY, WINDOW_CAPTURE_POLICY, RESERVE_CAPTURE_POLICY), default=CAPTURE_POLICY)
         elif name == "static-amendment":
-            from qcsd_lab.capture_acceptance_policy import FRONT_RESERVE_POLICY, BUFLO_KERNEL_PREPARATION_POLICY
+            from qcsd_lab.capture_acceptance_policy import FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY, BUFLO_KERNEL_PREPARATION_POLICY, CADENCE64_KERNEL_PREPARATION_POLICY
             item.add_argument("--enrollment", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path, required=True)
             item.add_argument("--output", type=Path, required=True)
-            item.add_argument("--front-policy", choices=(FRONT_RESERVE_POLICY,))
-            item.add_argument("--buflo-policy", choices=(BUFLO_KERNEL_PREPARATION_POLICY,))
-            from qcsd_lab.buflo_duration_budget import POLICY
-            item.add_argument("--buflo-duration-policy", choices=(POLICY,))
+            item.add_argument("--front-policy", choices=(FRONT_RESERVE_POLICY, FRONT_LIGHT_POLICY))
+            item.add_argument("--buflo-policy", choices=(BUFLO_KERNEL_PREPARATION_POLICY, CADENCE64_KERNEL_PREPARATION_POLICY))
+            from qcsd_lab.buflo_duration_budget import POLICY, CADENCE64_POLICY
+            item.add_argument("--buflo-duration-policy", choices=(POLICY, CADENCE64_POLICY))
         elif name in {"publish-manifest", "verify-manifest"}:
             item.add_argument("--lane-closures" if name == "publish-manifest" else "--manifest", type=Path, required=True)
             if name == "publish-manifest":

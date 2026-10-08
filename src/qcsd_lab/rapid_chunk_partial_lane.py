@@ -327,6 +327,13 @@ def _compatible_reader_sources(producer):
                     target._parallel_schedule_source_projection(Path(ref['path']).read_bytes()) !=
                     target._parallel_schedule_source_projection(Path(expected['path']).read_bytes())):
                 raise ValueError('chunk partial scheduling reader changed protected code or full modes')
+        elif name in ('qcsd_lab.rapid_slot_chunks', 'qcsd_lab.rapid_capture_plan'):
+            role = 'chunks' if name == 'qcsd_lab.rapid_slot_chunks' else 'capture_plan'
+            if (reference(ref['path']) != ref or reference(expected['path']) != expected
+                    or ref['mode'] != expected['mode']):
+                raise ValueError('chunk partial original/current reader bytes or full modes changed')
+            if ref['sha256'] != expected['sha256'] and not target._mixed_epoch().compatible_legacy_reader(role, ref, expected):
+                raise ValueError('chunk partial reader differs from its finite exact historical bytes')
         elif (reference(ref['path']) != ref or reference(expected['path']) != expected
                 or any(ref[key] != expected[key] for key in ('sha256', 'mode'))):
             raise ValueError('chunk partial original/current reader code bytes or full modes changed')

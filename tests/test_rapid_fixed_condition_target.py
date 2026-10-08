@@ -271,8 +271,19 @@ def test_numeric_repair_does_not_waive_original_reader_source_authority(tmp_path
         target._compatible_sources(producer)
 
 
+def owned_check_historical_source():
+    # Retained Native818 installed-deep/owned-check reader bytes, stored as data.
+    # This fixture is never imported or relabelled as the current FRONT planner.
+    path = Path(__file__).with_name('fixtures') / 'rapid_rolling_capture_owned_check.py.txt'
+    assert path.is_file() and not path.is_symlink()
+    assert path.stat().st_mode & 0o7777 == 0o644
+    raw = path.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == 'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'
+    return raw
+
+
 def test_exact_source53_installed_deep_and_owned_timeout_project_to_source52_membership():
-    source53 = Path(target.__file__).with_name('rapid_rolling_capture.py').read_bytes()
+    source53 = owned_check_historical_source()
     assert hashlib.sha256(source53).hexdigest() == 'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'
     assert hashlib.sha256(target._epoch_dispatch_source_projection(source53)).hexdigest() == (
         '080b519e94e2b7b2ec6ff47daf45e4779f1d544877ff5c47735377d2d3ed10c1')
@@ -286,7 +297,7 @@ def test_exact_source53_installed_deep_and_owned_timeout_project_to_source52_mem
     (b'recorded_docker(["docker", "rm", "-f", actual_id])', b'recorded_docker(["docker", "rm", "-f", name])'),
 ])
 def test_source53_installed_deep_projection_rejects_skipped_completion_or_pertrace_check(before, after):
-    source53 = Path(target.__file__).with_name('rapid_rolling_capture.py').read_bytes()
+    source53 = owned_check_historical_source()
     assert source53.count(before) == 1
     changed = source53.replace(before, after, 1)
     with pytest.raises(ValueError, match='outside the exact published Source pair'):

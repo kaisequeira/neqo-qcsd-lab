@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "interval_us": 64000,
+  "minimum_duration_us": 10000000,
+  "packet_size": 1200,
+  "max_events": 10000,
+  "implementation_scope": "client_only_quic",
+  "paper_equivalent": false,
+  "duration_budget_policy": "rapid-v7-fixed-64ms-640s-duration-budget-v1"
+}

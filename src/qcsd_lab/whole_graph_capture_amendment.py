@@ -29,8 +29,22 @@ ADAPTER_FILES = {name: "src/qcsd_lab/" + name + ".py" for name in
     ("whole_graph_input", "whole_graph_supplement", "whole_graph_capture_amendment", "rapid_rolling_capture")}
 
 
+CADENCE64_ROLE = "mixed-whole-occurrence-get-amended-buflo-cadence64-budget640-preparation-v1"
+CADENCE64_CONTRACT = "unchanged-mixed-complete-get-graphs-with-fixed-buflo-cadence64-budget640-setting-v1"
+
+
+def capture_role(duration: str | None) -> str:
+    selected = traffic.policy(duration)
+    return CADENCE64_ROLE if selected == traffic.budget.CADENCE64_POLICY else DURATION_ROLE if selected else ROLE
+
+
+def capture_contract(duration: str | None) -> str:
+    selected = traffic.policy(duration)
+    return CADENCE64_CONTRACT if selected == traffic.budget.CADENCE64_POLICY else DURATION_CONTRACT if selected else CONTRACT
+
+
 def is_amended(value: Any) -> bool:
-    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE}
+    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE, CADENCE64_ROLE}
 
 
 def authority_files(duration_policy: str | None = None) -> dict[str, str]:
@@ -77,7 +91,7 @@ def _derived(original: Mapping[str, Any], declaration: Mapping[str, str], polici
     if not (whole.is_whole(original.get("preparation")) or prep.is_static(original.get("preparation"))):
         raise ValueError("whole graph amendment requires the exact admitted original preparation")
     value = deepcopy(dict(original))
-    value["preparation"].update(data_role=DURATION_ROLE if duration else ROLE,
+    value["preparation"].update(data_role=capture_role(duration),
         **{old.FIELD: dict(declaration)}, **dict(policies))
     old.capture.validate_front_preparation_policy(value["preparation"])
     old.capture.validate_buflo_kernel_preparation_policy(value["preparation"])
@@ -91,14 +105,14 @@ def _declaration(path: Path, *, enrollment=None, runtime=None) -> dict:
     if duration:
         fields.update({traffic.FIELD, "traffic_artifacts"})
     rolling._keys(value, fields, "whole graph capture declaration")
-    selected = old._policies(value["policies"])
+    selected = old._policies(value["policies"], buflo_duration_policy=duration)
     expected_runtime = rolling._runtime(value["runtime"])
     actual_enrollment = rolling._open_ref(value["enrollment"])
     batch, classes, policy = rolling._verify_enrollment(actual_enrollment)
     rows = _rows(actual_enrollment, expected_runtime, batch, classes)
-    if (value["contract"] != (DURATION_CONTRACT if duration else CONTRACT)
+    if (value["contract"] != (capture_contract(duration))
             or value["original_data_role"] != whole.ROLE or value["original_data_roles"] != sorted({row["original_data_role"] for row in rows})
-            or value["capture_data_role"] != (DURATION_ROLE if duration else ROLE)
+            or value["capture_data_role"] != (capture_role(duration))
             or value["modes"] != old._modes(selected) or duration and value["modes"] != ["buflo"]
             or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
             or value["scientific_credit"] is not False
@@ -138,7 +152,8 @@ def validate_amendment(path: Path, *, enrollment=None, runtime=None) -> dict:
 
 
 def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path, *, front_policy=None, buflo_policy=None, buflo_duration_policy=None) -> Path:
-    selected = old.policies(front_policy=front_policy, buflo_policy=buflo_policy)
+    selected = old.policies(front_policy=front_policy, buflo_policy=buflo_policy,
+                            buflo_duration_policy=buflo_duration_policy)
     duration = traffic.policy(buflo_duration_policy)
     if duration and old._modes(selected) != ["buflo"]:
         raise ValueError("whole graph fixed BuFLO200 amendment authorizes only BuFLO")
@@ -153,8 +168,8 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
     rows = _rows(enrollment, runtime, batch, classes)
     if any(Path(row["capture_manifest_path"]).exists() or Path(row["capture_manifest_path"]).is_symlink() for row in rows):
         raise ValueError("whole graph amendment never replaces an original or previous workload")
-    payload = {"contract": DURATION_CONTRACT if duration else CONTRACT, "original_data_role": whole.ROLE,
-        "original_data_roles": sorted({row["original_data_role"] for row in rows}), "capture_data_role": DURATION_ROLE if duration else ROLE,
+    payload = {"contract": capture_contract(duration), "original_data_role": whole.ROLE,
+        "original_data_roles": sorted({row["original_data_role"] for row in rows}), "capture_data_role": capture_role(duration),
         "policies": selected, "modes": old._modes(selected), "enrollment": rolling._ref(enrollment),
         "admission_provenance": rolling._ref(Path(batch["admission_root"]) / "provenance.json"), "runtime": runtime,
         "runtime_artifacts": {key: rolling._ref(Path(runtime[key])) for key in ("source_manifest", "client_binary", "base_launcher", "host_launcher")},

@@ -178,7 +178,8 @@ _READER_COMPATIBILITY_HELPERS = {
                '_v12_input_reader_source_projection',
                '_v11_input_reader_source_projection',
                '_compatible_acquisition_code', '_cohort_acquisition_source_projection',
-               '_membership_additive_reader_roles', '_parallel_partial_source_projection'),
+               '_membership_additive_reader_roles', '_parallel_partial_source_projection',
+               '_mixed_epoch', 'mode_implementation', '_mixed_implementation_source_projection'),
     'dynamic': ('_compatible_reader_sources',),
 }
 _ACTION_LOCAL_SOURCE_FACTS_SHA256 = '55460a08b99461c5d29d30579605f5f79ce187e69db6657fbdd87399794ed744'
@@ -264,6 +265,10 @@ def _compatible_code_ref(role, producer, current):
         raise ValueError('reader compatibility changes a full file mode')
     if producer['sha256'] == current['sha256']:
         return True
+    if (role == 'dynamic'
+            and producer['sha256'] == 'dce570b9ba7d1ac1ce35431e8a83ba0a93a0daaa4acbe8c0ee61e99e2e27c567'
+            and current['sha256'] == '12ba6b327f278ddef1faaade56b22d5a5b80a388fbf636f9e3cb648607108225'):
+        return _mixed_epoch().compatible_legacy_reader('dynamic', producer, current)
     # Source34 is itself an authenticated compatibility reader. Its complete
     # published file hash selects that known shape; older producers still
     # require the original guard AST fingerprints above.
@@ -282,7 +287,8 @@ def _compatible_code_ref(role, producer, current):
                        '1537b2bc43ca527ed8b1c33fcca14e82b3fb468881cc193bad81a012a5815005',
                        'aef299755e14c577e366fffa8df0f281f5f10bdef0937abb6fea52e51dd4ae90',
                        '80783154a4c0097fa8729b69c3ea5dd6ca8f617dd655ce286c7e929874ba8f45',
-                       'e57126d7a6e179a82f6f997dd8935a543fbf3378718466ad0eb5033b4811890a'})
+                       'e57126d7a6e179a82f6f997dd8935a543fbf3378718466ad0eb5033b4811890a',
+                       '13b8610c344176087bc8c85a29d8912c8aed14320999130e2f0a28e394c6bb86'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -295,7 +301,8 @@ def _compatible_code_ref(role, producer, current):
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
         '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd',
         '9339d219b5b0e97b23ec9f1ea78cd7378ec9b81d5018f64a14eace5928d6cbcd'}
-        and current['sha256'] == 'dce570b9ba7d1ac1ce35431e8a83ba0a93a0daaa4acbe8c0ee61e99e2e27c567')
+        and current['sha256'] in {'dce570b9ba7d1ac1ce35431e8a83ba0a93a0daaa4acbe8c0ee61e99e2e27c567',
+            '12ba6b327f278ddef1faaade56b22d5a5b80a388fbf636f9e3cb648607108225'})
     try:
         if portable_dynamic:
             old = _epoch_dynamic_source_projection(Path(producer['path']).read_bytes())
@@ -307,6 +314,8 @@ def _compatible_code_ref(role, producer, current):
             old_raw = Path(producer['path']).read_bytes()
             new_raw = Path(current['path']).read_bytes()
             if role == 'target':
+                old_raw = _mixed_implementation_source_projection(old_raw)
+                new_raw = _mixed_implementation_source_projection(new_raw)
                 old_raw = _parallel_partial_source_projection(old_raw)
                 new_raw = _parallel_partial_source_projection(new_raw)
             old = _reader_code_projection(old_raw, role,
@@ -319,12 +328,61 @@ def _compatible_code_ref(role, producer, current):
     return True
 
 
+def _mixed_epoch():
+    from . import rapid_mixed_implementation_target as mixed
+    declared = reference(Path(mixed.__file__))
+    if (declared['sha256'] != '28c28ab5148e1dc68e5d6db8edfad8532d68821a723ebb586d0546806b3bbc1f'
+            or declared['mode'] != 0o644):
+        raise ValueError('mixed target reader differs from its exact reviewed module')
+    return mixed
+
+
+def mode_implementation(declaration, mode):
+    mixed = _mixed_epoch()
+    if mixed.is_declaration(declaration):
+        return mixed.mode_implementation(declaration, mode)
+    if mode not in MODES:
+        raise ValueError('fixed target mode is not registered')
+    return declaration['target_identity']
+
+
+def _mixed_implementation_source_projection(raw):
+    """Remove only the exact distinct V2 dispatch; retain every V1 validator."""
+    import ast
+    seams = {
+        'validate_target': "if _mixed_epoch().is_target(ref):\n    return _mixed_epoch().validate_target(ref, _seen=_seen)\n",
+        'validate_progress': "if _mixed_epoch().is_progress(ref):\n    return _mixed_epoch().validate_progress(ref, _seen=_seen)\n",
+        'initialize_progress': "if _mixed_epoch().is_target(target):\n    return _mixed_epoch().initialize_progress(target=target, proofs=proofs, output=output)\n",
+        'append_progress': "if _mixed_epoch().is_progress(progress):\n    return _mixed_epoch().append_progress(progress=progress, proofs=proofs, output=output, target=target)\n",
+        'publish_final': "if _mixed_epoch().is_progress(progress):\n    return _mixed_epoch().publish_final(progress, output)\n",
+        'input_files': "if _mixed_epoch().is_progress(progress):\n    return _mixed_epoch().input_files(progress)\n",
+        'directory_dependencies': "if _mixed_epoch().is_progress(progress):\n    return _mixed_epoch().directory_dependencies(progress)\n",
+        '_capture_limits': "if mode == 'buflo' and condition.get('defense', {}).get('parameters_sha256') == '5c35c9a6c0ce9d424b3e9cfc9e05a48713b9260fd1385dfba2d79048f58f283e':\n    return _mixed_epoch().capture_limits(original, condition)\n",
+    }
+    tree = ast.parse(raw); found = set()
+    shape = lambda node: ast.dump(node, include_attributes=False)
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name not in seams:
+            continue
+        expected = ast.parse(seams[node.name]).body[0]
+        matches = [item for item in node.body if shape(item) == shape(expected)]
+        if matches:
+            offset = 1 if node.name == '_capture_limits' else 0
+            if len(matches) != 1 or node.body[offset] is not matches[0]:
+                raise ValueError('mixed target dispatch duplicated or moved its V1 boundary')
+            node.body.remove(matches[0]); found.add(node.name)
+    if found and found != set(seams):
+        raise ValueError('mixed target V1 dispatch projection is incomplete')
+    return ast.unparse(tree).encode() if found else raw
+
+
 def _parallel_partial_source_projection(raw):
     """Remove only exact new parallel-role dispatch seams before old comparison.
 
     Every old scientific body, including partial joins and target selection,
     remains in the compared AST. The new reader owns a separate bound Source.
     """
+    raw = _mixed_implementation_source_projection(raw)
     import ast
     tree = ast.parse(raw)
     seam = ast.parse(
@@ -394,6 +452,9 @@ def _epoch_dynamic_source_projection(raw):
 def _portable_dynamic_source_projection(raw):
     """Remove only the exact reviewed v2 transport layer from a pinned reader."""
     import ast
+    if hashlib.sha256(raw).hexdigest() == '12ba6b327f278ddef1faaade56b22d5a5b80a388fbf636f9e3cb648607108225':
+        raw = _mixed_epoch().legacy_source_projection('dynamic', raw,
+            historical_sha256='dce570b9ba7d1ac1ce35431e8a83ba0a93a0daaa4acbe8c0ee61e99e2e27c567')
     if hashlib.sha256(raw).hexdigest() != 'dce570b9ba7d1ac1ce35431e8a83ba0a93a0daaa4acbe8c0ee61e99e2e27c567':
         raise ValueError('portable dynamic reader is outside its exact reviewed Source')
     new_units = {'portable_release_snapshot', '_portable_installed_release', '_portable_runtime_roles',
@@ -470,6 +531,42 @@ def _epoch_dispatch_source_projection(raw):
     source53 = '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739'
     owned_check = 'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'
     quick_profile = 'b9f316d212cf024e3d09ab4fa1a61035233f68f50f8a7c03c7450495cf81d2b0'
+    front_profile = '6f5fc34f6d8ee14390378200d2ebba55d4de9fc205d6788453c960739f138881'
+    if digest == front_profile:
+        # Restore this exact future FRONT planner before historical membership
+        # comparison. Its old enrollment, graph, Native and client units remain
+        # byte-for-byte the Source64 reader; a current code mutation cannot alias it.
+        edits = (
+            (b"                     capture_limits: Mapping[str, int] | None = None,\n                     application_body_identity_policy: str | None = None,\n                     qualification_delivery_compatibility: Mapping[str, str] | None = None,\n                     tamaraw_configuration_policy: str | None = None) -> bytes:\n    from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT\n    from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT\n    return plan.render_lane_campaign(lane, sites, static_capture_limits=(\n",
+             b"                     capture_limits: Mapping[str, int] | None = None,\n                     application_body_identity_policy: str | None = None,\n                     qualification_delivery_compatibility: Mapping[str, str] | None = None,\n                     tamaraw_configuration_policy: str | None = None,\n                     front_configuration_policy: str | None = None) -> bytes:\n    from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT\n    from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT\n    return plan.render_lane_campaign(lane, sites, static_capture_limits=(\n"),
+            (b"        buflo_duration_policy=buflo_duration_policy,\n        application_body_identity_policy=application_body_identity_policy,\n        qualification_delivery_compatibility=qualification_delivery_compatibility,\n        tamaraw_configuration_policy=tamaraw_configuration_policy if lane.mode == \"tamaraw\" else None)\n\n\ndef _static_canary_facts(facts: Mapping[str, Any], amendment: Mapping[str, Any]) -> dict[str, Any]:\n",
+             b"        buflo_duration_policy=buflo_duration_policy,\n        application_body_identity_policy=application_body_identity_policy,\n        qualification_delivery_compatibility=qualification_delivery_compatibility,\n        tamaraw_configuration_policy=tamaraw_configuration_policy if lane.mode == \"tamaraw\" else None,\n        front_configuration_policy=front_configuration_policy if lane.mode == \"front\" else None)\n\n\ndef _static_canary_facts(facts: Mapping[str, Any], amendment: Mapping[str, Any]) -> dict[str, Any]:\n"),
+            (b"                 application_body_identity_policy: str | None = None,\n                 qualification_delivery_compatibility: Mapping[str, str] | None = None,\n                 tamaraw_configuration_policy: str | None = None,\n                 selected_input_renewal: Path | None = None, class_indices=None, _context=None) -> Path:\n    from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY\n    body_policy = validate_application_body_identity_policy(application_body_identity_policy)\n    from .tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy\n    fixed_tamaraw = validate_fixed_tamaraw_policy(tamaraw_configuration_policy)\n    if fixed_tamaraw is not None and (set(readiness) != {\"tamaraw\"} or scheduling is not None\n            or front_capture_amendment is not None or static_capture_amendment is not None\n            or qualification_delivery_compatibility is not None or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):\n",
+             b"                 application_body_identity_policy: str | None = None,\n                 qualification_delivery_compatibility: Mapping[str, str] | None = None,\n                 tamaraw_configuration_policy: str | None = None,\n                 front_configuration_policy: str | None = None,\n                 selected_input_renewal: Path | None = None, class_indices=None, _context=None) -> Path:\n    from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY\n    body_policy = validate_application_body_identity_policy(application_body_identity_policy)\n    from .tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy\n    fixed_tamaraw = validate_fixed_tamaraw_policy(tamaraw_configuration_policy)\n    from .front_fixed_configuration import validate_policy as validate_fixed_front_policy\n    fixed_front = validate_fixed_front_policy(front_configuration_policy)\n    if fixed_front is not None and (set(readiness) != {\"front\"} or scheduling is not None\n            or fixed_tamaraw is not None or front_capture_amendment is not None\n            or static_capture_amendment is None or selected_input_renewal is not None\n            or qualification_delivery_compatibility is not None or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):\n        raise ValueError(\"fixed FRONT plan requires its own current serial full-graph amended canary\")\n    if fixed_tamaraw is not None and (set(readiness) != {\"tamaraw\"} or scheduling is not None\n            or front_capture_amendment is not None or static_capture_amendment is not None\n            or qualification_delivery_compatibility is not None or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):\n"),
+            (b"                application_body_identity_policy=application_body_identity_policy,\n                qualification_delivery_compatibility=qualification_delivery_compatibility,\n                tamaraw_configuration_policy=tamaraw_configuration_policy,\n                selected_input_renewal=selected_input_renewal, class_indices=class_indices, _context=_context)\n    if _context is not None:\n        _context._enrollment(enrollment)\n",
+             b"                application_body_identity_policy=application_body_identity_policy,\n                qualification_delivery_compatibility=qualification_delivery_compatibility,\n                tamaraw_configuration_policy=tamaraw_configuration_policy,\n                front_configuration_policy=front_configuration_policy,\n                selected_input_renewal=selected_input_renewal, class_indices=class_indices, _context=_context)\n    if _context is not None:\n        _context._enrollment(enrollment)\n"),
+            (b"        if (fixed_tamaraw_policy(facts) != fixed_tamaraw\n            or fixed_tamaraw is not None and facts.get(\"tamaraw_configuration_sha256\") != configuration_sha256()):\n            raise ValueError(\"rolling plan differs from its canary's fixed Tamaraw condition\")\n        if facts.get(\"control_authority_witness\", facts.get(\"qualification_delivery_compatibility\")) != qualification_delivery_compatibility:\n            raise ValueError(\"rolling plan differs from its canary's qualification delivery witness\")\n        if static_amendment is not None:\n",
+             b"        if (fixed_tamaraw_policy(facts) != fixed_tamaraw\n            or fixed_tamaraw is not None and facts.get(\"tamaraw_configuration_sha256\") != configuration_sha256()):\n            raise ValueError(\"rolling plan differs from its canary's fixed Tamaraw condition\")\n        from . import front_fixed_configuration as front\n        if (front.policy(facts) != fixed_front\n            or fixed_front is not None and facts.get(\"front_configuration_sha256\") != front.CONFIGURATION_SHA256):\n            raise ValueError(\"rolling plan differs from its canary's fixed FRONT condition\")\n        if facts.get(\"control_authority_witness\", facts.get(\"qualification_delivery_compatibility\")) != qualification_delivery_compatibility:\n            raise ValueError(\"rolling plan differs from its canary's qualification delivery witness\")\n        if static_amendment is not None:\n"),
+            (b"        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy, capture_limits=effective_limits,\n                               application_body_identity_policy=application_body_identity_policy,\n                               qualification_delivery_compatibility=qualification_delivery_compatibility,\n                               tamaraw_configuration_policy=fixed_tamaraw)\n        if path.exists():\n            if lanes._read(path) != raw:\n                raise ValueError(\"rolling plan cannot replace an earlier campaign\")\n",
+             b"        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy, capture_limits=effective_limits,\n                               application_body_identity_policy=application_body_identity_policy,\n                               qualification_delivery_compatibility=qualification_delivery_compatibility,\n                               tamaraw_configuration_policy=fixed_tamaraw,\n                               front_configuration_policy=fixed_front)\n        if path.exists():\n            if lanes._read(path) != raw:\n                raise ValueError(\"rolling plan cannot replace an earlier campaign\")\n"),
+            (b"            declared_at=payload[\"declared_at\"], _context=_context)\n    if application_body_identity_policy is not None:\n        payload[\"application_body_identity_policy\"] = body_policy\n    if fixed_tamaraw is not None:\n        payload[\"tamaraw_configuration_policy\"] = fixed_tamaraw\n    if selected_reference is not None:\n",
+             b"            declared_at=payload[\"declared_at\"], _context=_context)\n    if application_body_identity_policy is not None:\n        payload[\"application_body_identity_policy\"] = body_policy\n    if fixed_front is not None:\n        payload[\"front_configuration_policy\"] = fixed_front\n    if fixed_tamaraw is not None:\n        payload[\"tamaraw_configuration_policy\"] = fixed_tamaraw\n    if selected_reference is not None:\n"),
+            (b"            subgroup.require_canary(reference, subgroup_value)\n    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy\n    fixed_tamaraw = fixed_tamaraw_policy(value)\n    selected_reference = value.get(\"selected_input_renewal\")\n    if selected_reference is not None:\n        from . import rapid_selected_input_renewal as renewed\n",
+             b"            subgroup.require_canary(reference, subgroup_value)\n    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy\n    fixed_tamaraw = fixed_tamaraw_policy(value)\n    from . import front_fixed_configuration as front\n    fixed_front = front.policy(value)\n    if fixed_front is not None:\n        fields.add(front.FIELD)\n        if (set(value[\"readiness\"]) != {\"front\"} or \"scheduling\" in value\n            or \"static_capture_amendment\" not in value or fixed_tamaraw is not None\n            or any(key in value for key in (\"front_capture_amendment\", \"qualification_delivery_compatibility\", \"selected_input_renewal\"))\n            or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):\n            raise ValueError(\"fixed FRONT plan changed its separate serial condition authority\")\n    selected_reference = value.get(\"selected_input_renewal\")\n    if selected_reference is not None:\n        from . import rapid_selected_input_renewal as renewed\n"),
+            (b"                               capture_limits=value.get(\"capture_limits\"),\n                               application_body_identity_policy=value.get(\"application_body_identity_policy\"),\n                               qualification_delivery_compatibility=value.get(\"qualification_delivery_compatibility\"),\n                               tamaraw_configuration_policy=fixed_tamaraw)\n        if lanes._read(spec.campaign_dir / f\"{lane.campaign_name}.yml\") != raw:\n            raise ValueError(\"rolling campaign changed sites, graph, visits or fixed settings\")\n        actual.append({**asdict(lane), \"workload_ids\": list(lane.workload_ids), \"campaign_sha256\": lanes._sha(raw)})\n",
+             b"                               capture_limits=value.get(\"capture_limits\"),\n                               application_body_identity_policy=value.get(\"application_body_identity_policy\"),\n                               qualification_delivery_compatibility=value.get(\"qualification_delivery_compatibility\"),\n                               tamaraw_configuration_policy=fixed_tamaraw,\n                               front_configuration_policy=fixed_front)\n        if lanes._read(spec.campaign_dir / f\"{lane.campaign_name}.yml\") != raw:\n            raise ValueError(\"rolling campaign changed sites, graph, visits or fixed settings\")\n        actual.append({**asdict(lane), \"workload_ids\": list(lane.workload_ids), \"campaign_sha256\": lanes._sha(raw)})\n"),
+            (b"    if (fixed_tamaraw_policy(facts) != fixed_tamaraw_policy(payload)\n        or fixed_tamaraw_policy(payload) is not None and facts.get(\"tamaraw_configuration_sha256\") != configuration_sha256()):\n        raise ValueError(\"formal readiness changed its fixed Tamaraw condition\")\n    if facts.get(\"control_authority_witness\", facts.get(\"qualification_delivery_compatibility\")) != payload.get(\"qualification_delivery_compatibility\"):\n        raise ValueError(\"formal readiness changed its declared qualification delivery witness\")\n    if publication is not None and (admission._utc(publication) > admission._utc(payload[\"declared_at\"])\n",
+             b"    if (fixed_tamaraw_policy(facts) != fixed_tamaraw_policy(payload)\n        or fixed_tamaraw_policy(payload) is not None and facts.get(\"tamaraw_configuration_sha256\") != configuration_sha256()):\n        raise ValueError(\"formal readiness changed its fixed Tamaraw condition\")\n    from . import front_fixed_configuration as front\n    if (front.policy(facts) != front.policy(payload)\n        or front.policy(payload) is not None and facts.get(\"front_configuration_sha256\") != front.CONFIGURATION_SHA256):\n        raise ValueError(\"formal readiness changed its fixed FRONT condition\")\n    if facts.get(\"control_authority_witness\", facts.get(\"qualification_delivery_compatibility\")) != payload.get(\"qualification_delivery_compatibility\"):\n        raise ValueError(\"formal readiness changed its declared qualification delivery witness\")\n    if publication is not None and (admission._utc(publication) > admission._utc(payload[\"declared_at\"])\n"),
+            (b"                                    buflo_duration_policy=value.get(\"buflo_duration_policy\"),\n                                    application_body_identity_policy=value.get(\"application_body_identity_policy\"),\n                                    qualification_delivery_compatibility=value.get(\"qualification_delivery_compatibility\"),\n                                    tamaraw_configuration_policy=value.get(\"tamaraw_configuration_policy\") if lane.mode == \"tamaraw\" else None)\n    admission.durable_create(spec.campaign_dir / f\"{lane.campaign_name}.yml\", raw)\n    value = {**value, \"lanes\": [{**asdict(lane), \"workload_ids\": list(lane.workload_ids), \"campaign_sha256\": lanes._sha(raw)}],\n             \"planned_trace_count\": lane.sample_count, \"declared_at\": admission._now()}\n",
+             b"                                    buflo_duration_policy=value.get(\"buflo_duration_policy\"),\n                                    application_body_identity_policy=value.get(\"application_body_identity_policy\"),\n                                    qualification_delivery_compatibility=value.get(\"qualification_delivery_compatibility\"),\n                                    tamaraw_configuration_policy=value.get(\"tamaraw_configuration_policy\") if lane.mode == \"tamaraw\" else None,\n                                    front_configuration_policy=value.get(\"front_configuration_policy\") if lane.mode == \"front\" else None)\n    admission.durable_create(spec.campaign_dir / f\"{lane.campaign_name}.yml\", raw)\n    value = {**value, \"lanes\": [{**asdict(lane), \"workload_ids\": list(lane.workload_ids), \"campaign_sha256\": lanes._sha(raw)}],\n             \"planned_trace_count\": lane.sample_count, \"declared_at\": admission._now()}\n"),
+        )
+        for before, after in reversed(edits):
+            if raw.count(after) != 1:
+                raise ValueError('rolling FRONT inverse is absent or ambiguous')
+            raw = raw.replace(after, before, 1)
+        if hashlib.sha256(raw).hexdigest() != quick_profile:
+            raise ValueError('rolling FRONT inverse changes protected Source bytes')
+        digest = quick_profile
     if digest not in {
             'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
             '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b',
@@ -1154,6 +1251,9 @@ def _compatible_sources(producer):
             _compatible_selected_membership_code(
                 'src/qcsd_lab/rapid_per_class_selected_enrollment.py',
                 producer[name], expected)
+        elif (name in ('acceptance', 'duration', 'traffic', 'chunks')
+                and _mixed_epoch().compatible_legacy_reader(name, producer[name], expected)):
+            pass
         elif name == 'traffic':
             if producer[name]['mode'] != expected['mode']:
                 raise ValueError('fixed target traffic reader full modes differ')
@@ -1247,7 +1347,8 @@ def _compatible_membership(producer, current, producer_sources):
             'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702',
             '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739',
             'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14',
-            'b9f316d212cf024e3d09ab4fa1a61035233f68f50f8a7c03c7450495cf81d2b0'}
+            'b9f316d212cf024e3d09ab4fa1a61035233f68f50f8a7c03c7450495cf81d2b0',
+            '6f5fc34f6d8ee14390378200d2ebba55d4de9fc205d6788453c960739f138881'}
         exact_deep_successor = (
             pair[0] in {'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702',
                         '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739'}
@@ -1356,6 +1457,8 @@ def _capture_limits_equal(actual, expected):
 
 def _capture_limits(mode, original, condition):
     """Retain admission caps; derive only the declared exact BuFLO200 setting."""
+    if mode == 'buflo' and condition.get('defense', {}).get('parameters_sha256') == '5c35c9a6c0ce9d424b3e9cfc9e05a48713b9260fd1385dfba2d79048f58f283e':
+        return _mixed_epoch().capture_limits(original, condition)
     limits = budgets.valid_limits(original)
     if mode not in MODES or condition.get('mode') != mode:
         raise ValueError('fixed target caps require their own declared mode')
@@ -1574,6 +1677,8 @@ def publish_target(*, namespace, enrollment, conditions, native_head, client_sha
 
 @_owned
 def validate_target(ref, _seen=None):
+    if _mixed_epoch().is_target(ref):
+        return _mixed_epoch().validate_target(ref, _seen=_seen)
     context=current_context();key=('fixed-target-validated',_digest(ref))
     if context.has(key):return context.get(key)
     seen=set() if _seen is None else _seen
@@ -1896,6 +2001,8 @@ def _aggregate(classes, rows):
 
 @_owned
 def initialize_progress(*, target, proofs, output):
+    if _mixed_epoch().is_target(target):
+        return _mixed_epoch().initialize_progress(target=target, proofs=proofs, output=output)
     declaration=validate_target(target);rows=_select(declaration,proofs,initial=True)
     value={'contract':CONTRACT,'target':target,'target_id':declaration['target_id'],'parent':None,
         'proofs':proofs,'classes':declaration['classes'],'accepted_rows':rows,'remaining_vectors':_vectors(declaration['classes'],rows),
@@ -1907,6 +2014,8 @@ def initialize_progress(*, target, proofs, output):
 
 @_owned
 def validate_progress(ref, _seen=None):
+    if _mixed_epoch().is_progress(ref):
+        return _mixed_epoch().validate_progress(ref, _seen=_seen)
     context=current_context();key=('fixed-target-progress-validated',_digest(ref))
     if context.has(key):return context.get(key)
     seen=set() if _seen is None else _seen
@@ -1938,6 +2047,8 @@ def validate_progress(ref, _seen=None):
 
 @_owned
 def append_progress(*, progress, proofs, output, target=None):
+    if _mixed_epoch().is_progress(progress):
+        return _mixed_epoch().append_progress(progress=progress, proofs=proofs, output=output, target=target)
     old=validate_progress(progress);target_ref=old['target'] if target is None else target
     declaration=validate_target(target_ref)
     if declaration['target_id']!=old['target_id'] or declaration['classes'][:len(old['classes'])]!=old['classes']:
@@ -2009,6 +2120,8 @@ def final_coverage(progress):
 
 @_owned
 def publish_final(progress, output):
+    if _mixed_epoch().is_progress(progress):
+        return _mixed_epoch().publish_final(progress, output)
     facts=final_coverage(progress);value=validate_progress(progress)
     files=input_files(progress);directories=directory_dependencies(progress)
     _check_action()
@@ -2020,6 +2133,8 @@ def publish_final(progress, output):
 @_owned
 @source_facts.selection
 def input_files(progress):
+    if _mixed_epoch().is_progress(progress):
+        return _mixed_epoch().input_files(progress)
     value=validate_progress(progress);files={reference(Path(__file__))['path']:reference(Path(__file__))}
     def add(ref): files[ref['path']]=ref;_open(ref)
     add(progress);add(value['target'])
@@ -2076,6 +2191,8 @@ def roots(progress):
 @_owned
 @source_facts.selection
 def directory_dependencies(progress):
+    if _mixed_epoch().is_progress(progress):
+        return _mixed_epoch().directory_dependencies(progress)
     value=validate_progress(progress);directories={}
     def target_trees(target_ref):
         target=validate_target(target_ref)
