@@ -820,9 +820,9 @@ def _acquisition_reader_sources():
         'rapid_selected_capture_input.py': '72933db93fef22fd599dce35b2ae27dd2f525b112bc6140134540d1f1cad1fb1',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
         'rapid_per_class_selected_enrollment.py': '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0',
-        'whole_graph_input.py': '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c',
+        'whole_graph_input.py': '53a988148197bac97578cc89b5ca528f2cda6ea818b53a772f6f1302ae5c5ba8',
         'whole_graph_supplement.py': 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98',
-        'rapid_supplemental_cohort.py': 'e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad',
+        'rapid_supplemental_cohort.py': '2391723d90e339680c9d6b7d0ce31ab84b437f1a963ed1b166eb1237a49ed091',
     }
     _open(reference(Path(__file__)))
     result = {}
@@ -837,6 +837,14 @@ def _acquisition_reader_sources():
 
 def _v13_input_reader_source_projection(raw):
     """Restore every Source62 byte after finite prospective V13 registration."""
+    if hashlib.sha256(raw).hexdigest() == '53a988148197bac97578cc89b5ca528f2cda6ea818b53a772f6f1302ae5c5ba8':
+        current = b"    value = get._load(get._read(path))\n    plan_path = reopen(value[\"plan\"])\n    plan = get._load(get._read(plan_path))\n    if isinstance(plan, dict) and plan.get(\"artifact_type\") == V13_PLAN_TYPE:\n        operator = _producer(plan)\n        if (not zero(plan) or path.name != \"failed.json\" or not zero(value)\n                or value.get(\"candidate\") not in plan[\"candidates\"]\n                or value.get(\"outcome\") != \"operational-discovery-failure-no-admission\"):\n            raise ValueError(\"V13 discovery failure changes its declared zero-credit role\")\n        _verify_external(operator, \"verify-failure\", \"--failure\", path.absolute(), timeout=None)\n        return value\n    plan = load_plan(plan_path)\n    if plan[\"schema_version\"] >= 4:\n"
+        original = b"    value = get._load(get._read(path))\n    plan = load_plan(reopen(value[\"plan\"]))\n    if plan[\"schema_version\"] == 13:\n        if (path.name != \"failed.json\" or not zero(value)\n                or value.get(\"candidate\") not in plan[\"candidates\"]\n                or value.get(\"outcome\") != \"operational-discovery-failure-no-admission\"):\n            raise ValueError(\"V13 discovery failure changes its declared zero-credit role\")\n        _verify_external(_producer(plan), \"verify-failure\", \"--failure\", path.absolute(), timeout=None)\n        return value\n    if plan[\"schema_version\"] >= 4:\n"
+        if raw.count(current) != 1:
+            raise ValueError('closed HOST V13 failure reader hunk is not unique')
+        raw = raw.replace(current, original, 1)
+        if hashlib.sha256(raw).hexdigest() != '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c':
+            raise ValueError('closed HOST failure reader changes protected V13 bytes')
     if hashlib.sha256(raw).hexdigest() not in ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
             '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c'):
         raise ValueError('V13 discovery reader is outside its exact reviewed Source')
@@ -916,6 +924,13 @@ def _required_parent_get_source_projection(raw):
 
 
 def _v13_cohort_reader_source_projection(raw):
+    if hashlib.sha256(raw).hexdigest() == '2391723d90e339680c9d6b7d0ce31ab84b437f1a963ed1b166eb1237a49ed091':
+        addition = b"    }, {\n        \"qcsd_lab.whole_graph_input\": \"7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c\",\n        \"qcsd_lab.whole_graph_supplement\": \"dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98\",\n        \"qcsd_lab.rapid_per_class_selected_enrollment\": \"4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0\",\n        \"qcsd_lab.rapid_supplemental_cohort\": \"e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad\",\n"
+        if raw.count(addition) != 1:
+            raise ValueError('retained SDK973 cohort reader family is not unique')
+        raw = raw.replace(addition, b'', 1)
+        if hashlib.sha256(raw).hexdigest() != 'e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad':
+            raise ValueError('SDK973 cohort registration changes protected bytes')
     """Restore exact Source62 bytes after its finite cohort reader recognition."""
     if hashlib.sha256(raw).hexdigest() == 'e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad':
         addition = b"    }, {\n        \"qcsd_lab.whole_graph_input\": \"7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c\",\n        \"qcsd_lab.whole_graph_supplement\": \"4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0\",\n        \"qcsd_lab.rapid_per_class_selected_enrollment\": \"4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0\",\n        \"qcsd_lab.rapid_supplemental_cohort\": \"c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d\",\n"
@@ -967,6 +982,7 @@ def _v13_supplement_reader_source_projection(raw):
 def _v12_input_reader_source_projection(raw):
     """Recover every exact V11 reader byte after finite V12 registration."""
     if hashlib.sha256(raw).hexdigest() in ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+            '53a988148197bac97578cc89b5ca528f2cda6ea818b53a772f6f1302ae5c5ba8',
             '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c'):
         raw = _v13_input_reader_source_projection(raw)
     if hashlib.sha256(raw).hexdigest() != '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
@@ -993,6 +1009,7 @@ def _v11_input_reader_source_projection(raw):
     """Restore exact Source53 bytes after reviewed V11/V12 registration."""
     if hashlib.sha256(raw).hexdigest() in (
             '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+            '53a988148197bac97578cc89b5ca528f2cda6ea818b53a772f6f1302ae5c5ba8',
             '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c',
             '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5'):
         raw = _v12_input_reader_source_projection(raw)
@@ -1111,10 +1128,12 @@ def _compatible_acquisition_code(relative, before, after):
     if (relative == 'src/qcsd_lab/rapid_supplemental_cohort.py'
             and before['sha256'] in ('12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
                 '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
-                'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d')):
+                'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d',
+                'e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad')):
         old_raw = Path(before['path']).read_bytes()
         if before['sha256'] in ('39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
-                'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d'):
+                'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d',
+                'e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad'):
             old_raw = _v13_cohort_reader_source_projection(old_raw)
         if _v13_cohort_reader_source_projection(Path(after['path']).read_bytes()) != old_raw:
             raise ValueError('V13 cohort reader changes protected Source62 admission or graph bytes')
@@ -1135,7 +1154,8 @@ def _compatible_acquisition_code(relative, before, after):
         return True
     if relative == 'src/qcsd_lab/whole_graph_input.py':
         old_raw, new_raw = Path(before['path']).read_bytes(), Path(after['path']).read_bytes()
-        if before['sha256'] == '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa':
+        if before['sha256'] in ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+                '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c'):
             old_raw = _v13_input_reader_source_projection(old_raw)
             projected = _v13_input_reader_source_projection(new_raw)
         elif before['sha256'] == '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':

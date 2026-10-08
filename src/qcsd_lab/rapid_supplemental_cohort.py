@@ -58,6 +58,11 @@ def _recognized_reader_sources(value: dict) -> bool:
         "qcsd_lab.whole_graph_supplement": "4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0",
         "qcsd_lab.rapid_per_class_selected_enrollment": "4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0",
         "qcsd_lab.rapid_supplemental_cohort": "c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d",
+    }, {
+        "qcsd_lab.whole_graph_input": "7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c",
+        "qcsd_lab.whole_graph_supplement": "dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98",
+        "qcsd_lab.rapid_per_class_selected_enrollment": "4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0",
+        "qcsd_lab.rapid_supplemental_cohort": "e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad",
     })
     if not isinstance(value, dict) or set(value) != set(retained_families[0]):
         return False

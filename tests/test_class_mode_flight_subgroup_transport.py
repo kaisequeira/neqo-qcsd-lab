@@ -76,6 +76,13 @@ def flight(tmp_path, recipe, closure):
                  "helper_path": str(recipe.FIRST_HELPER),
                  "helper_sha256": recipe.FIRST_HELPER_SHA,
                  "recipe_sha256": recipe.digest(recipe.read(recipe.__file__))})
+    selected = []
+    for row, graph in zip(closure["classes"], closure["graphs"]):
+        path = put(Path(plan["execution_root"]) / "config/workloads" / (row["workload_id"] + ".json"), graph.read_bytes())
+        path.chmod(0o600)
+        selected.append({**{key: row[key] for key in ("class_index", "candidate_id", "workload_id")},
+                         "capture_manifest": recipe.ref(path)})
+    plan["selected_classes"] = selected
     original = b'{"resources":[]}\n'
     put(output / "lineage/original-manifest.json", original)
     plan["original_workload_sha256"] = hashlib.sha256(original).hexdigest()
@@ -106,7 +113,9 @@ def test_each_installed_action_transports_original_enrollment_readonly(action, t
     plan, output = flight(tmp_path, recipe, closure)
     roots = subgroup.input_roots(closure["reference"], closure["value"])
     argv = recipe.image_argv(plan, output, action)
-    raw_roots = plan["static_preparation_roots"] if action == "verify-image" else plan["group_preparation_roots"]
+    raw_roots = plan["group_preparation_roots"]
+    if action == "verify-image":
+        raw_roots = sorted(set(raw_roots) | set(plan["static_preparation_roots"]))
     expected = sorted(set(raw_roots) | set(map(str, roots)))
     assert volumes(argv) == common_volumes(plan, output, action) + [root + ":" + root + ":ro" for root in expected]
     for path in closure["files"]:
@@ -117,9 +126,10 @@ def test_each_installed_action_transports_original_enrollment_readonly(action, t
 
 def test_generated_deep_argv_equals_readiness_expected_argv(tmp_path, recipe, closure, monkeypatch):
     plan, output = flight(tmp_path, recipe, closure)
-    # Raw preparation transport remains the original first-site boundary.
+    # Current selected manifests are independently reopened for group transport.
     monkeypatch.setattr(transport, "manifest_roots",
-                        lambda original: list(map(Path, plan["static_preparation_roots"])))
+                        lambda original: list(map(Path, plan["group_preparation_roots"]
+                            if original["resources"] else plan["static_preparation_roots"])))
     result = "/lab/results/controlled-first-site/run"
     argv = recipe.image_argv(plan, output, "verify-image", "--mode", "undefended", "--result", result)
     assert readiness._deep_command(plan, output, recipe.digest(recipe.read(output / "plan.json")),

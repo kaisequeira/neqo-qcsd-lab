@@ -1075,6 +1075,8 @@ def image_argv(plan, output, action, *extra):
             argv[index] = f"{original_recipe}:/recipe.py:ro"
     if "enrolled_subgroup" in plan:
         from qcsd_lab import rapid_enrolled_subgroup as subgroup
+        if action == "verify-image":
+            roots = sorted(set(roots) | set(plan["group_preparation_roots"]))
         roots = sorted(set(roots) | {str(path) for path in subgroup.input_roots(
             plan["enrollment"], plan[subgroup.FIELD])})
     if "qualification_delivery_compatibility" in plan:

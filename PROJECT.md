@@ -49,6 +49,41 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+### Prospective Source70: complete subgroup evidence transport and bounded HOST readers
+
+The target remains **50 sites × five settings × 64 visits = 16,000**.
+The last verified ledger contains **35 enrolled sites and 264 formal rows**.
+Source68 `b6fff5e5…` installed successfully through cached client reuse; its
+12 runtime operations and genuine F264 consumer check returned zero. Its
+fresh Clarin/Dictionary practice passed preamble, complete two-site response
+qualification, preflight and one Clarin capture. Deep verification then failed
+before checking the trace: its container received the first site's raw GET
+directory, while the group validator also required Dictionary's original raw
+directory. The capture and failed verification remain preserved and uncredited.
+
+Source70 supplies the complete authenticated selected-group evidence to the
+subgroup verifier as read-only files and directories, and derives the same
+transport when checking its recorded command. It also avoids repeatedly
+replaying a complete browser declaration when reading a closed V13 browser
+failure: the original failure verifier still checks its exact plan, HOST
+closure, full dependency fence, attempt tree, runtime and chronology. Finite
+reader compatibility preserves original receipt and source identities.
+
+Root focused003 returned zero with **106 passes in 66.90 seconds**, including
+the genuine original V13 failure and SDK973 context metadata, both retained
+practice-failure oracles, complete group mounts, exact expected-command
+agreement and byte/full-mode/raw-tree mutation controls. Focused002's two
+fixture errors remain preserved; the final retry changed those fixtures and
+left production bytes unchanged. The context metadata oracle does not replace
+a public context reopen or the actual fresh capture and deep checks.
+
+This is a prospective SDK successor with the existing Native `818d8939…`
+and client `2c9f170e…`. It needs a matching installed runtime
+and a fresh qualified capture and deep check before granting readiness. No
+new class or trace credit is claimed by this authoring checkpoint. The
+[evidence index](docs/EVIDENCE-INDEX.md#source70-subgroup-raw-evidence-and-closed-host-readers)
+records the preserved failures and the limits of the proposed changes.
+
 ### Prospective Source68: original enrollment transport, 8 October
 
 **35 sites remain enrolled and 264/16,000 formal traces remain verified.**

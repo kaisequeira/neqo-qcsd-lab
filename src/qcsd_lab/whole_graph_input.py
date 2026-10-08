@@ -281,14 +281,17 @@ def load_input(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 def load_failure(path: Path) -> dict[str, Any]:
     """An operational discovery failure is an accounted attempt, never eligibility."""
     value = get._load(get._read(path))
-    plan = load_plan(reopen(value["plan"]))
-    if plan["schema_version"] == 13:
-        if (path.name != "failed.json" or not zero(value)
+    plan_path = reopen(value["plan"])
+    plan = get._load(get._read(plan_path))
+    if isinstance(plan, dict) and plan.get("artifact_type") == V13_PLAN_TYPE:
+        operator = _producer(plan)
+        if (not zero(plan) or path.name != "failed.json" or not zero(value)
                 or value.get("candidate") not in plan["candidates"]
                 or value.get("outcome") != "operational-discovery-failure-no-admission"):
             raise ValueError("V13 discovery failure changes its declared zero-credit role")
-        _verify_external(_producer(plan), "verify-failure", "--failure", path.absolute(), timeout=None)
+        _verify_external(operator, "verify-failure", "--failure", path.absolute(), timeout=None)
         return value
+    plan = load_plan(plan_path)
     if plan["schema_version"] >= 4:
         return _controlled_failure(path, value, plan)
     seeded = plan["artifact_type"] in {SEEDED_PLAN_TYPE, CATALOGUE_PLAN_TYPE}

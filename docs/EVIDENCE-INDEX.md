@@ -7,6 +7,59 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
+## Source70 subgroup raw evidence and closed HOST readers
+
+The formal total remains **264/16,000**, with **35/50 sites enrolled**.
+Source68 Lab `b6fff5e52b8ba2f8ea747340da2828d8c4277738` pins Native
+`818d89398a5b0bc725e424b648d878185d18125d`; its installed client is
+`2c9f170e1e087d116a66571e2637e605967352501131ba9a4ef0052d19321dac`.
+Canonical runtime SHA-256
+`dc59b3939ba85cb3ed00b1479a1ab95c133ad39c0b0be09b9462b4be11697ed9`
+closed all 12 actual operations with cached client reuse and no Rust compile.
+Its genuine F264 check006 returned zero in 227.73 seconds.
+
+The new practice003 retained Clarin's 201-resource/two-origin graph and
+Dictionary's 38-resource/two-origin graph. Actual preamble, qualification,
+preflight and capture returned zero. The single Clarin practice experiment
+completed at `2026-10-08T06:12:18.850166Z`. Dictionary was a qualification
+member, not a captured practice sample. Actual `undefended-deep` returned one
+in 13.71 seconds: `checked_plan` validates both complete selected preparations,
+but verify-image's first-site-only mounts omitted Dictionary's original
+`get-candidate-000039` directory. This is transport failure before trace
+verification, not site ineligibility. No practice trace enters the formal total.
+
+The original runtime evidence remains under
+`diagnostic-rehearsals/rapid-private-source68-sdk-ordinary-retry-native818-runtime-20261008-001/`;
+the failed practice under
+`diagnostic-rehearsals/ordinary-b0004-native818-source68-sdk-healthy012-013-practice-root-actual-20261008-003/`;
+and its Root operations under
+`diagnostic-rehearsals/rapid-subgroup-readonly-inputs-source68-root-gates-20261008-001/`.
+The new Root gate destination is
+`diagnostic-rehearsals/rapid-group-raw-and-closed-host-reader-source70-root-gates-20261008-001/`.
+
+The prospective successor supplies every authenticated selected-group raw
+preparation to subgroup verification, read-only, with matching independent
+expected-command derivation. Non-subgroup command behavior is preserved.
+Its separate V13 failure reader optimization retains the original producer's
+physical plan, exact closed HOST operation, dependency fence, original attempt
+tree, source, runtime and chronology checks. It removes repeated declaration
+replay from that failure-reading path; no measured speedup is claimed yet.
+Only finite full-byte reader projections and the genuine prior SDK reader
+tuple support compatibility. Recorded scientific producers remain unchanged.
+
+Root focused003 returned zero with **106 passes in 66.90 seconds** and no
+skips. It ran the two reader modules, both subgroup transport modules and the
+portable operator pin against the exact authoring SDK. Authentic original V13
+failure reopening passed through the unchanged external failure producer;
+the SDK973 context reader metadata oracle and both preserved practice-failure
+oracles passed. These latter metadata checks are not public context or trace
+verification. Focused002 returned one with 104 passes and two fixture errors;
+the retry repaired only the fixtures and retained every production byte.
+
+At this authoring checkpoint, Source70 publication, matching images and fresh
+physical readiness are pending. These changes preserve all
+failed attempts and grant no admission, readiness or formal credit by themselves.
+
 ## Source68 original enrollment transport, 8 October 2026
 
 The corpus remains **35 enrolled sites and 264/16,000 verified formal rows**.

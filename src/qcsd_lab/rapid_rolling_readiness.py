@@ -339,8 +339,38 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
         roots = sorted(set(roots) | set(plan_roots(plan, directory)))
     if "enrolled_subgroup" in plan:
         from . import rapid_enrolled_subgroup as subgroup
-        roots = sorted(set(roots) | set(subgroup.input_roots(
-            plan["enrollment"], plan[subgroup.FIELD])))
+        from .static_evidence_transport import manifest_roots, _path as transport_path
+        from .rapid_operation_facts import current_context
+        metadata_roots = subgroup.input_roots(plan["enrollment"], plan[subgroup.FIELD])
+        selected = plan.get("selected_classes")
+        identity = ("class_index", "candidate_id", "workload_id")
+        if (not isinstance(selected, list) or not 1 <= len(selected) <= 5
+                or any(not isinstance(row, Mapping) or not set(identity) <= set(row) for row in selected)
+                or [{key: row[key] for key in identity} for row in selected]
+                != [{key: row[key] for key in identity} for row in plan[subgroup.FIELD]["classes"]]):
+            raise ValueError("subgroup deep transport changed its ordered selected classes")
+        declared = plan.get("group_preparation_roots")
+        if (not isinstance(declared, list) or any(not isinstance(root, str) for root in declared)
+                or declared != sorted(set(declared))):
+            raise ValueError("subgroup deep transport requires exact ordered group roots")
+        context = current_context()
+        for root in declared:
+            transport_path(Path(root), directory=True)
+        group_roots = set()
+        for row in selected:
+            path, raw = _reference(row.get("capture_manifest"))
+            expected = _path(Path(plan["execution_root"]) / "config/workloads" / (row["workload_id"] + ".json"))
+            # The stock flight create-only writer publishes these files as 0600.
+            if path != expected or path.stat().st_mode & 0o7777 != 0o600:
+                raise ValueError("subgroup deep capture manifest path or full mode changed")
+            if context is not None:
+                context.watch_file(path)
+                for evidence_root in context._workload_evidence_trees(path):
+                    context.watch_tree(evidence_root)
+            group_roots.update(manifest_roots(_json(raw)))
+        if declared != sorted(map(str, group_roots)):
+            raise ValueError("subgroup deep transport changed its authenticated full group roots")
+        roots = sorted(set(roots) | group_roots | set(metadata_roots))
     for root in roots:
         static_mounts.extend(["--volume", f"{root}:{root}:ro"])
     if ordinary_transport == "current-group":
