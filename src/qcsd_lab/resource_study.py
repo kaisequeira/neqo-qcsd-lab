@@ -281,12 +281,21 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
         raise ValueError("live enrollment is required before capture")
     if not pilot:
         for mode in modes:
+            selected = [e for e in enrolled if e.get("mode_readiness", {}).get(mode, True)]
+            if not selected:
+                continue
             ready = False
             for path in sorted((root / "pilots").glob(f"*/{mode}/*/session.json")):
                 candidate = load(path)
-                if (candidate.get("purpose") == "pilot" and candidate.get("runtime", {}).get("client_sha256")
+                if (candidate.get("purpose") == "pilot" and candidate.get("mode") == mode
+                        and candidate.get("runtime", {}).get("client_sha256")
                         == runtime.get("client_sha256")):
                     verify_receipt(root, candidate)
+                    proven = load(root / candidate["artifact_paths"]["enrollment"])
+                    if any(e.get("mode_settings", {}).get(mode) != proven.get("mode_settings", {}).get(mode)
+                            or e.get("mode_policies", {}).get(mode) != proven.get("mode_policies", {}).get(mode)
+                            for e in selected):
+                        continue
                     ready = True
                     break
             if not ready:
