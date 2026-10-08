@@ -26,6 +26,9 @@ FIRST_HELPER_SHA = "f50d4781cde87ee78d6d5ee6efa85ebf586d680068ec9569342fb16df111
 RECORDER = HERE.parent / "application-response-policy-runtime-20261003-001/runtime_recipe.py"
 RECORDER_SHA = "7e7653fe26a89ecc512a2b17b37438f6af6f3c97ea4f95ee77ea995e27594af7"
 MODES = ("undefended", "front", "tamaraw", "buflo", "cs-buflo")
+CLI_BUFLO_POLICIES = ("rapid-v6-fixed-200s-duration-budget-v1",
+                      "rapid-v7-fixed-64ms-640s-duration-budget-v1")
+CLI_FRONT_POLICY = "rapid-v7-front-450-600-sigma1-4-incoming10000us-padding-10pct-window10000us-reserve1000us-v5"
 AMENDED_MODES = ("front", "buflo")
 PUBLIC_CLI_BOOTSTRAP = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
                         "runpy.run_path(sys.argv.pop(1),run_name='__main__')")
@@ -144,7 +147,25 @@ def static_roots(manifest):
 
 
 def host_imports(clean):
-    sys.path[:0] = [str(Path(clean) / "src"), str(clean)]
+    """Bind one authenticated SDK; never relabel an already imported package."""
+    clean = Path(clean).absolute()
+    package = clean / "src/qcsd_lab"
+    read(package / "__init__.py")
+    for name, loaded in tuple(sys.modules.items()):
+        if name != "qcsd_lab" and not name.startswith("qcsd_lab."):
+            continue
+        origin = getattr(loaded, "__file__", None)
+        if origin is None:
+            raise ValueError("already imported qcsd SDK has no authenticated module source")
+        origin = Path(origin).absolute()
+        if (not origin.is_relative_to(package)
+                or name == "qcsd_lab" and origin != package / "__init__.py"):
+            raise ValueError("already imported qcsd SDK belongs to another source root")
+        read(origin)
+        paths = getattr(loaded, "__path__", None)
+        if paths is not None and tuple(Path(item).absolute() for item in paths) != (origin.parent,):
+            raise ValueError("already imported qcsd SDK has another package search path")
+    sys.path[:0] = [str(clean / "src"), str(clean)]
 
 
 def checked_runtime(args):
@@ -157,6 +178,62 @@ def checked_runtime(args):
         raise ValueError("new amended site requires the exact actual installed Native commit")
     return reference, canonical, clean
 
+
+
+def _bind_host_sdk(args):
+    """Authenticate HOST runtime metadata before importing its owning SDK."""
+    if args.command == "stage":
+        _, _, clean = checked_runtime(args)
+    elif args.command in {"amend", "finalize"}:
+        raw = read(args.setup)
+        if digest(raw) != args.setup_sha256:
+            raise ValueError("prospective setup changed")
+        setup = json.loads(raw)
+        output = args.setup.absolute().parent
+        if (setup["recipe"] != ref(__file__) or setup["mode"] not in MODES
+                or output != Path(setup["output"]) or output / "setup.json" != args.setup.absolute()):
+            raise ValueError("setup is not owned by this immutable namespace")
+        canonical_ref, canonical, clean = checked_runtime(SimpleNamespace(
+            runtime_build_root=Path(setup["runtime_build_root"]),
+            clean_runtime_root=Path(setup["clean_runtime_root"]),
+            canonical_sha256=setup["canonical_runtime_sha256"],
+            expected_lab_commit=setup["expected_lab_commit"],
+            expected_native_commit=setup["expected_native_commit"]))
+        if (canonical != setup["canonical_runtime"]
+                or checked(setup["canonical_runtime_reference"]) != checked(canonical_ref)
+                or read(output / "canonical-runtime.json") != checked(canonical_ref)):
+            raise ValueError("setup actual runtime changed")
+    elif args.command in {"readiness", "run"}:
+        raw = read(args.plan)
+        if digest(raw) != args.plan_sha256:
+            raise ValueError("first-site plan changed")
+        plan = json.loads(raw)
+        if (plan["recipe_sha256"] != digest(read(__file__)) or plan["helper_sha256"] != FIRST_HELPER_SHA
+                or re.fullmatch(r"[0-9a-f]{40}", str(plan["expected_lab_commit"])) is None
+                or re.fullmatch(r"[0-9a-f]{40}", str(plan["expected_native_commit"])) is None):
+            raise ValueError("first-site recipe or frozen Source differs")
+        canonical_raw = read(args.plan.absolute().parent / "canonical-runtime.json")
+        canonical = json.loads(canonical_raw)
+        if (canonical != plan["canonical_runtime"] or digest(canonical_raw) != plan["canonical_runtime_sha256"]
+                or canonical["source"]["lab_commit"] != plan["expected_lab_commit"]
+                or canonical["source"]["neqo_commit"] != plan["expected_native_commit"]):
+            raise ValueError("actual canonical runtime differs")
+        source_manifest = Path(canonical["source_manifest"])
+        build = source_manifest.parent.parent
+        if (not build.is_absolute() or source_manifest != build / "runtime-export/source.json"
+                or canonical["client_binary"] != str(build / "runtime-export/neqo-qcsd-client")):
+            raise ValueError("canonical HOST runtime export location differs")
+        _, actual, clean = checked_runtime(SimpleNamespace(
+            runtime_build_root=build, clean_runtime_root=Path(plan["clean_runtime_root"]),
+            canonical_sha256=plan["canonical_runtime_sha256"],
+            expected_lab_commit=plan["expected_lab_commit"],
+            expected_native_commit=plan["expected_native_commit"]))
+        if actual != canonical:
+            raise ValueError("plan actual runtime changed before SDK binding")
+    else:
+        raise ValueError("HOST SDK binding cannot replace an installed image SDK")
+    host_imports(clean)
+    return clean
 
 
 def typed_original(manifest):
@@ -880,7 +957,8 @@ def finalize(args):
         "workload_relative": copied.relative_to(execution).as_posix(),
         "qualification_set": qualification_set, "group_qualification_set": group_set,
         "selected_classes": current, "full_graph": canary["full_graph"],
-        "traffic_hashes": traffic.expected(selected_policy),
+        "traffic_hashes": {key: expected for key, (_, expected)
+            in traffic.files(selected_policy, front_selected=fixed_front).items()},
         "static_preparation_roots": static_roots(manifest), "group_preparation_roots": group_roots(manifests),
         "capture_limits": limits, "campaigns": campaigns, "reuse": setup["reuse"],
         "study_root": setup["study_root"], "enrollment": setup["enrollment"]}
@@ -1499,11 +1577,9 @@ def main():
     item.add_argument("--name", required=True)
     item.add_argument("--campaign-seed", type=int, required=True)
     item.add_argument("--mode", choices=MODES, required=True)
-    from qcsd_lab.buflo_duration_budget import POLICY, CADENCE64_POLICY
-    from qcsd_lab.front_fixed_configuration import POLICY as FRONT_LIGHT_POLICY
-    item.add_argument("--front-configuration-policy", choices=(FRONT_LIGHT_POLICY,),
+    item.add_argument("--front-configuration-policy", choices=(CLI_FRONT_POLICY,),
                       help="explicit prospective lighter FRONT V5; default retains V4")
-    item.add_argument("--buflo-duration-policy", choices=(POLICY, CADENCE64_POLICY),
+    item.add_argument("--buflo-duration-policy", choices=CLI_BUFLO_POLICIES,
                       help="explicit prospective BuFLO cadence/event budget; default retains the fixed20ms/200s flight")
     item.add_argument("--class-indices", type=int, nargs="+",
                       help="ordered current-batch subgroup with fresh qualification and canary")
@@ -1540,6 +1616,8 @@ def main():
                 item.add_argument("--result", type=Path, required=True)
     args = parser.parse_args()
     dispatch = {"stage": stage, "amend": amend, "finalize": finalize, "readiness": readiness, "run": run}
+    if args.command in dispatch:
+        _bind_host_sdk(args)
     from qcsd_lab.rapid_operation_facts import OperationFacts, current_context
     context = current_context()
     owned = context is None

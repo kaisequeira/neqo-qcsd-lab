@@ -100,6 +100,23 @@ def _compatible_direct_validator_sources(value: Mapping[str, Any], expected: Map
     if budget_name in expected:
         source44[budget_name] = '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb'
     historical.append(source44)
+    source65 = {
+        'qcsd_lab.application_response_policy': '817e48d727bcb5b056f37582c8c469af7070deabbd367571c2ea05b9f36ac49a',
+        'qcsd_lab.rapid_additive_static_enrollment': '5404821bf1bf087493d60076d33c5769748052f6301c352dccc6dae61e630670',
+        plain_name: 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
+        'qcsd_lab.supplied_static_bootstrap_get': '4a53baeb9f66220b6108ea304f54dd834fc447a4cc43f58a358de018b421f692',
+        'qcsd_lab.supplied_static_get': 'ce20fe5b5d60f7b268b7eb659ab56e98048d5934bc9cb3b456e2ef99c330d322',
+        'qcsd_lab.supplied_static_graph': '87370d25d526a22cac7519a721aed0db19b72fa5957a353301782779409d4efa',
+        'qcsd_lab.supplied_static_preparation': '087ebcea7cf8c793a82cbf40bcb0e77fb1555ba50b648c02af85e52c76641f44',
+        whole_name: '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0',
+    }
+    if budget_name in expected:
+        source65[budget_name] = '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb'
+        source65['qcsd_lab.supplied_static_budget_successor'] = 'a297fd337517ddffc30fc6e08b5961e2556f9311cbe5f7837baa0209bcf298d1'
+    if (recorded == source65 and expected == {**source65,
+            plain_name: expected[plain_name],
+            whole_name: 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98'}):
+        historical.append(source65)
     if recorded not in historical:
         return False
     modules = {module.__name__: module for module in _direct_modules()}
@@ -124,6 +141,21 @@ def _bound_validator_files(value: Mapping[str, Any]) -> set[Path]:
             raise ValueError("selected direct verifier file differs from its imported implementation")
         files.add(path)
     return files
+
+
+def _selected_get_manifests(value: Mapping[str, Any], declaration: Mapping[str, Any],
+                            neutral: dict) -> tuple[dict, dict]:
+    """Reconstruct the exact recorded full-GET policy, without promoting V1."""
+    if value["original_role"] == whole.ROLE:
+        policy = whole._declaration_manifest_policy(declaration)
+        if (declaration["schema_version"] == 2
+                and declaration["producer_sources"] != whole.producer_sources()):
+            raise ValueError("selected required-parent GET changes its exact prospective producer")
+        return whole._manifests(neutral, policy=policy)
+    primary = {"resources": [deepcopy(neutral["resources"][0])]}
+    full = deepcopy(neutral)
+    full["resources"][0]["known_valid"] = True
+    return primary, full
 
 
 def _raw_selected_proof(value: Mapping[str, Any], manifest: Mapping[str, Any]) -> dict:
@@ -154,9 +186,7 @@ def _raw_selected_proof(value: Mapping[str, Any], manifest: Mapping[str, Any]) -
             or get.class_acquisition.unsafe_catalogue_domain_reason(declaration["domain"]) is not None):
         raise ValueError("selected raw GET changed its prospective declaration/runtime/domain/caps")
     source = get._runtime(get._load(get._read(root / "runtime.json")), runtime)
-    primary = {"resources": [deepcopy(neutral["resources"][0])]}
-    full = deepcopy(neutral)
-    full["resources"][0]["known_valid"] = True
+    primary, full = _selected_get_manifests(value, declaration, neutral)
     if (declaration["neutral_input_sha256"] != graph.digest(graph.canonical_bytes(neutral))
             or declaration["bootstrap_input_sha256"] != graph.digest(graph.canonical_bytes(primary))
             or declaration["full_input_sha256"] != graph.digest(graph.canonical_bytes(full))):

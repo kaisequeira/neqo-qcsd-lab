@@ -7,7 +7,146 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
+## Source66 checkpoint: F264 and installed Source65 runtime, 8 October 2026
+
+**35 classes are enrolled; 264/16,000 accepted formal traces are all ordinary.**
+F264 is unchanged: classes 7–10 contribute 256 rows, and classes 17 and 18
+contribute four each. The final requirement remains **50 × five × 64**.
+Engineering checks, installed runtime receipts, practice and failed flights
+add no rows. Complete graphs and historical condition/runtime labels remain
+bound to their original evidence.
+
+Clean Lab Source65 `858a7f688dd38b117dea0e35e48a76b3f7b1960d` and Native
+`d2c4ec0e7dcc358fb0915d7b09c9a9b91715da8c` were published on `main` and
+`desktop`. A genuine clean Source65 F264 check returned zero in 282.27 seconds,
+preserving every original row. Ordinary measurement remains Source58
+`cd1793a65b1ebc5bafb0191febc2fb9ee8d28161`, Native
+`818d89398a5b0bc725e424b648d878185d18125d` and client
+`2c9f170e1e087d116a66571e2637e605967352501131ba9a4ef0052d19321dac`.
+Consumer source and installed measurement source are separate roles.
+
+The new canonical runtime is genuinely closed, with all 12 actual operations
+returning zero. Its x86-64 Linux client SHA-256 is
+`877b38a3c2abbb2d98dd1b397321c81a0606e0c03c87210d9b027bd6edda2a70`;
+collection image ID is
+`sha256:67b3c555c38bf99cf6ccbd5c5bb7865d436be4b8186576656c2a306ee3f8f79d`;
+prepare image ID is
+`sha256:1594dabae8443815038837704bd964f65b0db61cb86e63cd910e07a78f755366`.
+The receipt verifies installed source/client bytes under
+`actual-installed-runtime-bytes-not-live-study-qualification`. Its admitted
+site and accepted formal trace counters are both zero. It does not establish
+affected-mode readiness or retrospectively change the ordinary runtime.
+
+The latest healthy ordinary retry retained complete Clarin/Dictionary graphs
+of 201/38 resources. Both `experiment.json` files are genuinely `complete`,
+each with 32/32 local accepts and no local failures. The Source58 host monitor
+returned one on Docker inspection; the public launch returned two before
+typed lane and retirement closures. All 64 remain uncredited. Original-owner
+lifecycle recovery returned zero, and the following actor inventory was empty.
+No worker checkpoint, capture, graph or failed receipt was changed or promoted.
+
+Dropbox's old full-graph Native GET returned one in 8.209535 ms. The error was
+`terminal HTTP error policy cannot admit non-primary dependency or chaff resource 2`.
+The original graph records resource 17 depending on resource 2, so this was a
+configuration rejection before traffic, not a recorded HTTP failure or site
+rejection. Its complete 137-resource/six-origin graph is retained. Source66
+required-parent gate004 returned zero with 56 passes, no skips, in 1,940.46
+seconds of test time (1,941.15 seconds for the recorded outer operation).
+No new full-graph GET, admission or formal credit is claimed here.
+
+Source66 gate004 retained its 56 required-parent passes; paired selected-input
+and target gate008 retained its 45 passes. SDK binding gate011 returned zero:
+25 passed in 1.62 seconds, with one optional actual five-sidecar witness case
+explicitly deselected (1.96 seconds for the recorded outer operation). The
+HOST recipe binds the authenticated runtime SDK before importing policy/Facts.
+It does not replace the installed SDK during image actions.
+
+Gate013 passed ordinary HOST planning and the exact owned target action-shape
+control. FRONT stage, amendment and full-graph finalization all returned zero.
+The overall pytest operation still returned one because its last assertion
+expected an empty logs directory despite the four authentic amendment logs.
+Root receipt014 reopened those four exact logs and full-graph outputs,
+confirmed the successful FRONT operations and retained the failed013 record.
+Only that test expectation changed; the results and authority rules stayed
+unchanged. Gate015 then returned zero with four BuFLO/portable cases passed in
+63.49 seconds (63.80 seconds for the recorded outer operation). Thus ordinary,
+FRONT V5 and BuFLO64 HOST planning each have actual successful evidence.
+No physical capture, readiness or formal credit follows from these HOST checks.
+
+Earlier gate007/009/010 failures remain original evidence. Source66 clean
+freeze, publication and the genuine final-consumer F264 check remain pending.
+The prospectively checked ordinary runtime route reuses exact Native818 and
+client2c9 through the stock original-client reuse producer without Rust
+compilation. It requires a separate clean Native818-pinned Lab SDK child,
+actual new images/canonical export and fresh full-graph ordinary canary/deep
+proofs. No such SDK installation or readiness is claimed yet. Main and the
+existing defended Source65 runtime retain NativeD2; their identities are not
+relabelled as the future ordinary SDK. Counts remain 35 enrolled and 264/16,000.
+
+### Retained paths for this checkpoint
+
+These are local sibling-workspace paths, written as text because the raw
+evidence is not present in every clone. Each label below is resolved relative
+to the Lab repository root, not the `docs/` directory:
+
+- `F264`: `../diagnostic-rehearsals/ordinary-b0003-native818-v58-healthy007-010-remain120-source63-root-actual-20261008-001/`
+- `G65`: `../diagnostic-rehearsals/rapid-buflo64-frontv5-mode-epochs-source65-root-gates-20261008-001/`
+- `BUILD65`: `../diagnostic-rehearsals/rapid-v65-buflo64-frontv5-nativeD2-runtime-20261008-001/`
+- `HEALTHY64`: `../diagnostic-rehearsals/ordinary-b0004-native818-v58-healthy012-013-first64-source64-root-actual-20261008-002/`
+- `FLIGHT64`: `../diagnostic-rehearsals/ordinary-b0004-v58-current-whole-flight-20261008-002/execution-root/results/`
+- `RECOVERY64`: `../diagnostic-rehearsals/ordinary-b0004-healthy64-source58-orphan-owned-lifecycle-retirement-root-actual-20261008-001/`
+- `DROPBOX`: `../diagnostic-rehearsals/supplemental-seeds051-055-v13-source64-reader-source58-get-root-actual-20261008-001/get-candidate-000002/`
+- `G66`: `../diagnostic-rehearsals/rapid-whole-get-required-parents-source66-root-gates-20261008-001/`
+- `HOST007`: `../diagnostic-rehearsals/source66-portable-front-buflo-ordinary-real-host-plans-root-actual-20261008-003/`
+
+`FLIGHT64/ordinary-b0004-v58-healthy012-013-first64-20261008-002/` contains the
+failed host process and batch logs. Its two completed worker checkpoints are:
+
+- `FLIGHT64/rapid-selected50-slot-v1-p917eb8cbf8131f17-s04-undefended-v00-n16-c01/20261008T030557.818337Z/experiment.json`
+- `FLIGHT64/rapid-selected50-slot-v1-p917eb8cbf8131f17-s04-undefended-v16-n16-c17/20261008T030558.010153Z/experiment.json`
+
+The following hashes name exact retained bytes. Modes include the regular-file
+type; a later operation does not replace an earlier failed receipt.
+
+| Evidence ID under the labels above | Recorded result | SHA-256 | Full mode |
+| --- | --- | --- | --- |
+| `F264/progress264.json` | 264 ordinary rows, unchanged | `daef34dddae6879d4da41b6a0bb9f269e030b95e9e0c82d89a49a969294ca84f` | `100600` |
+| `G65/source65-frozen024.json` | Clean Lab858a/NativeD2 freeze; runtime and clean-consumer checks were pending at this earlier receipt | `d376f564c57d7fa386963283d42b4d68ca73efeca0af2c508303d31da75af595` | `100644` |
+| `G65/genuine-f264-clean-source65-d2-check024-completed.json` | Return zero; 282.27 seconds; no added credit | `3969e585093e75e338c9f29b28e8612f0b9b6e385e544946a0cb4c07806c4212` | `100644` |
+| `G65/lab65-published027.json` | Clean Lab858a published; non-force atomic publication | `b687b679250b5283787e3f9b65f2a41041af277d6bcd9fb729d8fb748fe6022e` | `100644` |
+| `G65/native65-published027.json` | Clean NativeD2 published; non-force atomic publication | `d5db80453b1a49b01b854c132f213727066d4b78f86d67ae48e16c2a938abf20` | `100644` |
+| `BUILD65/canonical-runtime.json` | All 12 actual operations zero; installed bytes verified; no site/trace credit | `6214430c1ce1631473d64e9638461d61817eca47548eab48f8c08b3683838bbc` | `100644` |
+| `G65/runtime65-canonical-closed029.json` | Actual canonical closure; compiled client877b | `6b6a3006c431c3e2be6f402d9944b4b916a5f67a9b0f8b437d0ffca2133674b5` | `100644` |
+| First `FLIGHT64/…/experiment.json` listed above | Complete; 32 local accepts, zero local failures; uncredited | `5ce31c6cc862e493e04d4ed05dcf834ee831433894626b02f5feb04a8c958928` | `100600` |
+| Second `FLIGHT64/…/experiment.json` listed above | Complete; 32 local accepts, zero local failures; uncredited | `93d5fa9858195ddd4f8a256ce93be7c071e4753cb561857c0ea2078d04127088` | `100600` |
+| `FLIGHT64/ordinary-b0004-v58-healthy012-013-first64-20261008-002/host-process.json` | Host monitor returned one | `70c72abdc699238471a5314dafaf41c4bd10a1e9a61b99e65382aa6d132edaa0` | `100600` |
+| `HEALTHY64/operations/launch-completed.json` | Public launch returned two; no closure/credit | `e0399a969ad90fe3e6736e856ef2ddd606fd5a5e85b027a222f21d2006b8b9e8` | `100644` |
+| `RECOVERY64/original-owner-lifecycle-recover-completed.json` | Return zero; authentic owner recovery | `364b6d52ab5db0ca8e1fab2d19190ac04d31e0b40840797e749340390171f8cc` | `100644` |
+| `RECOVERY64/after-owner-actors-completed.json` | Return zero; actor stdout empty | `104883815e72ab765a378643f881ce4ed70d01ffd5fb434643c35358a1433a2e` | `100644` |
+| `DROPBOX/native-completed.json` | Return one; 8,209,535 ns; Native argument rejection before traffic | `57463617f7b02cb8de496faa04a3a404f44d886d0fa4d8b6c55e129d35a90100` | `100444` |
+| `G66/source66-required-parent-core004-completed.json` | Return zero; 56 passes, no skips | `cb4aa47bb645bb6f8662fb10a92b35d2d3f9b534811554a7f8c1aad716473223` | `100644` |
+| `G66/source66-portable-real-host-modes007-completed.json` | Return one; ordinary passed, FRONT finalization refused | `642892c53eb5223faf14adef79515dd9527d9656d7a7b1ff59583e7f73c00b5a` | `100644` |
+| `G66/source66-selected-reader-focused008-completed.json` | Return zero; 45 focused passes, no skips; two authentic metadata controls | `a584853bfe97b2d498fcea774e5d26f396f3bf6434046141816619141d91daf1` | `100644` |
+| `G66/source66-portable-real-host-defended009-completed.json` | Return one; prospective amendment name already claimed | `76a113cf0d2a37f78298c167c579f2571e3955ab2889ab4e67fe5cd942080203` | `100644` |
+| `HOST007/front/logs/amend-completed.json` | Return zero; FRONT amendment completed before failed finalization | `40b09e65ab3ceeb1ce67b3e3bec927706eda47a4ede95012967de60d8ad3dad5` | `100644` |
+| `G66/source66-sdk-binding-focused011-completed.json` | Return zero; 25 passes, one optional actual-sidecar case deselected | `782d11aeef98c20e04f193d14bd9fc941b40f4aed3c41021a10913a50b4eb7c6` | `100644` |
+| `G66/source66-portable-real-host-three-modes013-completed.json` | Overall return one; ordinary/owned shape passed, FRONT operations zero; late test log assertion failed | `aff4e5a72f6cde183fae778cc42cd1cadabc3bd69969cd816f170637b52e5b03` | `100644` |
+| `G66/source66-front-host-success-and-test-assertion-correction014.json` | Authenticated four original FRONT logs/full graph; failed013 and actual results preserved; zero credit | `2dcebe4511f16b987b39070162c1d6740eeb2a6c96a8105c8388ab16e57120a4` | `100644` |
+| `G66/source66-portable-real-host-buflo015-completed.json` | Return zero; four BuFLO/portable cases pass; no physical actions | `2963346bb32d86a1a3c58bf349162cb412c939fd9972950639c71a1aec96282e` | `100644` |
+
+Portable source roles remain in the
+[fixed target reader](../src/qcsd_lab/rapid_fixed_condition_target.py),
+[complete-capture audit](../src/qcsd_lab/rapid_epoch_corpus.py),
+[selected-input reader](../src/qcsd_lab/rapid_selected_capture_input.py),
+[whole-graph supplement](../src/qcsd_lab/whole_graph_supplement.py) and
+[operator path](RAPID-CAPTURE-PATH.md). The failed Source58 measurement release
+remains unchanged; a source repair or a later receipt grants it no retroactive
+typed closure or credit.
+
 ## Fixed five target: F264 and prospective Source65 engineering, 8 October 2026
+
+This is the earlier Source65 authoring snapshot. The later installed-runtime
+and Source66 checks are recorded in the [current checkpoint](#source66-checkpoint-f264-and-installed-source65-runtime-8-october-2026).
 
 **35 classes are enrolled; 264/16,000 accepted formal traces are all ordinary.**
 The original F264 receipt and fixed target

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ROOT / "tools/rapid_class_mode_flight.py"
 BUNDLE = ROOT / "tools/_rapid_class_mode_flight"
 FILES = {
-    "flight/operator.py": "93244dfb93ba9331d859faf8806c489715ed8594db773b7ed50ca54f7800129a",
+    "flight/operator.py": "c3426827f1f8112fab62cd270b61c28cddee767682f5c19f883793cf99d74331",
     "rapid-v6-first-site-operator-20261004-001/operator.py":
         "f50d4781cde87ee78d6d5ee6efa85ebf586d680068ec9569342fb16df111b8f1",
     "application-response-policy-runtime-20261003-001/runtime_recipe.py":
@@ -59,6 +59,7 @@ def test_relocated_clone_cli_has_no_parent_workspace_dependency(tmp_path):
     (clone / "tools").mkdir(parents=True)
     shutil.copy2(ENTRY, clone / "tools" / ENTRY.name)
     shutil.copytree(BUNDLE, clone / "tools" / BUNDLE.name)
+    shutil.copytree(ROOT / "src", clone / "src")
     entry = clone / "tools" / ENTRY.name
     result = run_entry(entry, "--help", cwd=tmp_path)
     assert result.returncode == 0, result.stderr
@@ -96,12 +97,14 @@ def test_portable_typed_budget_uses_manifest_context_without_image_enrollment(ad
         recipe.typed_canary_limits([changed], None, "tamaraw", None)
 
 
-def test_actual_closed_inputs_stage_finalize_and_full_graph(tmp_path):
+@pytest.mark.parametrize("mode", ["undefended", "front", "buflo"])
+def test_actual_closed_inputs_stage_finalize_and_full_graph(tmp_path, mode):
     names = ("RUNTIME_BUILD", "CLEAN_SOURCE", "STUDY_ROOT", "ENROLLMENT", "OUTPUT")
     env = {name: os.environ.get("QCSD_PORTABLE_TEST_" + name) for name in names}
     if not all(env.values()):
         pytest.skip("Supply QCSD_PORTABLE_TEST_* closed inputs for the HOST-only integration check")
     build, clean, study, enrollment, output = (Path(env[name]) for name in names)
+    output = output / mode
     canonical_path = build / "canonical-runtime.json"
     canonical_raw = canonical_path.read_bytes()
     canonical = json.loads(canonical_raw)
@@ -109,13 +112,27 @@ def test_actual_closed_inputs_stage_finalize_and_full_graph(tmp_path):
     expected_results = {path.relative_to(exported_results).as_posix(): path.read_bytes()
                         for path in exported_results.rglob("*") if path.is_file()}
     assert not output.exists()
+    options = []
+    indices = os.environ.get("QCSD_PORTABLE_TEST_CLASS_INDICES")
+    if indices:
+        options += ["--class-indices", *indices.split()]
+    if mode != "undefended":
+        options += ["--application-body-identity-policy", "complete-current-application-delivery-v1"]
+    if mode == "front":
+        from qcsd_lab.front_fixed_configuration import POLICY
+        options += ["--front-configuration-policy", POLICY]
+    elif mode == "buflo":
+        from qcsd_lab.buflo_duration_budget import CADENCE64_POLICY
+        options += ["--buflo-duration-policy", CADENCE64_POLICY]
+    flight_name = "portable-host-flight-" + mode + "-" + sha256(str(output).encode()).hexdigest()[:12]
     stage = run_entry(ENTRY, "stage", "--runtime-build-root", build,
         "--clean-runtime-root", clean, "--study-root", study, "--enrollment", enrollment,
         "--output", output, "--python", sys.executable,
         "--canonical-sha256", sha256(canonical_raw).hexdigest(),
         "--expected-lab-commit", canonical["source"]["lab_commit"],
         "--expected-native-commit", canonical["source"]["neqo_commit"],
-        "--name", "portable-host-flight", "--campaign-seed", "43", "--mode", "undefended",
+        "--name", flight_name, "--campaign-seed", "43", "--mode", mode,
+        *options,
         cwd=tmp_path)
     assert stage.returncode == 0, stage.stderr
     staged = json.loads(stage.stdout)
@@ -123,6 +140,10 @@ def test_actual_closed_inputs_stage_finalize_and_full_graph(tmp_path):
     assert staged["formal_accepted_trace_count"] == 0
     setup = json.loads((output / "setup.json").read_bytes())
     assert Path(setup["recipe"]["path"]).is_relative_to(BUNDLE)
+    if mode != "undefended":
+        amendment = run_entry(ENTRY, "amend", "--setup", output / "setup.json",
+            "--setup-sha256", staged["setup"]["sha256"], cwd=tmp_path)
+        assert amendment.returncode == 0, amendment.stderr
     final = run_entry(ENTRY, "finalize", "--setup", output / "setup.json",
                       "--setup-sha256", staged["setup"]["sha256"], cwd=tmp_path)
     assert final.returncode == 0, final.stderr
@@ -132,17 +153,31 @@ def test_actual_closed_inputs_stage_finalize_and_full_graph(tmp_path):
     plan = json.loads((output / "plan.json").read_bytes())
     assert plan["recipe_sha256"] == FILES["flight/operator.py"]
     assert Path(plan["helper_path"]).is_relative_to(BUNDLE)
-    assert plan["campaigns"][0]["mode"] == "undefended"
+    assert plan["campaigns"][0]["mode"] == mode
     assert plan["campaigns"][0]["visits"] == 1
+    from qcsd_lab import rapid_capture_traffic as traffic
+    assert plan["traffic_hashes"] == {
+        key: expected for key, (_, expected) in traffic.canary_files(plan, mode).items()}
     for row in plan["selected_classes"]:
         original = Path(row["original_workload"]["path"]).read_bytes()
         copied = Path(row["capture_manifest"]["path"]).read_bytes()
-        assert copied == original
+        if mode == "undefended":
+            assert copied == original
+        else:
+            assert json.loads(copied)["resources"] == json.loads(original)["resources"]
         assert len(json.loads(copied)["resources"]) == row["full_graph"]["resource_count"]
     commands = json.loads((output / "commands.json").read_bytes())
     assert f"{BUNDLE / 'flight/operator.py'}:/recipe.py:ro" in commands["preamble"]
     assert f"{plan['helper_path']}:/helpers.py:ro" in commands["preamble"]
-    assert not list((output / "logs").iterdir())
+    expected_logs = set() if mode == "undefended" else {
+        "amend-started.json", "amend-completed.json", "amend.stdout.log", "amend.stderr.log"}
+    assert {path.name for path in (output / "logs").iterdir()} == expected_logs
+    if mode != "undefended":
+        completion = json.loads((output / "logs/amend-completed.json").read_bytes())
+        assert completion["returncode"] == 0
+        for stream in ("stdout", "stderr"):
+            assert completion[stream + "_sha256"] == sha256(
+                (output / ("logs/amend." + stream + ".log")).read_bytes()).hexdigest()
     # The exported repository has a results README; staging creates no result.
     results = output / "execution-root/results"
     assert {path.relative_to(results).as_posix(): path.read_bytes()

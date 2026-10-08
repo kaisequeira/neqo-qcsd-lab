@@ -49,7 +49,84 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest verified checkpoint: 8 October, F264 and prospective Source65
+### Latest verified checkpoint: 8 October, F264, installed Source65 and Source66 checks
+
+**35 classes are enrolled, with 264/16,000 accepted formal traces, all
+ordinary.** The original F264 receipt is unchanged: classes 7–10 have 64
+verified visits each, and classes 17 and 18 have four each. The final target
+remains **50 sites × five settings × 64 accepted visits**. Complete resource
+graphs, historical conditions and failed attempts retain their original labels.
+
+Clean Lab Source65 `858a7f68…` and Native `d2c4ec0e…` are published on
+`main` and `desktop`. The clean Source65 consumer reopened the original F264
+receipt successfully in 282.27 seconds and added no credit. Ordinary
+measurement still uses frozen Source58 `cd1793a6…`, Native `818d8939…` and
+client `2c9f170e…`; the external reader and the installed measurement release
+are recorded separately.
+
+The new x86-64 client `877b38a3…`, collection image `67b3c555…` and prepare
+image `1594daba…` are genuinely built. The canonical runtime receipt
+`6214430c…` closed **all 12 actual build/export operations with return zero**
+and verified installed source and client bytes. Its scope is installed runtime
+identity: it grants no site admission, affected-mode readiness or formal
+recording credit. BuFLO64 and FRONT V5 still need their own successful current
+practice and acquisition on that runtime. The
+[evidence index](docs/EVIDENCE-INDEX.md#source66-checkpoint-f264-and-installed-source65-runtime-8-october-2026)
+records the exact identities, retained paths and receipt hashes.
+
+The latest ordinary retry selected the complete Clarin and Dictionary graphs
+(201 and 38 resources). Both workers finished their 32 planned visits with
+zero local failures. The Source58 host monitor then exited one during a Docker
+inspection, and the public launch operation returned two before the required
+typed lane and retirement closures existed. **All 64 recordings remain
+uncredited; the total is 264, not 328.** Original-owner lifecycle recovery
+returned zero and its following actor inventory was empty. The completed
+checkpoints, captures and failed launch remain preserved. This infrastructure
+failure does not reject either website or change its graph.
+
+Dropbox's retained graph still has 137 resources and six origins. Its old
+full-graph GET stopped after **8.209535 milliseconds** with a Native argument
+error: resource 2 is a non-primary parent of resource 17, so the old terminal
+HTTP policy refused that configuration before traffic. This is not an HTTP
+response or a scientific site rejection; no site admission or formal row was
+added. Source66's required-parent regression gate004 returned zero with
+**56 passed in 1,940.46 seconds and no skips**. That engineering check does
+not replace a successful new complete-graph GET.
+
+The selected-input/target compatibility repair passed **45 focused tests**;
+the unchanged required-parent gate passed **56**. The subsequent SDK binding
+gate011 passed **25 tests in 1.62 seconds**, with one optional real-sidecar
+case explicitly deselected. It authenticates the installed runtime SDK before
+HOST policy imports and action-local Facts; no authority guard was relaxed.
+
+All three real HOST planning routes now have successful evidence. Gate013
+passed the ordinary route and exact target action-boundary shape control.
+FRONT stage, amendment and full-graph finalization also returned zero, but an
+outdated test assertion wrongly expected no amendment logs, so gate013 itself
+remains failed. Root receipt014 authenticated the four original FRONT logs
+and preserved those successful outputs; only the test expectation changed.
+BuFLO gate015 then passed all **four cases in 63.49 seconds**. Earlier
+gate007/009/010 failures remain preserved. These are HOST planning checks,
+with **no new physical capture, readiness, site admission or formal credit**.
+The current count remains 264. Final Source66 clean-consumer F264 checking,
+freeze and publication are still pending.
+
+A prospective ordinary SDK route can reuse the exact Native818/client2c9
+binary through the original stock reuse producer, without Rust compilation.
+It requires a separate clean Lab SDK child pinned to Native818, actual new
+image/export receipts and a fresh ordinary complete-graph canary and deep
+check. That SDK and its installed runtime have not yet been created or
+qualified. Main and the existing defended reader/runtime retain NativeD2;
+ordinary Native818 measurements keep their distinct implementation labels.
+
+The immediate steps are to check the original F264 corpus on the final clean
+consumer, close Source66 release evidence, and bind fresh full-graph GET and
+affected-mode practice to their actual producer and installed runtime. Only
+independent verification and ledger admission can increase the formal count.
+The [rapid capture path](docs/RAPID-CAPTURE-PATH.md) remains the continuation
+guide.
+
+### Earlier verified checkpoint: 8 October, F264 and prospective Source65
 
 **35 classes are enrolled, with 264/16,000 accepted formal traces, all
 ordinary.** The original F264 progress receipt is unchanged. All 50 eligible

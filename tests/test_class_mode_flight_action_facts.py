@@ -32,6 +32,8 @@ def recipe():
 def invoke(recipe, monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", [str(RECIPE), "finalize", "--setup",
         str(tmp_path / "unused-setup.json"), "--setup-sha256", "a" * 64])
+    # This fixture isolates dispatch ownership; authentic SDK binding has its own controls.
+    monkeypatch.setattr(recipe, "_bind_host_sdk", lambda args: ROOT)
     return recipe.main()
 
 

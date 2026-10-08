@@ -31,6 +31,8 @@ PROOF_TYPE = "qcsd-whole-occurrence-primary-and-complete-native-get-v1"
 RECEIPT_TYPE = "qcsd-whole-occurrence-independent-get-preparation-v1"
 NAMESPACE_TYPE = "qcsd-whole-occurrence-recorded-get-execution-v1"
 
+LEGACY_MANIFEST_POLICY = "primary-only-known-valid-full-get-input-v1"
+REQUIRED_PARENT_MANIFEST_POLICY = "required-2xx-roots-and-dependency-parents-terminal-auxiliary-leaves-v1"
 
 class PreparationIneligible(ValueError):
     """A closed complete GET fails a specified whole-graph admission property."""
@@ -78,6 +80,8 @@ def _recognized_producer_sources(value: Any) -> bool:
         'qcsd_lab.whole_graph_input': input_sha,
         'qcsd_lab.whole_graph_supplement': supplement_sha}
         for input_sha, supplement_sha in (
+            ('7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c',
+             '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0'),
             ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
              '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b'),
             ('5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',
@@ -328,11 +332,35 @@ def _candidate_input(context: Context, position: int):
     return row, ref, value, neutral
 
 
-def _manifests(neutral: dict) -> tuple[dict, dict]:
+def _manifests(neutral: dict, *, policy: str = LEGACY_MANIFEST_POLICY) -> tuple[dict, dict]:
+    if policy not in {LEGACY_MANIFEST_POLICY, REQUIRED_PARENT_MANIFEST_POLICY}:
+        raise ValueError("whole graph GET manifest policy is unsupported")
     primary = {"resources": [deepcopy(neutral["resources"][0])]}
     full = deepcopy(neutral)
-    full["resources"][0]["known_valid"] = True
+    if policy == LEGACY_MANIFEST_POLICY:
+        full["resources"][0]["known_valid"] = True
+    else:
+        from .application_response_policy import terminal_http_error_resource_allowed
+        resources = neutral["resources"]
+        if any(row.get("known_valid") is not False or row.get("chaff_priority") is not False
+               for row in resources):
+            raise ValueError("whole graph GET requires an unchanged neutral input")
+        # These flags require 2xx completion; they do not claim qualification.
+        # Only dependent auxiliary leaves may complete with terminal 4xx/5xx.
+        for row in full["resources"]:
+            row["known_valid"] = not terminal_http_error_resource_allowed(row, resources)
     return primary, full
+
+
+def _declaration_manifest_policy(declaration: Any) -> str:
+    if not isinstance(declaration, dict) or type(declaration.get("schema_version")) is not int:
+        raise ValueError("whole graph GET declaration version is invalid")
+    if declaration["schema_version"] == 1 and "manifest_policy" not in declaration:
+        return LEGACY_MANIFEST_POLICY
+    if (declaration["schema_version"] == 2
+            and declaration.get("manifest_policy") == REQUIRED_PARENT_MANIFEST_POLICY):
+        return REQUIRED_PARENT_MANIFEST_POLICY
+    raise ValueError("whole graph GET declaration manifest policy is invalid")
 
 
 def _execution_root(root: Path, namespace: Any, expected: dict, *, failed_phase=None):
@@ -355,16 +383,18 @@ def namespace_mapping(root: Path, execution_root: Path, *, started: Path, comple
 
 def _declaration(root: Path, context: Context, position: int) -> tuple[dict, dict, dict, dict, dict]:
     row, ref, input_value, neutral = _candidate_input(context, position)
-    primary, full = _manifests(neutral)
     raw = get._read(root / "declaration.json")
     declaration = get._load(raw)
+    policy = _declaration_manifest_policy(declaration)
+    primary, full = _manifests(neutral, policy=policy)
     get._exact(declaration, {"schema_version", "record_type", "declared_at", "context", "position", "candidate_id", "domain",
         "graph_input", "discovery_runtime", "runtime_binding", "producer_sources", "neutral_input_sha256",
         "bootstrap_input_sha256", "full_input_sha256", "max_response_bytes", "timeout_seconds", "primary_claim",
-        "public_origin_policy", *inputs.ZERO}, "whole graph GET declaration")
+        "public_origin_policy", *inputs.ZERO,
+        *({"manifest_policy"} if declaration["schema_version"] == 2 else set())}, "whole graph GET declaration")
     expected = context.provenance["runtime_binding"]
-    if (type(declaration["schema_version"]) is not int or declaration["schema_version"] != 1
-            or declaration["record_type"] != PROOF_TYPE or not inputs.zero(declaration)
+    if (declaration["record_type"] != PROOF_TYPE or not inputs.zero(declaration)
+            or declaration["schema_version"] == 2 and declaration["producer_sources"] != producer_sources()
             or declaration["context"] != original.reference(context.root / "provenance.json")
             or type(declaration["position"]) is not int or declaration["position"] != position
             or declaration["candidate_id"] != row["candidate_id"] or declaration["domain"] != row["domain"]
@@ -492,10 +522,11 @@ def execute_get(context_root: Path, position: int, root: Path) -> dict:
         get.util.require_disjoint_path(root, [protected], label="whole graph GET output")
     root.mkdir(mode=0o700, parents=False, exist_ok=False)
     (root / "bootstrap").mkdir(mode=0o700)
-    primary, full = _manifests(neutral)
+    primary, full = _manifests(neutral, policy=REQUIRED_PARENT_MANIFEST_POLICY)
     get._json(root / "neutral-input.json", neutral)
     get._json(root / "runtime.json", runtime)
-    declaration = {"schema_version": 1, "record_type": PROOF_TYPE, "declared_at": datetime.now(UTC).isoformat(),
+    declaration = {"schema_version": 2, "record_type": PROOF_TYPE,
+        "manifest_policy": REQUIRED_PARENT_MANIFEST_POLICY, "declared_at": datetime.now(UTC).isoformat(),
         "context": original.reference(context.root / "provenance.json"), "position": position, "candidate_id": row["candidate_id"],
         "domain": row["domain"], "graph_input": ref, "discovery_runtime": value["runtime"], "runtime_binding": expected,
         "producer_sources": producer_sources(), "neutral_input_sha256": graph.digest(graph.canonical_bytes(neutral)),

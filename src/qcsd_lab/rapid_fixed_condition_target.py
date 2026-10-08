@@ -174,7 +174,8 @@ _READER_COMPATIBILITY_HELPERS = {
                '_portable_dynamic_source_projection',
                '_parallel_schedule_source_projection', '_acquisition_reader_sources',
                '_v13_input_reader_source_projection', '_v13_supplement_reader_source_projection',
-               '_v13_cohort_reader_source_projection',
+               '_v13_cohort_reader_source_projection', '_required_parent_get_source_projection',
+               '_source65_selected_input_source_projection',
                '_v12_input_reader_source_projection',
                '_v11_input_reader_source_projection',
                '_compatible_acquisition_code', '_cohort_acquisition_source_projection',
@@ -816,12 +817,12 @@ def _membership_code_path(path, target_source):
 def _acquisition_reader_sources():
     """Authenticate this one prospective reader set before historical reuse."""
     sources = {
-        'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
+        'rapid_selected_capture_input.py': '72933db93fef22fd599dce35b2ae27dd2f525b112bc6140134540d1f1cad1fb1',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
         'rapid_per_class_selected_enrollment.py': '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0',
         'whole_graph_input.py': '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c',
-        'whole_graph_supplement.py': '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0',
-        'rapid_supplemental_cohort.py': 'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d',
+        'whole_graph_supplement.py': 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98',
+        'rapid_supplemental_cohort.py': 'e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad',
     }
     _open(reference(Path(__file__)))
     result = {}
@@ -870,8 +871,59 @@ def _v13_input_reader_source_projection(raw):
     return projected
 
 
+def _source65_selected_input_source_projection(raw):
+    """Restore every Source65 byte after exact selected GET reader registration."""
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest == 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442':
+        return raw
+    if digest != '72933db93fef22fd599dce35b2ae27dd2f525b112bc6140134540d1f1cad1fb1':
+        raise ValueError('selected GET reader is outside its exact Source65/66 pair')
+    replacements = (
+        (b"    historical.append(source44)\n    source65 = {\n        'qcsd_lab.application_response_policy': '817e48d727bcb5b056f37582c8c469af7070deabbd367571c2ea05b9f36ac49a',\n        'qcsd_lab.rapid_additive_static_enrollment': '5404821bf1bf087493d60076d33c5769748052f6301c352dccc6dae61e630670',\n        plain_name: 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',\n        'qcsd_lab.supplied_static_bootstrap_get': '4a53baeb9f66220b6108ea304f54dd834fc447a4cc43f58a358de018b421f692',\n        'qcsd_lab.supplied_static_get': 'ce20fe5b5d60f7b268b7eb659ab56e98048d5934bc9cb3b456e2ef99c330d322',\n        'qcsd_lab.supplied_static_graph': '87370d25d526a22cac7519a721aed0db19b72fa5957a353301782779409d4efa',\n        'qcsd_lab.supplied_static_preparation': '087ebcea7cf8c793a82cbf40bcb0e77fb1555ba50b648c02af85e52c76641f44',\n        whole_name: '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0',\n    }\n    if budget_name in expected:\n        source65[budget_name] = '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb'\n        source65['qcsd_lab.supplied_static_budget_successor'] = 'a297fd337517ddffc30fc6e08b5961e2556f9311cbe5f7837baa0209bcf298d1'\n    if (recorded == source65 and expected == {**source65,\n            plain_name: expected[plain_name],\n            whole_name: 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98'}):\n        historical.append(source65)\n", b"    historical.append(source44)\n"),
+        (b"def _selected_get_manifests(value: Mapping[str, Any], declaration: Mapping[str, Any],\n                            neutral: dict) -> tuple[dict, dict]:\n    \"\"\"Reconstruct the exact recorded full-GET policy, without promoting V1.\"\"\"\n    if value[\"original_role\"] == whole.ROLE:\n        policy = whole._declaration_manifest_policy(declaration)\n        if (declaration[\"schema_version\"] == 2\n                and declaration[\"producer_sources\"] != whole.producer_sources()):\n            raise ValueError(\"selected required-parent GET changes its exact prospective producer\")\n        return whole._manifests(neutral, policy=policy)\n    primary = {\"resources\": [deepcopy(neutral[\"resources\"][0])]}\n    full = deepcopy(neutral)\n    full[\"resources\"][0][\"known_valid\"] = True\n    return primary, full\n\n\ndef _raw_selected_proof(value: Mapping[str, Any], manifest: Mapping[str, Any]) -> dict:\n", b"def _raw_selected_proof(value: Mapping[str, Any], manifest: Mapping[str, Any]) -> dict:\n"),
+        (b"    primary, full = _selected_get_manifests(value, declaration, neutral)\n    if (declaration[\"neutral_input_sha256\"] != graph.digest(graph.canonical_bytes(neutral))\n", b"    primary = {\"resources\": [deepcopy(neutral[\"resources\"][0])]}\n    full = deepcopy(neutral)\n    full[\"resources\"][0][\"known_valid\"] = True\n    if (declaration[\"neutral_input_sha256\"] != graph.digest(graph.canonical_bytes(neutral))\n"),
+    )
+    for current, original in replacements:
+        if raw.count(current) != 1:
+            raise ValueError('selected GET registration changes another original reader unit')
+        raw = raw.replace(current, original, 1)
+    if hashlib.sha256(raw).hexdigest() != 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442':
+        raise ValueError('selected GET reader changes protected Source65 proof or graph bytes')
+    return raw
+
+
+def _required_parent_get_source_projection(raw):
+    """Restore every Source64 byte after the exact versioned probe registration."""
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest == '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0':
+        return raw
+    if digest != 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98':
+        raise ValueError('required-parent GET reader is outside its exact Source pair')
+    replacements = (
+        (b"RECEIPT_TYPE = \"qcsd-whole-occurrence-independent-get-preparation-v1\"\nNAMESPACE_TYPE = \"qcsd-whole-occurrence-recorded-get-execution-v1\"\n\nLEGACY_MANIFEST_POLICY = \"primary-only-known-valid-full-get-input-v1\"\nREQUIRED_PARENT_MANIFEST_POLICY = \"required-2xx-roots-and-dependency-parents-terminal-auxiliary-leaves-v1\"\n\nclass PreparationIneligible(ValueError):\n    \"\"\"A closed complete GET fails a specified whole-graph admission property.\"\"\"\n", b"RECEIPT_TYPE = \"qcsd-whole-occurrence-independent-get-preparation-v1\"\nNAMESPACE_TYPE = \"qcsd-whole-occurrence-recorded-get-execution-v1\"\n\n\nclass PreparationIneligible(ValueError):\n    \"\"\"A closed complete GET fails a specified whole-graph admission property.\"\"\"\n"),
+        (b"        'qcsd_lab.whole_graph_input': input_sha,\n        'qcsd_lab.whole_graph_supplement': supplement_sha}\n        for input_sha, supplement_sha in (\n            ('7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c',\n             '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0'),\n            ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',\n             '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b'),\n            ('5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',\n", b"        'qcsd_lab.whole_graph_input': input_sha,\n        'qcsd_lab.whole_graph_supplement': supplement_sha}\n        for input_sha, supplement_sha in (\n            ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',\n             '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b'),\n            ('5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',\n"),
+        (b"    return row, ref, value, neutral\n\n\ndef _manifests(neutral: dict, *, policy: str = LEGACY_MANIFEST_POLICY) -> tuple[dict, dict]:\n    if policy not in {LEGACY_MANIFEST_POLICY, REQUIRED_PARENT_MANIFEST_POLICY}:\n        raise ValueError(\"whole graph GET manifest policy is unsupported\")\n    primary = {\"resources\": [deepcopy(neutral[\"resources\"][0])]}\n    full = deepcopy(neutral)\n    if policy == LEGACY_MANIFEST_POLICY:\n        full[\"resources\"][0][\"known_valid\"] = True\n    else:\n        from .application_response_policy import terminal_http_error_resource_allowed\n        resources = neutral[\"resources\"]\n        if any(row.get(\"known_valid\") is not False or row.get(\"chaff_priority\") is not False\n               for row in resources):\n            raise ValueError(\"whole graph GET requires an unchanged neutral input\")\n        # These flags require 2xx completion; they do not claim qualification.\n        # Only dependent auxiliary leaves may complete with terminal 4xx/5xx.\n        for row in full[\"resources\"]:\n            row[\"known_valid\"] = not terminal_http_error_resource_allowed(row, resources)\n    return primary, full\n\n\ndef _declaration_manifest_policy(declaration: Any) -> str:\n    if not isinstance(declaration, dict) or type(declaration.get(\"schema_version\")) is not int:\n        raise ValueError(\"whole graph GET declaration version is invalid\")\n    if declaration[\"schema_version\"] == 1 and \"manifest_policy\" not in declaration:\n        return LEGACY_MANIFEST_POLICY\n    if (declaration[\"schema_version\"] == 2\n            and declaration.get(\"manifest_policy\") == REQUIRED_PARENT_MANIFEST_POLICY):\n        return REQUIRED_PARENT_MANIFEST_POLICY\n    raise ValueError(\"whole graph GET declaration manifest policy is invalid\")\n\n\ndef _execution_root(root: Path, namespace: Any, expected: dict, *, failed_phase=None):\n    if namespace is None:\n        return root\n", b"    return row, ref, value, neutral\n\n\ndef _manifests(neutral: dict) -> tuple[dict, dict]:\n    primary = {\"resources\": [deepcopy(neutral[\"resources\"][0])]}\n    full = deepcopy(neutral)\n    full[\"resources\"][0][\"known_valid\"] = True\n    return primary, full\n\n\ndef _execution_root(root: Path, namespace: Any, expected: dict, *, failed_phase=None):\n    if namespace is None:\n        return root\n"),
+        (b"\ndef _declaration(root: Path, context: Context, position: int) -> tuple[dict, dict, dict, dict, dict]:\n    row, ref, input_value, neutral = _candidate_input(context, position)\n    raw = get._read(root / \"declaration.json\")\n    declaration = get._load(raw)\n    policy = _declaration_manifest_policy(declaration)\n    primary, full = _manifests(neutral, policy=policy)\n    get._exact(declaration, {\"schema_version\", \"record_type\", \"declared_at\", \"context\", \"position\", \"candidate_id\", \"domain\",\n        \"graph_input\", \"discovery_runtime\", \"runtime_binding\", \"producer_sources\", \"neutral_input_sha256\",\n        \"bootstrap_input_sha256\", \"full_input_sha256\", \"max_response_bytes\", \"timeout_seconds\", \"primary_claim\",\n        \"public_origin_policy\", *inputs.ZERO,\n        *({\"manifest_policy\"} if declaration[\"schema_version\"] == 2 else set())}, \"whole graph GET declaration\")\n    expected = context.provenance[\"runtime_binding\"]\n    if (declaration[\"record_type\"] != PROOF_TYPE or not inputs.zero(declaration)\n            or declaration[\"schema_version\"] == 2 and declaration[\"producer_sources\"] != producer_sources()\n            or declaration[\"context\"] != original.reference(context.root / \"provenance.json\")\n            or type(declaration[\"position\"]) is not int or declaration[\"position\"] != position\n            or declaration[\"candidate_id\"] != row[\"candidate_id\"] or declaration[\"domain\"] != row[\"domain\"]\n", b"\ndef _declaration(root: Path, context: Context, position: int) -> tuple[dict, dict, dict, dict, dict]:\n    row, ref, input_value, neutral = _candidate_input(context, position)\n    primary, full = _manifests(neutral)\n    raw = get._read(root / \"declaration.json\")\n    declaration = get._load(raw)\n    get._exact(declaration, {\"schema_version\", \"record_type\", \"declared_at\", \"context\", \"position\", \"candidate_id\", \"domain\",\n        \"graph_input\", \"discovery_runtime\", \"runtime_binding\", \"producer_sources\", \"neutral_input_sha256\",\n        \"bootstrap_input_sha256\", \"full_input_sha256\", \"max_response_bytes\", \"timeout_seconds\", \"primary_claim\",\n        \"public_origin_policy\", *inputs.ZERO}, \"whole graph GET declaration\")\n    expected = context.provenance[\"runtime_binding\"]\n    if (type(declaration[\"schema_version\"]) is not int or declaration[\"schema_version\"] != 1\n            or declaration[\"record_type\"] != PROOF_TYPE or not inputs.zero(declaration)\n            or declaration[\"context\"] != original.reference(context.root / \"provenance.json\")\n            or type(declaration[\"position\"]) is not int or declaration[\"position\"] != position\n            or declaration[\"candidate_id\"] != row[\"candidate_id\"] or declaration[\"domain\"] != row[\"domain\"]\n"),
+        (b"        get.util.require_disjoint_path(root, [protected], label=\"whole graph GET output\")\n    root.mkdir(mode=0o700, parents=False, exist_ok=False)\n    (root / \"bootstrap\").mkdir(mode=0o700)\n    primary, full = _manifests(neutral, policy=REQUIRED_PARENT_MANIFEST_POLICY)\n    get._json(root / \"neutral-input.json\", neutral)\n    get._json(root / \"runtime.json\", runtime)\n    declaration = {\"schema_version\": 2, \"record_type\": PROOF_TYPE,\n        \"manifest_policy\": REQUIRED_PARENT_MANIFEST_POLICY, \"declared_at\": datetime.now(UTC).isoformat(),\n        \"context\": original.reference(context.root / \"provenance.json\"), \"position\": position, \"candidate_id\": row[\"candidate_id\"],\n        \"domain\": row[\"domain\"], \"graph_input\": ref, \"discovery_runtime\": value[\"runtime\"], \"runtime_binding\": expected,\n        \"producer_sources\": producer_sources(), \"neutral_input_sha256\": graph.digest(graph.canonical_bytes(neutral)),\n", b"        get.util.require_disjoint_path(root, [protected], label=\"whole graph GET output\")\n    root.mkdir(mode=0o700, parents=False, exist_ok=False)\n    (root / \"bootstrap\").mkdir(mode=0o700)\n    primary, full = _manifests(neutral)\n    get._json(root / \"neutral-input.json\", neutral)\n    get._json(root / \"runtime.json\", runtime)\n    declaration = {\"schema_version\": 1, \"record_type\": PROOF_TYPE, \"declared_at\": datetime.now(UTC).isoformat(),\n        \"context\": original.reference(context.root / \"provenance.json\"), \"position\": position, \"candidate_id\": row[\"candidate_id\"],\n        \"domain\": row[\"domain\"], \"graph_input\": ref, \"discovery_runtime\": value[\"runtime\"], \"runtime_binding\": expected,\n        \"producer_sources\": producer_sources(), \"neutral_input_sha256\": graph.digest(graph.canonical_bytes(neutral)),\n"),
+    )
+    for current, original in replacements:
+        if raw.count(current) != 1:
+            raise ValueError('required-parent GET inverse is absent or duplicated')
+        raw = raw.replace(current, original, 1)
+    if hashlib.sha256(raw).hexdigest() != '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0':
+        raise ValueError('required-parent GET changes protected Source64 bytes')
+    return raw
+
+
 def _v13_cohort_reader_source_projection(raw):
     """Restore exact Source62 bytes after its finite cohort reader recognition."""
+    if hashlib.sha256(raw).hexdigest() == 'e6fbd49f3e85f2cbb8e666eb8fd030971c950d2d135373e0590d8d3e833c62ad':
+        addition = b"    }, {\n        \"qcsd_lab.whole_graph_input\": \"7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c\",\n        \"qcsd_lab.whole_graph_supplement\": \"4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0\",\n        \"qcsd_lab.rapid_per_class_selected_enrollment\": \"4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0\",\n        \"qcsd_lab.rapid_supplemental_cohort\": \"c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d\",\n"
+        if raw.count(addition) != 1:
+            raise ValueError('retained Source64 cohort reader family is not unique')
+        raw = raw.replace(addition, b'', 1)
+        if hashlib.sha256(raw).hexdigest() != 'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d':
+            raise ValueError('Source64 cohort registration changes protected bytes')
     if hashlib.sha256(raw).hexdigest() not in ('39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
             'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d'):
         raise ValueError('V13 cohort reader is outside its exact reviewed Source')
@@ -891,6 +943,8 @@ def _v13_cohort_reader_source_projection(raw):
 
 def _v13_supplement_reader_source_projection(raw):
     """Recover exact Source62 bytes after adding its retained GET context pair."""
+    if hashlib.sha256(raw).hexdigest() == 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98':
+        raw = _required_parent_get_source_projection(raw)
     if hashlib.sha256(raw).hexdigest() not in ('293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b',
             '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0'):
         raise ValueError('V13 supplement reader is outside its exact reviewed Source')
@@ -969,6 +1023,12 @@ def _v11_input_reader_source_projection(raw):
 def _cohort_acquisition_source_projection(raw, relative):
     """Remove only the exact prospective dispatch statements, retaining old bodies."""
     import ast
+    if (relative == 'src/qcsd_lab/rapid_selected_capture_input.py'
+            and hashlib.sha256(raw).hexdigest() == '72933db93fef22fd599dce35b2ae27dd2f525b112bc6140134540d1f1cad1fb1'):
+        raw = _source65_selected_input_source_projection(raw)
+    if (relative == 'src/qcsd_lab/whole_graph_supplement.py'
+            and hashlib.sha256(raw).hexdigest() == 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98'):
+        raw = _required_parent_get_source_projection(raw)
     if (relative == 'src/qcsd_lab/whole_graph_supplement.py'
             and hashlib.sha256(raw).hexdigest() ==
                 '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0'):
@@ -1043,14 +1103,26 @@ def _compatible_acquisition_code(relative, before, after):
         raise ValueError('acquisition compatibility changes the reviewed reader or full mode')
     if before['sha256'] == after['sha256']:
         return True
+    if (relative == 'src/qcsd_lab/rapid_selected_capture_input.py'
+            and before['sha256'] == 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442'):
+        if _source65_selected_input_source_projection(Path(after['path']).read_bytes()) != Path(before['path']).read_bytes():
+            raise ValueError('selected GET reader changes protected Source65 bytes')
+        return True
     if (relative == 'src/qcsd_lab/rapid_supplemental_cohort.py'
             and before['sha256'] in ('12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
-                '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029')):
+                '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
+                'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d')):
         old_raw = Path(before['path']).read_bytes()
-        if before['sha256'] == '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029':
+        if before['sha256'] in ('39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
+                'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d'):
             old_raw = _v13_cohort_reader_source_projection(old_raw)
         if _v13_cohort_reader_source_projection(Path(after['path']).read_bytes()) != old_raw:
             raise ValueError('V13 cohort reader changes protected Source62 admission or graph bytes')
+        return True
+    if (relative == 'src/qcsd_lab/whole_graph_supplement.py'
+            and before['sha256'] == '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0'):
+        if _required_parent_get_source_projection(Path(after['path']).read_bytes()) != Path(before['path']).read_bytes():
+            raise ValueError('required-parent GET reader changes protected Source64 bytes')
         return True
     if (relative == 'src/qcsd_lab/whole_graph_supplement.py'
             and before['sha256'] in ('164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7',
