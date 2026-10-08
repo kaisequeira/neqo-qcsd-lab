@@ -380,6 +380,39 @@ def test_formal_capture_requires_its_pilot_before_any_reservation(held):
     assert store.status()["attempts"] == {} and store.status()["accepted_count"] == 0
 
 
+def test_missing_mode_pilot_preserves_healthy_formal_progress(held):
+    root, store = held
+    for path in (root / "pilots").glob("*/buflo/*/session.json"):
+        path.unlink()
+    backend = CaptureBackend(root)
+    result = study.capture(root, _runtime(), backend=backend,
+        hostnames=["alpha.example"], modes=("buflo", "undefended"), budget=1, chunk_sessions=1)
+    assert result["paused_cells"] == [("alpha.example", "buflo")]
+    assert result["missing_mode_pilots"] == ["buflo"]
+    assert result["progress"]["accepted_count"] == 1
+    assert [attempt["mode"] for _, attempt in backend.calls] == ["undefended"]
+    assert store.status()["attempts"] == {"accepted": 1}
+
+
+def test_cell_reservation_refusal_does_not_abort_healthy_worker(held, monkeypatch):
+    root, store = held
+    original = StudyStore.allocate_attempt
+    def refuse_one(self, hostname, mode, **kwargs):
+        if hostname == "alpha.example":
+            raise ValueError("active epoch needs its own genuine matching mode pilot")
+        return original(self, hostname, mode, **kwargs)
+    monkeypatch.setattr(StudyStore, "allocate_attempt", refuse_one)
+    backend = CaptureBackend(root)
+    result = study.capture(root, _runtime(), backend=backend,
+        modes=("undefended",), budget=2, chunk_sessions=1)
+    assert result["paused_cells"] == [("alpha.example", "undefended")]
+    assert result["progress"]["accepted_count"] == 1
+    assert [attempt["hostname"] for _, attempt in backend.calls] == ["bravo.example"]
+    assert store.status()["attempts"] == {"accepted": 1}
+    assert result["allocation_errors"] == [{"hostname": "alpha.example", "mode": "undefended",
+        "reason": "active epoch needs its own genuine matching mode pilot"}]
+
+
 @pytest.mark.parametrize("workers,budget,chunk,modes", [
     (1, 1, 1, ("undefended",)), (True, 1, 1, ("undefended",)),
     (2, 0, 1, ("undefended",)), (2, 1, 0, ("undefended",)),

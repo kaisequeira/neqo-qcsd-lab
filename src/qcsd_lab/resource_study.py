@@ -312,6 +312,8 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     enrolled = [e for e in store.enrolled() if hostnames is None or e["hostname"] in hostnames]
     if not enrolled:
         raise ValueError("live enrollment is required before capture")
+    pilot_blocked = set()
+    missing_pilots = []
     if not pilot:
         for mode in modes:
             selected = [e for e in enrolled if e.get("mode_readiness", {}).get(mode, True)
@@ -333,12 +335,20 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                     ready = True
                     break
             if not ready:
-                raise ValueError(f"{mode} needs its focused pilot: capture --pilot --chunk 1")
+                missing_pilots.append(mode)
+                pilot_blocked.update((e["hostname"], mode) for e in selected)
+        ready_cells = [(e["hostname"], mode) for mode in modes for e in enrolled
+                       if e.get("mode_readiness", {}).get(mode, True)
+                       and active_cell(store, e["hostname"], mode)
+                       and (e["hostname"], mode) not in pilot_blocked]
+        if not ready_cells:
+            raise ValueError("requested modes need a focused pilot or live admission: capture --pilot --chunk 1")
     if backend is None:
         from .resource_study_runtime import CaptureRuntime
         backend = CaptureRuntime(root, runtime, workers)
     stop = stop or threading.Event()
-    paused, busy, completed_pilots, attempts = set(), set(), set(), 0
+    paused, busy, completed_pilots, attempts = set(pilot_blocked), set(), set(), 0
+    allocation_errors = []
     clock_failures = {}
     if pilot:
         chunk_sessions = 1
@@ -353,7 +363,14 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
         host, mode = cell
         attempted, credited = 0, 0
         while attempted < allowance and not stop.is_set() and accepted(cell) < 400:
-            attempt = store.allocate_attempt(host, mode, purpose="pilot" if pilot else "formal")
+            try:
+                attempt = store.allocate_attempt(host, mode, purpose="pilot" if pilot else "formal")
+            except (OSError, ValueError, RuntimeError) as error:
+                # A changed epoch can require its own pilot even when another
+                # cell has a mode pilot. No reservation or packet is invented;
+                # healthy cells continue and the refused cell stays uncredited.
+                return {"cell": cell, "attempted": attempted, "accepted": credited,
+                        "paused": True, "allocation_error": str(error)}
             attempted += 1
             attempt_started = time.monotonic()
             result = {}
@@ -437,10 +454,15 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 busy.remove(result["cell"][0])
                 if result["paused"]:
                     paused.add(result["cell"])
+                if result.get("allocation_error"):
+                    allocation_errors.append({"hostname": result["cell"][0], "mode": result["cell"][1],
+                                              "reason": result["allocation_error"]})
                 if result.get("pilot_passed"):
                     completed_pilots.add(result["cell"])
     return {"progress": store.status(), "paused_cells": sorted(paused), "stop_requested": stop.is_set(),
-            "pilot_cells_passed": sorted(completed_pilots), "storage": storage_snapshot(root)}
+            "pilot_cells_passed": sorted(completed_pilots), "missing_mode_pilots": missing_pilots,
+            "allocation_errors": allocation_errors,
+            "storage": storage_snapshot(root)}
 
 
 def verify(root: Path, *, recover=False, all_receipts=False) -> dict:
