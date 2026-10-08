@@ -9,9 +9,20 @@ CPU IDs, memory and free disk space remain unknown.
 
 The approved target remains **50 exact resource hostnames × five modes ×
 400 accepted connection sessions = 100,000**. Every accepted connection must
-complete its own fixed 20 distinct URLs. The new accepted count is zero.
+complete its own fixed 20 distinct URLs. The local x86-64 checkpoint has **two
+live-enrolled classes and twelve verified ordinary sessions**. An actual
+SIGTERM stop and resume preserved the first four receipts and increased the
+count 4 → 8 → 12; recovery deleted no files. Ordinary pilots passed on both
+classes; Shopify's FRONT and Tamaraw
+pilots passed too. Fonts remains ordinary-only after chaff qualification failed.
+BuFLO/CS-BuFLO live pilots and SDK005 installation are pending. None of these
+local results establishes an ARM64 or Mac pass.
 Earlier website captures remain historical evidence and do not enter this total.
 See [the study guide](RESOURCE-DOMAIN-STUDY.md).
+
+The final source-package path, owner-recorded manifest digest and published Lab
+commit remain pending. Use the actual handoff's `CHECKOUT.md`; do not substitute
+the installed SDK004 source for a later host source or invent a future commit.
 
 The handoff contains:
 
@@ -213,6 +224,8 @@ Enable each defense's formal capture only after its own pilot verifies on this
 runtime. Keep every failed attempt, tuple collision and interrupted receipt.
 The fixed traffic parameters and acceptance rules stay declared; changing
 hardware does not silently relax them or import old platform credit.
+The packet-clock limit remains 10 ms. Local roughly 23 ms WSL disturbances were
+refused and retained; bounded retries do not relax this limit on the Mac.
 
 ## 5. Measure capacity before committing to the full study
 

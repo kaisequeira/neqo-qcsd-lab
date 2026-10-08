@@ -28,7 +28,8 @@ def coordinator_provenance() -> dict:
     source = Path(__file__).parent
     names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
              "resource_study_verify.py", "resource_study_inputs.py", "resource_study_storage.py",
-             "resource_study_supplements.py", "fidelity.py", "capture.py", "process_scheduler.py")
+             "resource_study_supplements.py", "resource_study_epochs.py",
+             "fidelity.py", "capture.py", "process_scheduler.py")
     return {"record_type": "qcsd-resource-study-host-code-v1",
             "files": {name: sha256_file(source / name) for name in names},
             "installed_native_and_sdk": "recorded separately in runtime"}
@@ -306,13 +307,15 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     if not modes or any(m not in MODES for m in modes) or len(set(modes)) != len(modes):
         raise ValueError("unregistered or duplicate traffic setting")
     store = StudyStore(root)
+    from .resource_study_epochs import active_cell
     storage = require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
     enrolled = [e for e in store.enrolled() if hostnames is None or e["hostname"] in hostnames]
     if not enrolled:
         raise ValueError("live enrollment is required before capture")
     if not pilot:
         for mode in modes:
-            selected = [e for e in enrolled if e.get("mode_readiness", {}).get(mode, True)]
+            selected = [e for e in enrolled if e.get("mode_readiness", {}).get(mode, True)
+                        and active_cell(store, e["hostname"], mode)]
             if not selected:
                 continue
             ready = False
@@ -340,7 +343,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     if pilot:
         chunk_sessions = 1
     cell_order = [(e["hostname"], m) for m in modes for e in enrolled
-                  if e.get("mode_readiness", {}).get(m, True)]
+                  if e.get("mode_readiness", {}).get(m, True) and active_cell(store, e["hostname"], m)]
     enrollment_by_host = {e["hostname"]: e for e in enrolled}
     def accepted(cell):
         return next((r["accepted"] for r in store.status()["cells"]
@@ -350,7 +353,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
         host, mode = cell
         attempted, credited = 0, 0
         while attempted < allowance and not stop.is_set() and accepted(cell) < 400:
-            attempt = store.allocate_attempt(host, mode)
+            attempt = store.allocate_attempt(host, mode, purpose="pilot" if pilot else "formal")
             attempted += 1
             attempt_started = time.monotonic()
             result = {}
@@ -476,6 +479,10 @@ def parser():
             child.add_argument("--source", type=Path)
             child.add_argument("--inventory", type=Path, action="append", default=[], help="explicitly add a Native URL inventory as a reserve pool")
             child.add_argument("--enroll", action="store_true")
+            child.add_argument("--epoch-of", type=Path)
+            child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host"))
+            child.add_argument("--affected-hostname", action="append", default=[])
+            child.add_argument("--affected-mode", choices=MODES, action="append", default=[])
         elif action == "capture":
             child.add_argument("--workers", type=int, default=2)
             child.add_argument("--attempts", type=int)
@@ -509,6 +516,14 @@ def main(argv=None):
                 output = enroll(root, runtime_identity(args.runtime.absolute()), args.hostname)
             else:
                 output = StudyStore(root).status()
+            if args.epoch_of is not None:
+                if args.epoch_change is None:
+                    raise ValueError("epoch admission needs an explicit --epoch-change")
+                from .resource_study_epochs import create_epoch
+                output = create_epoch(args.epoch_of.absolute(), root, change=args.epoch_change,
+                    affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
+            elif args.epoch_change is not None or args.affected_hostname or args.affected_mode:
+                raise ValueError("epoch scope needs --epoch-of")
         elif args.action == "capture":
             if args.runtime is None:
                 raise ValueError("capture requires --runtime")
@@ -524,11 +539,14 @@ def main(argv=None):
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)
         elif args.action == "status":
-            output = StudyStore(root).status()
+            from .resource_study_epochs import is_parent, status
+            output = status(root) if is_parent(root) else StudyStore(root).status()
         elif args.action == "verify":
-            output = verify(root, recover=args.recover, all_receipts=args.all_receipts)
+            from .resource_study_epochs import is_parent, verify as verify_epochs
+            output = verify_epochs(root, recover=args.recover) if is_parent(root) else verify(root, recover=args.recover, all_receipts=args.all_receipts)
         else:
-            output = StudyStore(root).export_manifest(args.output.absolute())
+            from .resource_study_epochs import is_parent, export_manifest
+            output = export_manifest(root, args.output.absolute()) if is_parent(root) else StudyStore(root).export_manifest(args.output.absolute())
         print(json.dumps(output, sort_keys=True, allow_nan=False))
         return 1 if output.get("errors") or output.get("paused_cells") else 0
     except (OSError, ValueError, RuntimeError) as error:

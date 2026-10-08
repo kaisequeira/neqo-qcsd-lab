@@ -1,5 +1,26 @@
 # Capture methodology
 
+## Current resource-domain study
+
+The prospective contract is **50 exact resource hostnames × five modes ×
+400 accepted fresh connections = 100,000 sessions**. Each counted connection
+completes its hostname's 20 distinct fixed URLs using direct Native HTTP/3
+replay. A fresh process owns one connection; request streams can overlap on it.
+The sampling unit is the whole connection, with pre-NAT client `eth0` capture,
+handshake, distinct oriented five-tuple and all full responses independently
+verified. Migration or extra streams do not create additional sessions.
+
+The current new-study checkpoint is twelve ordinary sessions from two enrolled
+classes. The previous 392 website recordings remain historical and are excluded.
+SQLite and immutable receipts provide incremental cell-level authority. Split
+whole connections for evaluation and exclude addresses, ports, hostnames and
+URLs from model features. See [the resource-domain guide](docs/RESOURCE-DOMAIN-STUDY.md)
+for fixed modes, readiness, commands, recovery and the pending Mac handoff.
+
+The sections below preserve the earlier graph-based methodology and its dated
+evidence. Those historical browser, fitting and cohort contracts do not add
+launch prerequisites to this separately declared resource-domain role.
+
 ## Research question and unit of measurement
 
 The lab measures how a client-side QCSD defence changes an encrypted QUIC

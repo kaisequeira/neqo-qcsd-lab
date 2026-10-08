@@ -11,12 +11,21 @@ are ordinary traffic, FRONT, Tamaraw, BuFLO and CS-BuFLO. Preserve query
 identifiers, including Bing `th` IDs; declared reserves are
 `cdn.myanimelist.net`, then `ahrefs.com`.
 
-**New accepted sessions: 0. First formal batch: not yet created.** The
-50-row importer checks structural eligibility; no live resource admission,
-capture pass or installed new collector is claimed here. Implementation of
-the public `resource-study` prepare/capture/status/verify/export route is
-underway. The [new guide](docs/RESOURCE-DOMAIN-STUDY.md) defines the unit,
+**New accepted sessions: 12 ordinary sessions from two live-enrolled classes.**
+The first immutable export, `formal-batch-000001.json`, retains four sessions
+(Shopify CDN 1, Fonts 3). An actual SIGTERM stop and resume increased the count
+4 → 8 → 12 while preserving the original receipts. Recovery deleted zero files;
+all twelve independently verified with no active reservations or running
+containers. The 50-host importer proves structure, not 50 live admissions. The public
+`resource-study` prepare/capture/status/verify/export route is implemented.
+The [new guide](docs/RESOURCE-DOMAIN-STUDY.md) defines the unit,
 packet evidence, 250 class/mode cells and independent recovery.
+
+Ordinary zero-credit pilots passed on both classes; Shopify's FRONT and Tamaraw
+pilots passed. Fonts remains ordinary-only because its chaff qualification failed.
+BuFLO/CS-BuFLO parameter provenance was repaired and checked locally; SDK005
+installation and live mode pilots remain pending. There is no defended formal
+credit or demonstrated Mac runtime. Preserve all earlier failures.
 
 Use a fresh Native process for each single-origin connection and client
 `eth0` captures before NAT. A tuple ledger prevents duplicate session credit;
@@ -26,14 +35,24 @@ It does not import the old fixed-target history or require all five modes to
 be ready before an independently ready mode starts.
 
 The verified Native D2 implementation and cached client can be reused for
-Lab-only changes through a matching public SDK/runtime binding. New runtime
-installation and actual session gates remain pending. The initial budget is
+Lab-only changes through a matching public SDK/runtime binding. SDK004 is
+verified; later host repairs retain separate source identity, and a new SDK
+does not receive an installed-pass claim before its actual closure. The primary
+packet-clock limit remains 10 ms; roughly 23 ms WSL disturbances were refused
+and bounded retries preserve those failures. Cell-epoch integration and clock
+controls passed 36 focused checks in 49.28 seconds; actual prospective epoch
+admissions remain separately required. The initial budget is
 two workers, six available CPU IDs and 16 GB RAM; four-worker operation needs
 at least nine available CPU IDs and verified scheduling/timing. At an
 unmeasured illustrative 20 seconds per accepted session per worker, the total
 is 11.6 continuous days with two workers or 5.8 with four. The sparse 512 GiB
 volume and previously observed roughly 362 GiB free backing space do not
 establish that the complete corpus fits.
+
+Ordinary pilot retention was 302,472 bytes for Fonts and 6,582,996 bytes for
+Shopify. The latter alone would exceed 610 GiB for 100,000 folders. Complete
+cohort/mode rates, storage, Mac capabilities and four-worker throughput remain
+unmeasured. The final published source handoff and package manifest are pending.
 
 ## Historical website-study ledger
 

@@ -11,16 +11,24 @@ The approved collection is **50 exact resource hostnames × five modes ×
 must complete full GETs for its hostname's **20 distinct frozen URLs**.
 The modes are ordinary traffic, FRONT, Tamaraw, BuFLO and CS-BuFLO.
 
-**Implementation is underway; the new accepted count is zero and no first
-formal batch exists.** A structurally eligible 50-row import is not live site
+**Current checkpoint: two live-enrolled classes and twelve verified ordinary
+sessions.** The first four-session batch remains immutably exported. An actual
+SIGTERM stop and resume increased the count 4 → 8 → 12 without changing its
+receipts. Recovery deleted no files; all twelve independently verified with
+no active reservations or running containers. The 50-host importer checks structural eligibility, not live
 admission. The earlier **392 ordinary website recordings** remain historical
 and are excluded from this new total.
 
+Ordinary zero-credit pilots passed on both classes; Shopify FRONT and Tamaraw
+pilots passed too. Fonts is ordinary-only after chaff qualification failed.
+BuFLO/CS-BuFLO live pilots and SDK005 installation remain pending after a locally
+checked provenance repair. No defended formal credit or Mac runtime pass is claimed.
+
 Start with [the resource-domain guide](docs/RESOURCE-DOMAIN-STUDY.md).
-The planned `./qcsd-lab resource-study` route and `tools/resource_study.py`
+The `./qcsd-lab resource-study` route and `tools/resource_study.py`
 provide `prepare`, `capture`, `status`, `verify` and `export` actions. Consult
-the installed help for final options; no successful command run is implied
-by this documentation.
+the installed help and use explicit `--mode undefended` for the first formal
+cell after its own pilot. Omitted mode selection requests all five modes.
 
 One fresh Native process replays 20 URLs over one origin's connection.
 Capture is on client `eth0` before NAT. Tuple uniqueness, handshake and all
@@ -36,6 +44,11 @@ The illustrative 20-second effective rate gives 11.6 continuous days with
 two workers or 5.8 with four. Neither rate has been measured for this study.
 The 512 GiB sparse storage limit does not establish sufficient physical space
 for 100,000 sessions.
+
+Packet-clock acceptance remains strict at 10 ms; bounded retries preserve
+refused disturbances. Host repairs are recorded separately from installed SDK
+identity. The final Mac source handoff remains pending; see
+[the migration guide](docs/MAC-MIGRATION.md).
 
 Reuse the verified cached Native D2 client for Lab-only changes through a
 truthful new SDK/runtime binding. This does not require fresh Rust compilation

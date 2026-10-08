@@ -1,6 +1,6 @@
 # Resource-domain study
 
-## Current status: implementation, no accepted sessions
+## Current status: twelve verified ordinary sessions
 
 The approved study is **50 exact resource hostnames × five traffic modes ×
 400 accepted connections = 100,000 sessions**. Each counted connection must
@@ -8,10 +8,23 @@ fetch all **20 distinct, fixed resource URLs** assigned to its hostname.
 The five modes are ordinary traffic (`undefended`), FRONT, Tamaraw, BuFLO and
 CS-BuFLO. Each mode contributes 20,000 sessions.
 
-The new collector and command route are being implemented. **No first formal
-batch exists and the new accepted count is zero.** Importing a list with 50
-eligible hostname rows checks its structure; it does not establish that those
-hosts are reachable or that their resources pass live HTTP/3 admission.
+The collector and public command route are implemented. **Two classes are
+live-enrolled and twelve ordinary sessions are independently verified.**
+The first immutable export, `formal-batch-000001.json`, retains its original
+four sessions (Shopify CDN 1, Fonts 3). A real SIGTERM stop and resume increased
+the count **4 → 8 → 12**, preserved the original receipts and stopped cleanly.
+Recovery deleted zero files; final verification checked all twelve with zero
+errors, no active reservations and no running containers. The final
+100,000-session target is incomplete.
+The input pool has 50 structurally eligible hosts; that is not 50 live admissions.
+
+Ordinary zero-credit pilots passed on both classes. Shopify's FRONT and Tamaraw
+pilots passed; BuFLO and CS-BuFLO live pilots remain pending after a locally
+checked parameter-provenance repair. SDK004 is verified; SDK005 installation is
+pending at this checkpoint. Pilots add zero formal sessions. Fonts has ordinary
+readiness only, with four defended modes unavailable after chaff qualification
+failed. Preserve that failure and require valid focused qualification before
+defended capture. No defended formal credit or Mac runtime pass is claimed.
 
 The earlier website study's **392 accepted ordinary recordings** remain
 historical evidence under their original contracts. They do not count toward
@@ -99,11 +112,10 @@ one independently ready mode can start. It still requires a frozen manifest,
 truthful source/runtime bindings, live resource and chaff checks where needed,
 and complete evidence for every accepted session.
 
-## Planned command interface
+## Public command interface
 
-The public interface being implemented is `./qcsd-lab resource-study`, backed
-by `tools/resource_study.py`. The following are command roles, not a claim
-that their implementation or first real run has passed:
+The public interface is `./qcsd-lab resource-study`, backed by
+`tools/resource_study.py`. Bind the exact study root and canonical runtime:
 
 | Action | Purpose |
 |---|---|
@@ -113,9 +125,28 @@ that their implementation or first real run has passed:
 | `verify` | Check the ledger, immutable receipts, raw dependencies and tuple uniqueness |
 | `export` | Export verified sessions and labels with source, mode, tuple and manifest provenance |
 
-Use the installed command's help for its final argument names. A source file,
-imported list, passing unit test or built image is engineering progress;
-accepted-session credit requires actual verified receipts.
+```sh
+./qcsd-lab resource-study prepare --root /absolute/fresh/study --source /absolute/frozen/resources.json
+./qcsd-lab resource-study prepare --root /absolute/fresh/study --runtime /absolute/runtime/canonical-runtime.json --enroll --hostname RESOURCE_HOSTNAME
+./qcsd-lab resource-study capture --root /absolute/fresh/study --runtime /absolute/runtime/canonical-runtime.json --hostname RESOURCE_HOSTNAME --workers 2 --pilot --chunk 1 --attempts 5
+./qcsd-lab resource-study capture --root /absolute/fresh/study --runtime /absolute/runtime/canonical-runtime.json --hostname RESOURCE_HOSTNAME --workers 2 --mode undefended --chunk 1 --attempts 2
+./qcsd-lab resource-study verify --root /absolute/fresh/study --all
+./qcsd-lab resource-study status --root /absolute/fresh/study
+./qcsd-lab resource-study export --root /absolute/fresh/study --output /absolute/fresh/export.json
+```
+
+The formal command requires its own cell's passing pilot. Omitting `--mode`
+selects all five modes; use explicit ordinary selection first. Use
+`verify --recover --all` only after workers stop. It cannot promote an orphan
+folder or failed receipt. Confirm installed help before launching.
+
+Packet-clock integrity remains strict at **10 ms**. A roughly 23 ms WSL
+disturbance was refused; bounded retries retain failed attempts without widening
+the limit. Host observer/provenance fixes have separately recorded code identity.
+They do not relabel the installed SDK or old evidence. Cell-epoch integration
+and clock controls passed 36 focused checks. A new scientific epoch still needs
+an explicit admission selecting affected cells and their own matching pilots;
+this checkpoint issues no such admission and preserves unaffected receipts.
 
 ## Runtime and machine requirements
 
@@ -137,6 +168,9 @@ previously had about **362 GiB physically free**; the sparse volume does not
 create more physical storage. No measurement yet establishes that the full
 100,000-session corpus fits. Measure complete pilot folders, including PCAPs,
 logs, failures, tails, receipts and exports, and keep space for recovery.
+Ordinary pilot folders retained 302,472 bytes for Fonts and 6,582,996 bytes for
+Shopify. At Shopify's size alone, 100,000 folders would exceed 610 GiB; the full
+cohort and defended-mode averages remain unmeasured. Four-worker rates are unverified.
 
 ## Timing and optional future modes
 
@@ -164,6 +198,10 @@ the approved five-mode study.
 Training/evaluation splits for this new session unit must be declared and
 implemented before reporting classification results. Split by connection
 session, keeping all packets and resource streams from one session together.
+Exclude client/server addresses, ports, hostnames and URLs from model features;
+persistent class IP assignments would otherwise reveal labels. Retain them as
+verification metadata. Declare time/grouping splits to account for correlated
+sessions with repeated URLs and nearby collection times.
 Do not describe the historical 64-visit evaluation adapter as the new study's
 already validated evaluation procedure.
 
@@ -177,12 +215,14 @@ does not establish that an old execution root is disposable. Remove a linked
 worktree through its owning Git repository only after that review; do not
 delete its directory and leave the worktree registry inconsistent.
 
-The clean transfer should contain a committed Lab checkout with its exact
-Native Gitlink, dependency locks, this guide, the frozen 50-class/20-URL plan
-and the new study's ledger and evidence if continuing recorded work. Hash the
-transfer inventory. Keep historical website evidence in a separate preserved
-archive; it is not new-study session credit. Do not copy every diagnostic
-clone, Python environment or machine build cache into the portable package.
+The source-only transfer contains committed Lab source, its exact Native
+Gitlink source, dependency locks, this guide and the frozen original resource
+JSON. Its tar is not a Git checkout: restore the published commits as instructed
+by the package. A stopped ledger and all raw evidence require a separate
+owner-reviewed transfer if continuing recorded work. The source package alone
+carries zero session credit. Do not copy diagnostic clones, Python environments
+or machine build caches into it. Final package paths, manifest and Lab commit
+remain owner-filled after publication; no Mac transfer is claimed complete.
 
 For an Apple Silicon Mac, the current cached Linux x86-64 client is not an
 ARM64 runtime. Reuse the same source commit, but build and qualify an actual

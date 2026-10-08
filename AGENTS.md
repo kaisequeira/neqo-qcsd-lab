@@ -8,7 +8,9 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   [docs/RESOURCE-DOMAIN-STUDY.md](docs/RESOURCE-DOMAIN-STUDY.md): 50 exact
   resource hostnames, 20 distinct frozen URLs completed per accepted fresh
   connection, five modes and 400 distinct recorded five-tuples per class/mode
-  cell, for 100,000 accepted sessions. Its initial accepted count is zero.
+  cell, for 100,000 accepted sessions. The current checkpoint is two live
+  enrollments and twelve verified ordinary sessions; inspect current receipts
+  before changing that count. Pilots carry zero formal credit.
   Importer eligibility is not live admission. Preserve queries and resource
   identifiers; use declared reserve order rather than silently substituting
   classes. Check current receipts before advancing any count.
@@ -76,6 +78,15 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   reset. A changed traffic condition applies prospectively and cannot promote
   a failed old receipt. This exception does not reinterpret historical resume
   authority or permit changed inputs inside an existing attempt.
+- For an affected scientific epoch, bind its new mode pilot to the exact
+  hostname, frozen 20-resource manifest, enrollment, settings and runtime.
+  A pilot from another hostname cannot qualify that changed cell. Initial
+  unchanged cells use the approved one-domain pilot for their mode. Epoch
+  admission and parent recovery require their own reviewed implementation and
+  actual gates; a design description is not an issued admission.
+- Keep the primary packet-clock limit at its declared 10 ms. Record and refuse
+  disturbances outside that limit, including on a VM; bounded retries preserve
+  failed evidence and do not silently widen scientific acceptance.
 - Preserve failed attempts, logs, captures, checkpoints, and receipts. Never
   delete, overwrite, substitute, relabel, or post-hoc promote evidence.
 - Under the historical 100-site and 20-site contracts, acquisition-only

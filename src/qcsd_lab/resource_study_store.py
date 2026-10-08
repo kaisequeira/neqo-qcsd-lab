@@ -399,7 +399,11 @@ class StudyStore:
                 result.append(_load(self._file(row["path"], row["sha256"])[0]))
             return result
 
-    def allocate_attempt(self, hostname, mode) -> dict:
+    def allocate_attempt(self, hostname, mode, *, purpose="formal") -> dict:
+        from .resource_study_epochs import reserve
+        return reserve(self, hostname, mode, lambda: self._allocate_attempt(hostname, mode), purpose=purpose)
+
+    def _allocate_attempt(self, hostname, mode) -> dict:
         self.plan(); hostname = _hostname(hostname); mode = _mode(mode)
         with self._transaction() as connection:
             enrollment = connection.execute("SELECT * FROM classes WHERE hostname=?", (hostname,)).fetchone()
@@ -520,6 +524,10 @@ class StudyStore:
         return enrolled
 
     def commit_verified(self, receipt_path, *, validator=None) -> dict:
+        from .resource_study_epochs import credit
+        return credit(self, receipt_path, lambda: self._commit_verified(receipt_path, validator=validator))
+
+    def _commit_verified(self, receipt_path, *, validator=None) -> dict:
         self.plan()
         value, relative, digest, inventory, five_tuple = self._receipt(receipt_path)
         identifier = value["attempt_id"]
