@@ -658,9 +658,40 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
     parameter_key = {"buflo": "buflo_parameters", "cs-buflo": "cs_buflo_parameters"}.get(mode)
     parameters = {}
     if parameter_key:
+        from . import parameters as parameter_artifacts
+        from .util import LAB_ROOT
+        # Enrollment freezes the parameter bytes once. Its original names are
+        # intentionally independent of the SDK's provenance filenames.
         relative = enrollment["paths"][parameter_key]
-        parameters = {"parameters": relative, "parameters_path": root / relative,
-                      "parameters_sha256": enrollment["files"][relative]}
+        if (not isinstance(relative, str) or Path(relative).is_absolute()
+                or ".." in Path(relative).parts):
+            raise ValueError("enrolled defense parameter path is not relative")
+        parameter_path = _regular(root / relative)
+        source_name = {"buflo": "buflo-cadence64-budget640.json",
+                       "cs-buflo": "cs-buflo-cpsp-live.json"}[mode]
+        source = _regular(LAB_ROOT / "config/defense-params" / source_name)
+        provenance = _regular(parameter_artifacts.parameter_provenance_path(source))
+        expected_policy = (buflo.CADENCE64_POLICY if mode == "buflo"
+                           else "fixed-cs-buflo-cpsp-live-v1")
+        policy_field = "buflo_duration_policy" if mode == "buflo" else "parameter_policy"
+        if policies.get(policy_field) != expected_policy:
+            raise ValueError("reactive defense policy differs from enrolled fixed mode")
+        artifact = parameter_artifacts.validate_parameter_artifact(
+            source, provenance_path=provenance, expected_kind=kind,
+            allow_study_candidate=True, expected_qcsd_profile=context.qcsd_profile,
+            expected_udp_payload_ceiling=context.udp_payload_ceiling)
+        expected_input_policy = (buflo.CADENCE64_INPUT_POLICY if mode == "buflo"
+                                else parameter_artifacts.BUFLO_STUDY_PARAMETER_INPUT_POLICY)
+        if (artifact.sha256 != enrollment["files"][relative]
+                or sha256_file(parameter_path) != artifact.sha256
+                or artifact.input_policy != expected_input_policy):
+            raise ValueError("enrolled defense parameter bytes differ from SDK provenance")
+        parameters = {"parameters": relative, "parameters_path": parameter_path,
+            "parameters_sha256": artifact.sha256,
+            "parameters_provenance": provenance.relative_to(LAB_ROOT).as_posix(),
+            "parameters_provenance_path": provenance,
+            "parameters_provenance_sha256": artifact.provenance_sha256,
+            "parameters_input_policy": artifact.input_policy}
     defense = collector.Defense(name=mode, kind=kind, baseline=mode == "undefended", **parameters)
     return defense, context
 

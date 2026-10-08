@@ -270,6 +270,23 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
     return destination / "session.json"
 
 
+def temporary_clock_failure(result: dict) -> bool:
+    """Retry a discarded clock-disturbed sample; never relax its acceptance."""
+    if (result.get("success") is not False or result.get("resource_error") is not None
+            or result.get("runner_complete") is not True
+            or result.get("runner_binding_valid") is not True
+            or result.get("scheduler_runtime_evidence_valid") is not True
+            or result.get("runner_returncode") != 0):
+        return False
+    failure = result.get("failure")
+    if not isinstance(failure, dict) or failure.get("stage") != "capture":
+        return False
+    details = failure.get("details", [])
+    return any(isinstance(row, dict) and isinstance(row.get("reason"), str)
+               and row["reason"].startswith("direct/runner reconciliation failed: direct/runner timestamp mismatch")
+               for row in details)
+
+
 def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             hostnames=None, stop=None, backend=None, chunk_sessions=CHUNK, pilot=False) -> dict:
     """Balanced chunks; a failing cell pauses for this invocation only.
@@ -317,6 +334,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
         backend = CaptureRuntime(root, runtime, workers)
     stop = stop or threading.Event()
     paused, busy, completed_pilots, attempts = set(), set(), set(), 0
+    clock_failures = {}
     if pilot:
         chunk_sessions = 1
     cell_order = [(e["hostname"], m) for m in modes for e in enrolled
@@ -333,6 +351,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             attempt = store.allocate_attempt(host, mode)
             attempted += 1
             attempt_started = time.monotonic()
+            result = {}
             try:
                 require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
                 result = backend.capture(worker, attempt, enrollment_by_host[host])
@@ -340,6 +359,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 if result.get("success") is not True:
                     raise ValueError("collector rejected session: " + str(result.get("failure")))
                 result["attempt_elapsed_seconds"] = time.monotonic() - attempt_started
+                clock_failures[cell] = 0
                 receipt_path = seal(root, attempt, enrollment_by_host[host], runtime, result, pilot=pilot)
                 if pilot:
                     store.fail_attempt(attempt["attempt_id"], "focused pilot passed; no formal credit", kind="pilot",
@@ -380,6 +400,10 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 create_json(root / attempt["path"] / "failure.json", {
                     "attempt_id": attempt["attempt_id"], "mode": mode, "hostname": host,
                     "reason": str(error), "exception": type(error).__name__, "scientific_credit": False})
+                if temporary_clock_failure(result):
+                    clock_failures[cell] = clock_failures.get(cell, 0) + 1
+                    if clock_failures[cell] < 3:
+                        continue
                 return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
         return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": False}
 
@@ -504,7 +528,7 @@ def main(argv=None):
         else:
             output = StudyStore(root).export_manifest(args.output.absolute())
         print(json.dumps(output, sort_keys=True, allow_nan=False))
-        return 1 if output.get("errors") else 0
+        return 1 if output.get("errors") or output.get("paused_cells") else 0
     except (OSError, ValueError, RuntimeError) as error:
         print(json.dumps({"status": "refused", "reason": str(error), "error": type(error).__name__}))
         return 1
