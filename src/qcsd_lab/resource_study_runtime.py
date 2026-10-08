@@ -188,6 +188,8 @@ class CaptureRuntime:
                 prefix = "qcsd-resource-" + self.flight.name + "-" + str(index)
                 lane = self.flight / str(index)
                 lane.mkdir()
+                wireshark_config = lane / "wireshark-config"
+                wireshark_config.mkdir(mode=0o700)
                 capture_root = lane / "observer"
                 capture_root.mkdir(mode=0o2770)
                 capture_root.chmod(0o2770)
@@ -226,6 +228,8 @@ class CaptureRuntime:
                     "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE": str(lane / "partition.json"),
                     "QCSD_LAB_IMAGE_DIGEST": image, "QCSD_LAB_SOURCE_METADATA": "/usr/share/qcsd-lab/source.json",
                     "QCSD_LAB_ROOT": "/runtime-src",
+                    "WIRESHARK_CONFIG_DIR": str(wireshark_config),
+                    "XDG_CONFIG_HOME": str(wireshark_config),
                     "QCSD_CONTROLLED_ROUTER_CLIENT_IP": router_ip, "QCSD_KERNEL_TX_PUBLIC_ROUTER_IP": router_ip,
                     "QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET": subnet,
                     "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ENDPOINT": router_ip + ":19090",

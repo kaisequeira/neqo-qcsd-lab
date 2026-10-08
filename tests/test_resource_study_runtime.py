@@ -145,6 +145,10 @@ def test_launch_has_actual_disjoint_peer_partitions_and_minimum_privileges(backe
                 assert any("--pid --cpu-list" in arg and "ORCHESTRATOR_CPU" in arg for arg in args)
                 environment = dict(value.split("=", 1) for value in options(args, "--env"))
                 assert environment["QCSD_LAB_ROOT"] == "/runtime-src"
+                assert environment["WIRESHARK_CONFIG_DIR"] == environment["XDG_CONFIG_HOME"]
+                config = Path(environment["WIRESHARK_CONFIG_DIR"])
+                assert config.stat().st_uid == runtime.os.getuid()
+                assert config.stat().st_mode & 0o7777 == 0o700
                 for field in (kernel.KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV,
                               kernel.KERNEL_TX_CONTROLLED_OBSERVER_BINDING_ENV):
                     raw = base64.b64decode(environment[field], validate=True)

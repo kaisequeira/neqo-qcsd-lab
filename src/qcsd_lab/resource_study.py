@@ -375,7 +375,8 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                     target = root / "failures" / host / mode / attempt["attempt_id"]
                     target.parent.mkdir(parents=True, exist_ok=True)
                     rejected.rename(target)
-                store.fail_attempt(attempt["attempt_id"], str(error), wall_seconds=time.monotonic() - attempt_started)
+                store.fail_attempt(attempt["attempt_id"], str(error), kind="pilot-failed" if pilot else "failed",
+                    wall_seconds=time.monotonic() - attempt_started)
                 create_json(root / attempt["path"] / "failure.json", {
                     "attempt_id": attempt["attempt_id"], "mode": mode, "hostname": host,
                     "reason": str(error), "exception": type(error).__name__, "scientific_credit": False})

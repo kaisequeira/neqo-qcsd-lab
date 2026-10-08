@@ -444,7 +444,7 @@ class StudyStore:
                 raise ValueError("only an active attempt may be failed")
             connection.execute("UPDATE attempts SET state='failed',reason=?,kind=?,updated_at=? WHERE attempt_id=?",
                 (reason, kind, _now(), attempt_id))
-            self._measurement(connection, row, "pilot" if kind == "pilot" else "failed", wall_seconds)
+            self._measurement(connection, row, "pilot" if kind in {"pilot", "pilot-failed"} else "failed", wall_seconds)
 
     @staticmethod
     def _measurement(connection, attempt, outcome, wall_seconds, retained_bytes=None):
