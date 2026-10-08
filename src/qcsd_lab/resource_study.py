@@ -283,7 +283,9 @@ def temporary_clock_failure(result: dict) -> bool:
         return False
     details = failure.get("details", [])
     return any(isinstance(row, dict) and isinstance(row.get("reason"), str)
-               and row["reason"].startswith("direct/runner reconciliation failed: direct/runner timestamp mismatch")
+               and row["reason"].startswith((
+                   "direct/runner reconciliation failed: direct/runner timestamp mismatch",
+                   "direct/runner reconciliation failed: primary capture: wrapper realtime/monotonic elapsed difference exceeds"))
                for row in details)
 
 

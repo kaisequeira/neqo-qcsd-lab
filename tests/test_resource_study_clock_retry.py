@@ -11,6 +11,12 @@ BASE = {"success": False, "resource_error": None, "runner_complete": True,
 def test_verified_clock_disturbance_is_retryable_without_credit():
     assert temporary_clock_failure(BASE)
 
+def test_wrapper_clock_disturbance_is_also_discarded_and_retryable():
+    value_map = deepcopy(BASE)
+    value_map["failure"]["details"][0]["reason"] = (
+        "direct/runner reconciliation failed: primary capture: wrapper realtime/monotonic elapsed difference exceeds 10 ms")
+    assert temporary_clock_failure(value_map)
+
 @pytest.mark.parametrize("field,value", [("success", True), ("resource_error", "incomplete response"),
     ("runner_complete", False), ("runner_binding_valid", False),
     ("scheduler_runtime_evidence_valid", False), ("runner_returncode", 1)])
