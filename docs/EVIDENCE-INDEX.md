@@ -7,6 +7,54 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
+## Source68 original enrollment transport, 8 October 2026
+
+The corpus remains **35 enrolled sites and 264/16,000 verified formal rows**.
+The published Source66 ordinary SDK child is Lab
+`97379ee059bf14b1452c8ac2e696e41c30202132`, Native
+`818d89398a5b0bc725e424b648d878185d18125d`, client
+`2c9f170e1e087d116a66571e2637e605967352501131ba9a4ef0052d19321dac`.
+Canonical runtime SHA-256
+`db8104cf87ee2ca4e3391fb20af7de6306266aed0b5abe20840292e5627e5c87`
+closed all 12 actual operations without Native compilation. Its collection
+and prepare images are `3ff031f3…` and `336835f7…` respectively.
+
+The healthy class12/13 practice retained Clarin's 201-resource/two-origin
+graph and Dictionary's 38-resource/two-origin graph. HOST stage022 and
+finalize023 returned zero. Actual preamble024 returned one in 22.07 seconds
+(43.20 seconds for the outer recorded operation): the original enrollment
+was absent inside the container. This is a transport failure before traffic,
+not site rejection. Preserve the original practice and failed logs.
+
+Prospective Source68 uses a shared typed helper in
+`src/qcsd_lab/rapid_enrolled_subgroup.py`, called by
+`tools/_rapid_class_mode_flight/flight/operator.py` and
+`src/qcsd_lab/rapid_rolling_readiness.py`. It derives canonical read-only
+metadata roots from the authenticated original enrollment. The active action
+fences file bytes/full modes and immutable Source-tree membership, reopens
+metadata selection and checks its fence before returning. Non-subgroup
+behavior, class selection, graph contents and scientific conditions remain
+unchanged.
+
+Source68 focused004 genuinely returned zero: **44 passed in 35.20 seconds**
+(35.825 seconds outer), with no skips. Stdout SHA-256 is
+`6e80be5d6854ef6bade0c7fab7920ac89f647ea4686cf82bd3817a78395bf71e`.
+It covers both enrollment policies, all four installed image actions,
+launch/deep argv agreement, file/mode/tree mutations, subgroup ordering,
+original graph/cap preservation and the portable producer pin. The saved
+graph oracle explicitly controls admission traversal and grants no raw/deep
+proof. Failed002 collection and failed003 wrong-SDK/import fixtures remain
+preserved;004 explicitly imports the exact authoring SDK.
+
+Local retained evidence is outside the clone under
+`diagnostic-rehearsals/rapid-subgroup-readonly-inputs-source68-root-gates-20261008-001/`
+and `diagnostic-rehearsals/rapid-whole-get-required-parents-source66-root-gates-20261008-001/`.
+The failed physical attempt is
+`diagnostic-rehearsals/ordinary-b0004-native818-source66-sdk-healthy012-013-practice-root-actual-20261008-002/`.
+Source68 freeze, its matching cached images and its fresh physical practice
+are pending at this source checkpoint. These HOST checks add no admissions,
+readiness authority or formal credit.
+
 ## Source66 checkpoint: F264 and installed Source65 runtime, 8 October 2026
 
 **35 classes are enrolled; 264/16,000 accepted formal traces are all ordinary.**

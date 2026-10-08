@@ -57,3 +57,52 @@ def require_canary(reference, value):
     document = lanes._load(lanes._read(rolling._open_ref(reference["plan"])))
     if document.get(FIELD) != value:
         raise ValueError("subgroup canary and formal plan select different enrolled classes")
+
+def input_roots(reference, value):
+    """Derive only read-only metadata transport for a current typed subgroup.
+
+    Enrollment and complete class records retain their original validators.
+    Parent directories carry authenticated files; only declared immutable
+    Source trees are watched as trees, so later study outputs are not inputs.
+    """
+    from . import rapid_rolling_capture as rolling
+    from . import rapid_additive_static_enrollment as additive
+    from . import rapid_per_class_selected_enrollment as per_class
+    from .rapid_operation_facts import OperationFacts, current_context
+    from .static_evidence_transport import _path
+
+    context = current_context()
+    if context is None:
+        with OperationFacts().scope() as context:
+            return input_roots(reference, value)
+    enrollment = _path(rolling._open_ref(reference))
+    context.watch_file(enrollment)
+    batch, classes, policy = rolling._verify_enrollment(enrollment)
+    validate(value, enrollment, batch, classes)
+    if not isinstance(policy, dict):
+        raise ValueError("subgroup transport requires a selected enrollment policy")
+    if policy.get("contract") == per_class.CONTRACT:
+        from . import per_class_selected_capture_amendment as metadata
+    elif policy.get("contract") == additive.CONTRACT:
+        from . import selected_capture_amendment as metadata
+    else:
+        raise ValueError("subgroup transport encountered an unsupported enrollment policy")
+    files, trees = metadata.metadata_inputs(enrollment, batch, classes, policy)
+    files = {_path(Path(path)) for path in files} | {enrollment}
+    trees = {_path(Path(path), directory=True) for path in trees}
+    for path in sorted(files):
+        context.watch_file(path)
+    for path in sorted(trees):
+        context.watch_tree(path, ignore_git=True)
+    # Reopen the typed authority after registering every returned dependency.
+    # The collectors own private file observations; these checks close the
+    # interval before their observations were added to this owning action.
+    reopened_files, reopened_trees = metadata.metadata_inputs(enrollment, batch, classes, policy)
+    if (set(map(Path, reopened_files)) | {enrollment} != files
+            or set(map(Path, reopened_trees)) != trees):
+        raise ValueError("subgroup transport metadata membership changed")
+    roots = trees | {_path(path.parent, directory=True) for path in files}
+    roots = sorted(root for root in roots
+                   if not any(root != parent and root.is_relative_to(parent) for parent in roots))
+    context.check()
+    return roots

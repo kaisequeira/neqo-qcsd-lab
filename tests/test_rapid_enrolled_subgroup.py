@@ -184,6 +184,8 @@ def test_public_stage_parser_accepts_explicit_ordered_selection(tmp_path, recipe
         "--mode", "tamaraw", "--class-indices", "17"]
     observed = []
     monkeypatch.setattr(sys, "argv", argv)
+    # This parser fixture controls SDK binding and stage; it supplies no runtime proof.
+    monkeypatch.setattr(recipe, "_bind_host_sdk", lambda args: None)
     monkeypatch.setattr(recipe, "stage", lambda args: observed.append(args.class_indices))
     recipe.main()
     assert observed == [[17]]

@@ -1073,6 +1073,10 @@ def image_argv(plan, output, action, *extra):
                 raise ValueError("ordinary verifier must retain its exact original recipe bytes")
             index = argv.index(f"{Path(__file__).absolute()}:/recipe.py:ro")
             argv[index] = f"{original_recipe}:/recipe.py:ro"
+    if "enrolled_subgroup" in plan:
+        from qcsd_lab import rapid_enrolled_subgroup as subgroup
+        roots = sorted(set(roots) | {str(path) for path in subgroup.input_roots(
+            plan["enrollment"], plan[subgroup.FIELD])})
     if "qualification_delivery_compatibility" in plan:
         from qcsd_lab.application_response_policy import application_body_identity_policy
         from qcsd_lab.qualification_control_authority import roots as witness_roots

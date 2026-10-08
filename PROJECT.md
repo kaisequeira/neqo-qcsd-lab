@@ -49,6 +49,29 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+### Prospective Source68: original enrollment transport, 8 October
+
+**35 sites remain enrolled and 264/16,000 formal traces remain verified.**
+Source66 is published; its separate ordinary SDK child `97379ee0…` pins the
+existing Native `818d8939…` and client `2c9f170e…`. Its canonical runtime
+`db8104cf…` closed all 12 actual operations with no Rust compilation.
+
+The fresh two-site Clarin/Dictionary practice passed HOST staging and
+finalization, then stopped in its preamble because the container could not
+see the original enrollment file. The failed attempt is preserved; no traffic
+or new trace credit followed. Source68 adds one authenticated read-only
+metadata transport helper, used identically by image launch and the expected
+deep-verification command. It preserves full class records, resource graphs,
+conditions and the existing behavior of plans without a subgroup.
+
+The Source68 HOST gate returned zero with **44 passes in 35.20 seconds**,
+including byte/full-mode/tree mutation controls, exact launch/deep command
+agreement and the saved two-site graph oracle. Earlier test collection and
+wrong-SDK failures remain preserved. Matching installed images and a fresh
+successful physical qualification/canary/deep check are still required for
+this prospective source. The [evidence index](docs/EVIDENCE-INDEX.md#source68-original-enrollment-transport-8-october-2026)
+records the actual operations and limits of this checkpoint.
+
 ### Latest verified checkpoint: 8 October, F264, installed Source65 and Source66 checks
 
 **35 classes are enrolled, with 264/16,000 accepted formal traces, all

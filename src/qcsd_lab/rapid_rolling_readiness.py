@@ -337,6 +337,10 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
     if "selected_input_renewal" in plan:
         from .rapid_selected_input_renewal import plan_roots
         roots = sorted(set(roots) | set(plan_roots(plan, directory)))
+    if "enrolled_subgroup" in plan:
+        from . import rapid_enrolled_subgroup as subgroup
+        roots = sorted(set(roots) | set(subgroup.input_roots(
+            plan["enrollment"], plan[subgroup.FIELD])))
     for root in roots:
         static_mounts.extend(["--volume", f"{root}:{root}:ro"])
     if ordinary_transport == "current-group":
