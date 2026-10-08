@@ -129,6 +129,16 @@ def _condition(spec, sites, base, mode):
     if (reference.get('schema_version') not in (1, 5) and not carried
             or mode != 'undefended' and reference.get('schema_version') != 1):
         raise ValueError('target chunks cannot inherit a historical canary or control bridge')
+    current_subgroup = False
+    if mode == 'undefended' and reference.get('schema_version') == 1 and 'enrolled_subgroup' in base:
+        from . import rapid_enrolled_subgroup as subgroup
+        batch, classes, _ = rolling._verify_enrollment(spec.cohort)
+        selected = subgroup.validate(base[subgroup.FIELD], spec.cohort, batch, classes)
+        subgroup.require_canary(reference, base[subgroup.FIELD])
+        if [(row['candidate_id'], row['workload_id']) for row in selected] != [
+                (site.candidate_id, site.workload_id) for site in sites]:
+            raise ValueError('target ordinary subgroup changed its complete ordered enrolled sites')
+        current_subgroup = True
     runtime = {key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}
     context = current_context()
     facts = (readiness.validate_canary(reference, runtime=runtime, mode=mode) if context is None
@@ -201,6 +211,16 @@ def _condition(spec, sites, base, mode):
                     or application_body_identity_policy(base) != COMPLETE_APPLICATION_DELIVERY_POLICY
                     or lanes._sha(manifest_raw) != site.workload_sha256):
                 raise ValueError('target ordinary current group lacks its exact Native/body/full manifest authority')
+            validate_prepared_response_graph(manifest)
+            primary = VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+        elif current_subgroup and primary_document_identity_policy(manifest) == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+            # The current schema-one canary retains its exact Native label;
+            # the typed subgroup binds each unchanged individual Lab policy.
+            if (primary != EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY
+                    or identity['application_response_policy'] != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+                    or application_body_identity_policy(base) != COMPLETE_APPLICATION_DELIVERY_POLICY
+                    or lanes._sha(manifest_raw) != site.workload_sha256):
+                raise ValueError('target ordinary current subgroup lacks its exact Native/body/full manifest authority')
             validate_prepared_response_graph(manifest)
             primary = VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
         if (application_response_policy(manifest) != identity['application_response_policy']
