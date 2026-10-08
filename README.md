@@ -11,24 +11,28 @@ The approved collection is **50 exact resource hostnames × five modes ×
 must complete full GETs for its hostname's **20 distinct frozen URLs**.
 The modes are ordinary traffic, FRONT, Tamaraw, BuFLO and CS-BuFLO.
 
-**Current checkpoint: two live-enrolled classes and twelve verified ordinary
-sessions.** The first four-session batch remains immutably exported. An actual
-SIGTERM stop and resume increased the count 4 → 8 → 12 without changing its
-receipts. Recovery deleted no files; all twelve independently verified with
-no active reservations or running containers. The 50-host importer checks structural eligibility, not live
-admission. The earlier **392 ordinary website recordings** remain historical
+**Current checkpoint: three live-enrolled classes and 21 verified formal
+sessions:** ordinary 14, FRONT 2, Tamaraw 4, CS-BuFLO 1 and BuFLO 0.
+`formal-batch-000002.json` exports all 21. Recovery and verification passed
+with no errors, pending attempts, deleted files or running containers. The
+first four-session export and actual 4 → 8 → 12 SIGTERM stop/resume evidence
+remain unchanged. The importer checks structural eligibility, not 50 live
+admissions. The earlier **392 ordinary website recordings** remain historical
 and are excluded from this new total.
 
-Ordinary zero-credit pilots passed on both classes; Shopify FRONT and Tamaraw
-pilots passed too. Fonts is ordinary-only after chaff qualification failed.
-BuFLO/CS-BuFLO live pilots and SDK005 installation remain pending after a locally
-checked provenance repair. No defended formal credit or Mac runtime pass is claimed.
+Implementation is complete and SDK005 is verified. Four zero-credit mode
+pilots passed: ordinary on Fonts and Shopify, FRONT/Tamaraw on Shopify and
+CS-BuFLO on Dictionary. Fonts remains ordinary-only after chaff qualification
+failed. BuFLO's three pilots failed with 22.9–30.8 ms WSL clock shifts and
+remain uncredited; its local timing gate is unresolved. Affected cells paused
+while healthy cells continued. No Mac ARM runtime pass is claimed.
 
 Start with [the resource-domain guide](docs/RESOURCE-DOMAIN-STUDY.md).
 The `./qcsd-lab resource-study` route and `tools/resource_study.py`
 provide `prepare`, `capture`, `status`, `verify` and `export` actions. Consult
-the installed help and use explicit `--mode undefended` for the first formal
-cell after its own pilot. Omitted mode selection requests all five modes.
+the installed help and use explicit `--mode undefended` first. Initial unchanged
+cells use the approved one-domain mode pilot; changed scientific epochs need
+an exact-host/resource pilot. Omitted mode selection requests all five modes.
 
 One fresh Native process replays 20 URLs over one origin's connection.
 Capture is on client `eth0` before NAT. Tuple uniqueness, handshake and all

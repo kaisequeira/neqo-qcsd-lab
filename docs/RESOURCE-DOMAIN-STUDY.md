@@ -1,6 +1,6 @@
 # Resource-domain study
 
-## Current status: twelve verified ordinary sessions
+## Current status: 21 verified sessions across four modes
 
 The approved study is **50 exact resource hostnames × five traffic modes ×
 400 accepted connections = 100,000 sessions**. Each counted connection must
@@ -8,23 +8,22 @@ fetch all **20 distinct, fixed resource URLs** assigned to its hostname.
 The five modes are ordinary traffic (`undefended`), FRONT, Tamaraw, BuFLO and
 CS-BuFLO. Each mode contributes 20,000 sessions.
 
-The collector and public command route are implemented. **Two classes are
-live-enrolled and twelve ordinary sessions are independently verified.**
-The first immutable export, `formal-batch-000001.json`, retains its original
-four sessions (Shopify CDN 1, Fonts 3). A real SIGTERM stop and resume increased
-the count **4 → 8 → 12**, preserved the original receipts and stopped cleanly.
-Recovery deleted zero files; final verification checked all twelve with zero
-errors, no active reservations and no running containers. The final
-100,000-session target is incomplete.
-The input pool has 50 structurally eligible hosts; that is not 50 live admissions.
+The implementation is complete. **Three classes are live-enrolled and 21 formal
+sessions are independently verified:** ordinary 14, FRONT 2, Tamaraw 4,
+CS-BuFLO 1 and BuFLO 0. `formal-batch-000002.json` exports all 21.
+`verify --recover --all` passed with no errors, pending or interrupted attempts,
+deleted files or running containers. The original four-session export and
+the real **4 → 8 → 12** SIGTERM stop/resume evidence remain unchanged.
+The 100,000-session target is incomplete; 50 structurally eligible input hosts
+are not 50 live admissions.
 
-Ordinary zero-credit pilots passed on both classes. Shopify's FRONT and Tamaraw
-pilots passed; BuFLO and CS-BuFLO live pilots remain pending after a locally
-checked parameter-provenance repair. SDK004 is verified; SDK005 installation is
-pending at this checkpoint. Pilots add zero formal sessions. Fonts has ordinary
-readiness only, with four defended modes unavailable after chaff qualification
-failed. Preserve that failure and require valid focused qualification before
-defended capture. No defended formal credit or Mac runtime pass is claimed.
+Shopify CDN and Dictionary CDN have all five admission readiness flags; Fonts
+is ordinary-only after chaff qualification failed. Zero-credit pilots passed
+for four modes: ordinary on Fonts and Shopify, FRONT and Tamaraw on Shopify,
+and CS-BuFLO on Dictionary. BuFLO remains blocked: three actual pilots failed
+with WSL clock shifts of 22.9–30.8 ms. These failures receive no credit; no Native change was made. Missing mode pilots and transient Shopify FRONT/CS-BuFLO
+Native deadlines paused affected cells while healthy cells continued.
+SDK005 is installed and verified; the Mac ARM runtime remains untested.
 
 The earlier website study's **392 accepted ordinary recordings** remain
 historical evidence under their original contracts. They do not count toward
@@ -46,6 +45,9 @@ The importer preserves the supplied choices and records their provenance.
 If a primary candidate cannot meet the live contract, the declared reserve
 order is **`cdn.myanimelist.net`, then `ahrefs.com`**. Replacing a class is a
 prospective recorded decision, not permission to alter an earlier attempt.
+No ready URL inventory for either reserve was found in the bounded current-source
+lookup. Discover and authenticate their inventories before live preparation;
+the declared names alone do not establish eligibility or admission.
 
 One visit starts a fresh Native client process and one QUIC connection to
 that origin. Its 20 resource requests use ordinary HTTP/3 request streams on
@@ -135,14 +137,16 @@ The public interface is `./qcsd-lab resource-study`, backed by
 ./qcsd-lab resource-study export --root /absolute/fresh/study --output /absolute/fresh/export.json
 ```
 
-The formal command requires its own cell's passing pilot. Omitting `--mode`
-selects all five modes; use explicit ordinary selection first. Use
+Initial unchanged cells use the approved one-domain pilot for their mode.
+Changed scientific epochs require an exact-host, frozen-resource pilot for
+each affected cell. Omitting `--mode` selects all five modes; use explicit
+ordinary selection first. Use
 `verify --recover --all` only after workers stop. It cannot promote an orphan
 folder or failed receipt. Confirm installed help before launching.
 
-Packet-clock integrity remains strict at **10 ms**. A roughly 23 ms WSL
-disturbance was refused; bounded retries retain failed attempts without widening
-the limit. Host observer/provenance fixes have separately recorded code identity.
+Packet-clock integrity remains strict at **10 ms**. BuFLO's observed
+22.9–30.8 ms WSL shifts were refused; bounded retries retain failed attempts
+without widening the limit. Host observer/provenance fixes have separately recorded code identity.
 They do not relabel the installed SDK or old evidence. Cell-epoch integration
 and clock controls passed 36 focused checks. A new scientific epoch still needs
 an explicit admission selecting affected cells and their own matching pilots;

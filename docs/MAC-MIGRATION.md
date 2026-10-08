@@ -9,20 +9,22 @@ CPU IDs, memory and free disk space remain unknown.
 
 The approved target remains **50 exact resource hostnames × five modes ×
 400 accepted connection sessions = 100,000**. Every accepted connection must
-complete its own fixed 20 distinct URLs. The local x86-64 checkpoint has **two
-live-enrolled classes and twelve verified ordinary sessions**. An actual
-SIGTERM stop and resume preserved the first four receipts and increased the
-count 4 → 8 → 12; recovery deleted no files. Ordinary pilots passed on both
-classes; Shopify's FRONT and Tamaraw
-pilots passed too. Fonts remains ordinary-only after chaff qualification failed.
-BuFLO/CS-BuFLO live pilots and SDK005 installation are pending. None of these
-local results establishes an ARM64 or Mac pass.
+complete its own fixed 20 distinct URLs. The local x86-64 checkpoint has **three
+live-enrolled classes and 21 verified formal sessions**: ordinary 14, FRONT 2,
+Tamaraw 4, CS-BuFLO 1 and BuFLO 0. The second immutable export retains all 21;
+verification/recovery passed with no errors, pending attempts or deleted files.
+The original four-session export and 4 → 8 → 12 stop/resume evidence remain
+unchanged. Four zero-credit mode pilots passed: ordinary on Fonts and Shopify,
+FRONT/Tamaraw on Shopify and CS-BuFLO on Dictionary. Fonts remains ordinary-only.
+SDK005 is installed and verified. BuFLO remains blocked by three failed WSL
+timing pilots with 22.9–30.8 ms clock shifts; no Native change was made.
+None of these local results establishes an ARM64 or Mac pass.
 Earlier website captures remain historical evidence and do not enter this total.
 See [the study guide](RESOURCE-DOMAIN-STUDY.md).
 
 The final source-package path, owner-recorded manifest digest and published Lab
 commit remain pending. Use the actual handoff's `CHECKOUT.md`; do not substitute
-the installed SDK004 source for a later host source or invent a future commit.
+the installed SDK005 source for a later host source or invent a future commit.
 
 The handoff contains:
 

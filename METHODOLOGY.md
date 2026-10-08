@@ -10,8 +10,10 @@ The sampling unit is the whole connection, with pre-NAT client `eth0` capture,
 handshake, distinct oriented five-tuple and all full responses independently
 verified. Migration or extra streams do not create additional sessions.
 
-The current new-study checkpoint is twelve ordinary sessions from two enrolled
-classes. The previous 392 website recordings remain historical and are excluded.
+The current new-study checkpoint is 21 verified formal sessions from three
+enrolled classes: ordinary 14, FRONT 2, Tamaraw 4, CS-BuFLO 1 and BuFLO 0.
+Four mode pilots passed; BuFLO's local WSL timing gate remains unresolved.
+The previous 392 website recordings remain historical and are excluded.
 SQLite and immutable receipts provide incremental cell-level authority. Split
 whole connections for evaluation and exclude addresses, ports, hostnames and
 URLs from model features. See [the resource-domain guide](docs/RESOURCE-DOMAIN-STUDY.md)

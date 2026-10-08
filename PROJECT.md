@@ -10,22 +10,28 @@ must fetch its hostname's **20 distinct fixed URLs** completely. The modes
 are ordinary traffic, FRONT, Tamaraw, BuFLO and CS-BuFLO. Preserve query
 identifiers, including Bing `th` IDs; declared reserves are
 `cdn.myanimelist.net`, then `ahrefs.com`.
+Their ready URL inventories have not been located in the bounded current-source
+lookup; discovery and authenticated live preparation remain required.
 
-**New accepted sessions: 12 ordinary sessions from two live-enrolled classes.**
-The first immutable export, `formal-batch-000001.json`, retains four sessions
-(Shopify CDN 1, Fonts 3). An actual SIGTERM stop and resume increased the count
-4 → 8 → 12 while preserving the original receipts. Recovery deleted zero files;
-all twelve independently verified with no active reservations or running
-containers. The 50-host importer proves structure, not 50 live admissions. The public
-`resource-study` prepare/capture/status/verify/export route is implemented.
+**New accepted sessions: 21 from three live-enrolled classes:** ordinary 14,
+FRONT 2, Tamaraw 4, CS-BuFLO 1 and BuFLO 0. The immutable
+`formal-batch-000002.json` exports all 21. Actual `verify --recover --all`
+passed with zero errors, deleted files, pending/interrupted attempts or running
+containers. The first four-session export and actual 4 → 8 → 12 SIGTERM
+stop/resume evidence remain unchanged. The 50-host importer proves structure,
+not 50 live admissions. Implementation of the public
+`resource-study` prepare/capture/status/verify/export route is complete.
 The [new guide](docs/RESOURCE-DOMAIN-STUDY.md) defines the unit,
 packet evidence, 250 class/mode cells and independent recovery.
 
-Ordinary zero-credit pilots passed on both classes; Shopify's FRONT and Tamaraw
-pilots passed. Fonts remains ordinary-only because its chaff qualification failed.
-BuFLO/CS-BuFLO parameter provenance was repaired and checked locally; SDK005
-installation and live mode pilots remain pending. There is no defended formal
-credit or demonstrated Mac runtime. Preserve all earlier failures.
+Four zero-credit mode pilots passed: ordinary on Fonts and Shopify,
+FRONT/Tamaraw on Shopify and CS-BuFLO on Dictionary. Shopify and Dictionary
+have all five admission readiness flags; Fonts remains ordinary-only after
+chaff qualification failed. Three BuFLO pilots failed with 22.9–30.8 ms WSL
+clock shifts, leaving its local timing gate unresolved and zero BuFLO credit.
+No Native change was made. Missing pilots and transient Shopify FRONT/CS
+Native deadlines paused affected cells while healthy cells continued.
+Mac ARM remains untested. Preserve all earlier failures.
 
 Use a fresh Native process for each single-origin connection and client
 `eth0` captures before NAT. A tuple ledger prevents duplicate session credit;
@@ -35,13 +41,19 @@ It does not import the old fixed-target history or require all five modes to
 be ready before an independently ready mode starts.
 
 The verified Native D2 implementation and cached client can be reused for
-Lab-only changes through a matching public SDK/runtime binding. SDK004 is
-verified; later host repairs retain separate source identity, and a new SDK
-does not receive an installed-pass claim before its actual closure. The primary
-packet-clock limit remains 10 ms; roughly 23 ms WSL disturbances were refused
+Lab-only changes through a matching public SDK/runtime binding. SDK005 is
+verified at canonical SHA-256
+`84ffc4439de18c5d1786a9d2740af40bbbb8ecdbe0ebe382895e84a994ed141e`.
+Its installed Lab source is `235224a2e0f9da721af674cf294f52dfada7b276`;
+host coordinator repairs retain separately recorded code identity. The client
+remains the verified Native D2 executable. The primary
+packet-clock limit remains 10 ms; the observed WSL disturbances were refused
 and bounded retries preserve those failures. Cell-epoch integration and clock
 controls passed 36 focused checks in 49.28 seconds; actual prospective epoch
-admissions remain separately required. The initial budget is
+admissions remain separately required. Initial unchanged cells use the approved
+one-domain mode pilot; changed scientific epochs require exact-host/resource
+pilots. Three missing-pilot/allocation-refusal controls passed in 11.29 seconds.
+The initial budget is
 two workers, six available CPU IDs and 16 GB RAM; four-worker operation needs
 at least nine available CPU IDs and verified scheduling/timing. At an
 unmeasured illustrative 20 seconds per accepted session per worker, the total

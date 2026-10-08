@@ -8,8 +8,8 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   [docs/RESOURCE-DOMAIN-STUDY.md](docs/RESOURCE-DOMAIN-STUDY.md): 50 exact
   resource hostnames, 20 distinct frozen URLs completed per accepted fresh
   connection, five modes and 400 distinct recorded five-tuples per class/mode
-  cell, for 100,000 accepted sessions. The current checkpoint is two live
-  enrollments and twelve verified ordinary sessions; inspect current receipts
+  cell, for 100,000 accepted sessions. The current checkpoint is three live
+  enrollments and 21 verified formal sessions across four modes; inspect current receipts
   before changing that count. Pilots carry zero formal credit.
   Importer eligibility is not live admission. Preserve queries and resource
   identifiers; use declared reserve order rather than silently substituting
