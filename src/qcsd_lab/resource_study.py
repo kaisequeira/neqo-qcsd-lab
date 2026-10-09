@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timezone
 import hashlib
@@ -27,7 +28,7 @@ INPUT_LIMIT = 16 * 1024 * 1024
 DEFAULT_STORAGE_RESERVE_BYTES = 60 * 1024 ** 3
 
 
-def coordinator_provenance() -> dict:
+def coordinator_provenance(*, resource_selection=False) -> dict:
     """Record the host code actually coordinating and verifying this attempt."""
     source = Path(__file__).parent
     names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
@@ -35,6 +36,8 @@ def coordinator_provenance() -> dict:
              "resource_study_supplements.py", "resource_study_epochs.py",
              "resource_study_network.py", "resource_study_audit.py",
              "fidelity.py", "capture.py", "process_scheduler.py")
+    if resource_selection:
+        names += ("resource_study_selection.py",)
     return {"record_type": "qcsd-resource-study-host-code-v1",
             "files": {name: sha256_file(source / name) for name in names},
             "installed_native_and_sdk": "recorded separately in runtime"}
@@ -174,11 +177,34 @@ def candidate_pool(root: Path) -> dict:
     return candidates
 
 
-def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None) -> dict:
+def _selection_request(path, digest, hostnames):
+    requested = path is not None or digest is not None
+    if requested and (path is None or digest is None or len(hostnames) != 1):
+        raise ValueError("explicit resource selection needs both flags and exactly one hostname")
+    return requested
+
+
+def _selection_unused(store, hostname):
+    if any(row["hostname"] == hostname for row in store.enrolled()):
+        raise ValueError("explicit resource selection cannot replace an enrolled hostname")
+    with store._transaction() as connection:
+        if connection.execute("SELECT 1 FROM attempts LIMIT 1").fetchone():
+            raise ValueError("explicit resource selection requires a root with no prior attempts")
+
+
+def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
+           resource_selection: Path | None = None, resource_selection_sha256: str | None = None) -> dict:
+    selection_requested = _selection_request(resource_selection, resource_selection_sha256, hostnames)
+    store = StudyStore(root)
+    selection = binding = None
+    if selection_requested:
+        from .resource_study_selection import load_selection, freeze_selection
+        _selection_unused(store, hostnames[0])
+        selection = load_selection(root, resource_selection, resource_selection_sha256, hostnames[0])
+        binding = freeze_selection(root, selection)
     if backend is None:
         from .resource_study_runtime import PreparationRuntime
         backend = PreparationRuntime(root, runtime)
-    store = StudyStore(root)
     candidates = candidate_pool(root)
     completed = {r["hostname"] for r in store.enrolled()}
     results = []
@@ -189,6 +215,10 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None) -> 
         candidate = candidates.get(hostname)
         if candidate is None or not candidate["eligible"]:
             raise ValueError("hostname is not an eligible frozen candidate")
+        if selection is not None:
+            candidate = deepcopy(candidate)
+            candidate["urls"] = list(selection["manifest"]["urls"])
+            candidate["url_count"] = len(candidate["urls"])
         attempt = root / "enrollment-attempts" / hostname / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         try:
             require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
@@ -198,6 +228,14 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None) -> 
                     or len(set(selected)) != 20 or any(url not in candidate["urls"] for url in selected)
                     or selected != sorted(selected, key=candidate["urls"].index)):
                 raise ValueError("prepared enrollment differs from its frozen candidate pool/order")
+            if binding is not None:
+                from .resource_study_selection import bind_preparation, validate_selection_proof
+                if selected != selection["manifest"]["urls"]:
+                    raise ValueError("prepared enrollment differs from its exact explicit resource selection")
+                enrollment = bind_preparation(root, enrollment, binding, attempt / "job.json")
+                validate_selection_proof(root, enrollment)
+                from .resource_study_epochs import _verify_preparation
+                _verify_preparation(store, hostname, enrollment=enrollment)
             store.enroll(enrollment)
             completed.add(hostname)
             results.append({"hostname": hostname, "status": "enrolled", "resources": 20})
@@ -240,6 +278,10 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
     for key, path in optional.items():
         if (destination / path).is_file():
             paths[key] = relative(destination / path)
+    if "resource_selection" in enrollment:
+        from .resource_study_selection import selection_artifact_paths, validate_selection_proof
+        validate_selection_proof(root, enrollment)
+        paths.update(selection_artifact_paths(enrollment))
     from .capture import split_endpoint
     endpoint = load(destination / "neqo/run.json")["endpoints"][0]
     local_ip, local_port = split_endpoint(endpoint["local_address"])
@@ -259,7 +301,8 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         "five_tuple": [local_ip, local_port, remote_ip, remote_port, 17],
         "capture_position": "client-eth0-before-nat", "workload_sha256": enrollment["workload_sha256"],
         "runtime": runtime, "collector_version": "qcsd-resource-study-coordinator-v1",
-        "coordinator_provenance": coordinator_provenance(),
+        "coordinator_provenance": (coordinator_provenance(resource_selection=True)
+            if "resource_selection" in enrollment else coordinator_provenance()),
         "mode_policies": result.get("mode_policies", {}),
         "mode_settings": enrollment.get("mode_settings", {}).get(attempt["mode"], {}),
         "artifact_paths": paths, "files": files,
@@ -553,6 +596,9 @@ def parser():
             child.add_argument("--class-network-pool", help="freeze an RFC1918 /23 for fifty disjoint class /29s")
             child.add_argument("--inventory", type=Path, action="append", default=[], help="explicitly add a Native URL inventory as a reserve pool")
             child.add_argument("--enroll", action="store_true")
+            child.add_argument("--resource-selection", type=Path,
+                               help="immutable exact twenty-URL selection from the authenticated class pool")
+            child.add_argument("--resource-selection-sha256", help="SHA-256 of the exact selection manifest bytes")
             child.add_argument("--epoch-of", type=Path)
             child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host", "network"))
             child.add_argument("--affected-hostname", action="append", default=[])
@@ -579,6 +625,19 @@ def main(argv=None):
     root = args.root.absolute()
     try:
         if args.action == "prepare":
+            selection_requested = _selection_request(args.resource_selection, args.resource_selection_sha256, args.hostname)
+            if selection_requested:
+                if not args.enroll or args.runtime is None:
+                    raise ValueError("explicit resource selection requires live --enroll and --runtime")
+                if (args.epoch_of is not None or args.epoch_change is not None
+                        or args.affected_hostname or args.affected_mode):
+                    if (args.epoch_of is None or args.epoch_change != "resources"
+                            or args.affected_hostname != args.hostname
+                            or args.affected_mode and (len(args.affected_mode) != len(MODES)
+                                or set(args.affected_mode) != set(MODES))):
+                        raise ValueError("explicit resource selection epoch scope must be one matching hostname and all five resource modes")
+                if (root / "study.json").exists():
+                    _selection_unused(StudyStore(root), args.hostname[0])
             if not (root / "study.json").exists():
                 if args.source is None:
                     raise ValueError("first prepare needs --source")
@@ -596,7 +655,11 @@ def main(argv=None):
             if args.enroll:
                 if args.runtime is None or not args.hostname:
                     raise ValueError("live preparation needs --runtime and --hostname")
-                output = enroll(root, runtime_identity(args.runtime.absolute()), args.hostname)
+                runtime = runtime_identity(args.runtime.absolute())
+                output = (enroll(root, runtime, args.hostname,
+                    resource_selection=args.resource_selection,
+                    resource_selection_sha256=args.resource_selection_sha256)
+                    if selection_requested else enroll(root, runtime, args.hostname))
             else:
                 output = StudyStore(root).status()
             if args.epoch_of is not None:

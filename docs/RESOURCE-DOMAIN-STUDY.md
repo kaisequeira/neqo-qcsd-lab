@@ -173,6 +173,58 @@ in `study.json`; repeating `prepare` with different values refuses the change.
 The default live storage reserve is 60 GiB. Use the supported preparation flags
 instead of editing the frozen plan.
 
+### Explicit prospective twenty-resource selection
+
+The default preparation path still probes the authenticated candidate pool in
+order and freezes its first twenty successful URLs. For an explicitly reviewed
+prospective resource change, `prepare --enroll` can instead take both
+`--resource-selection /absolute/selection.json` and
+`--resource-selection-sha256 RAW_SHA256`. This path requires exactly one
+`--hostname`, an explicit runtime, a target hostname that is not yet enrolled,
+and a target root with no prior capture attempts of any purpose or state.
+Partial flags and ambiguous scopes refuse before preparation.
+
+First initialize the fresh target root and import any reviewed supplemental
+inventories with the existing `prepare --source ... --inventory ...` interface.
+Then use
+[`resource_study_selection.make_manifest(root, hostname, urls)`](../src/qcsd_lab/resource_study_selection.py)
+to describe exactly twenty reviewed URLs for that target. Publish the resulting
+JSON create-only, mode `0444`, and record its raw SHA-256. The manifest binds the
+target's exact immutable study, original source, candidate catalogue and ordered
+supplement context; a manifest from another root refuses. URLs must be a
+distinct, verbatim, same-host HTTPS ordered subsequence of that authenticated
+pool. Queries remain intact. Later unrelated supplement imports do not expand
+the recorded selection context.
+
+```sh
+./qcsd-lab resource-study prepare --root /absolute/fresh/resource-epoch \
+  --runtime /absolute/runtime/canonical-runtime.json --enroll --hostname RESOURCE_HOSTNAME \
+  --resource-selection /absolute/selection.json --resource-selection-sha256 RAW_SHA256
+```
+
+Only those twenty URLs enter the unchanged installed preparation job. A failed
+selected URL cannot be replaced from the unselected tail. Before enrollment,
+the host checks the exact job, actual Native preparation input and workload,
+then replays the complete existing twenty-GET preparation proof. Epoch admission
+repeats that proof after publication, and each selected session binds the frozen
+manifest, job and complete context inventory for deep receipt verification.
+Selected receipts add the selector module to host coordinator provenance;
+historical/default receipts retain their thirteen-file shape and do not load
+the optional selector. The SDK and Native identities remain separately bound;
+this host feature does not claim changed code inside an old image.
+
+For a fresh root, a bad manifest may leave legitimate frozen context files
+behind. It launches no Native preparation, enrolls no class and admits no epoch;
+those inputs are retained rather than rolled back. With simultaneous epoch
+flags, selection permits only an explicit `resources` change for that matching
+hostname and all five modes (or omitted mode flags). Final epoch comparison can
+still refuse after preparation; preparation alone never establishes admission.
+Native/profile alignment remains a separate prospective operation on unchanged
+resources. The planned Fonts change must first finish the intended original
+class admissions and any required Native alignment on its old twenty URLs,
+then use a resources-only all-five-mode epoch with fresh matching pilots.
+Neither this feature nor a passing host test grants live eligibility or credit.
+
 After all capture and preparation processes close, an epoch parent can opt in
 to bounded parallel raw replay with `verify --all --verification-workers 4`
 and `export --output /absolute/fresh/export.json --verification-workers 4`.

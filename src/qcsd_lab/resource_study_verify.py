@@ -275,6 +275,16 @@ def application_stream_overlap(path: Path) -> dict[str, int]:
     return {"application_streams_opened": len(opened), "maximum_open_application_streams": maximum}
 
 
+def selection_proof_present(enrollment: dict, receipt: dict | None = None) -> bool:
+    """Detect optional or partial selection metadata without loading its code."""
+    def prefixed(names, prefix):
+        return any(isinstance(name, str) and name.startswith(prefix) for name in names)
+    return ("resource_selection" in enrollment
+        or prefixed(enrollment, "resource_selection_")
+        or prefixed(enrollment.get("files", {}), "inputs/resource-selections/")
+        or prefixed((receipt or {}).get("artifact_paths", {}), "resource_selection_"))
+
+
 def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     """Return independently derived facts or raise; suitable for StudyStore."""
     from .fidelity import (reconcile_direct_runner_artifacts, validate_primary_capture_clock_integrity,
@@ -319,6 +329,9 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             or any(resource.get("known_valid") is not True or resource.get("depends_on") != []
                    or resource.get("chaff_priority") is not False for resource in resources)):
         raise ValueError("Native workload URLs differ")
+    if selection_proof_present(enrollment, receipt):
+        from .resource_study_selection import validate_selection_proof
+        validate_selection_proof(root, enrollment, receipt)
     run = load(artifact["run"])
     if (run.get("method") != "GET" or run.get("request_policy") != "as-defined"
             or type(run.get("max_response_bytes")) is not int or run["max_response_bytes"] != MAX_RESPONSE_BYTES

@@ -307,9 +307,23 @@ def _idle(stores):
                 raise ValueError("participating epoch root has an active reservation; stop/recover its workers first")
 
 
-def _verify_preparation(store, host):
+def _verify_preparation(store, host, *, enrollment=None):
+    """Replay full GET proof, including an optional not-yet-enrolled selection."""
     from .resource_study_native import inspect_completed_run, MAX_RESPONSE_BYTES, ROLE
-    enrollment = _enrollments(store)[host][0]
+    from .resource_study_verify import selection_proof_present
+    if enrollment is None:
+        enrollment = _enrollments(store)[host][0]
+    else:
+        if (not isinstance(enrollment, dict) or enrollment.get("hostname") != host
+                or "resource_selection" not in enrollment
+                or not isinstance(enrollment.get("files"), dict) or not enrollment["files"]):
+            raise ValueError("provisional preparation lacks an exact host/file inventory")
+        for relative, digest in enrollment["files"].items():
+            if store._file(relative, digest)[1]["mode"] != "0444":
+                raise ValueError("provisional preparation input is not immutable")
+    if selection_proof_present(enrollment):
+        from .resource_study_selection import validate_selection_proof
+        validate_selection_proof(store.root, enrollment)
     prepared_path = within(store.root, enrollment["paths"]["prepared_workload"])
     prepared = load(prepared_path)
     preparation = prepared["preparation"]
