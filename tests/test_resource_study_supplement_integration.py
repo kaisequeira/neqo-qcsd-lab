@@ -25,7 +25,14 @@ def case(tmp_path):
         {"resource_domain": "primary.example", "resource_urls": [
             "https://primary.example/th?id=A", "https://primary.example/th?id=B"]}]}])
     root = tmp_path / "study"
-    study.initialize(primary, root)
+    # A historical input-pool fixture remains readable/extendable as history.
+    # New v2 initialization instead freezes fifty eligible class assignments.
+    catalogue = inputs.candidate_catalogue(primary)
+    StudyStore(root).initialize({"schema_version": 1, "source_sha256": catalogue["source_sha256"]})
+    write(root / "inputs/candidates.json", catalogue).chmod(0o444)
+    frozen_source = root / "inputs/supplied-resources.json"
+    frozen_source.write_bytes(primary.read_bytes())
+    frozen_source.chmod(0o444)
     reserve = write(tmp_path / "native.json", {"urls": [
         {"url": f"https://reserve.example/r?id={i}", "status": 200} for i in range(20)]})
     return root, primary, reserve

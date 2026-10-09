@@ -14,6 +14,7 @@ import threading
 import pytest
 
 from qcsd_lab import resource_study as study
+from qcsd_lab import resource_study_network as network_contract
 from qcsd_lab.resource_study_inputs import MODES, canonical_json, sha256_file
 from qcsd_lab.resource_study_store import StudyStore
 
@@ -172,12 +173,17 @@ def test_initialize_freezes_actual_source_eligibility_and_zero_credit(tmp_path):
         {"resource_domain": "alpha.example", "resource_urls": [
             f"https://alpha.example/o?n={index}" for index in range(20)]},
         {"resource_domain": "small.example", "resource_urls": [
-            f"https://small.example/o?n={index}" for index in range(19)]}]}])
+            f"https://small.example/o?n={index}" for index in range(19)]},
+        *[{"resource_domain": f"filler-{number:02d}.example", "resource_urls": [
+            f"https://filler-{number:02d}.example/o?n={index}" for index in range(20)]}
+          for number in range(49)]]}])
     root = tmp_path / "study"
     result = study.initialize(source, root)
     catalogue = study.load(root / "inputs/candidates.json")
-    assert {row["hostname"]: row["eligible"] for row in catalogue["candidates"]} == {
-        "alpha.example": True, "small.example": False}
+    eligibility = {row["hostname"]: row["eligible"] for row in catalogue["candidates"]}
+    assert eligibility["alpha.example"] is True and eligibility["small.example"] is False
+    assert sum(eligibility.values()) == 50
+    assert len(StudyStore(root).plan()["class_network"]["assignments"]) == 50
     assert (root / "inputs/supplied-resources.json").read_bytes() == source.read_bytes()
     assert StudyStore(root).plan()["source_sha256"] == sha256_file(source)
     assert result["accepted_count"] == result["enrolled_count"] == 0
@@ -190,6 +196,7 @@ def test_initialize_freezes_actual_source_eligibility_and_zero_credit(tmp_path):
 
 
 def _source(path, hostnames):
+    hostnames = [*hostnames, *(f"filler-{number:02d}.example" for number in range(50 - len(hostnames)))]
     _write(path, [{"crUX_domain": "page.example", "resources": [
         {"resource_domain": host, "resource_urls": [
             f"https://{host}/object?index={index}" for index in range(20)]}
@@ -392,6 +399,44 @@ def test_missing_mode_pilot_preserves_healthy_formal_progress(held):
     assert result["progress"]["accepted_count"] == 1
     assert [attempt["mode"] for _, attempt in backend.calls] == ["undefended"]
     assert store.status()["attempts"] == {"accepted": 1}
+
+
+@pytest.mark.parametrize("mutation", [None, "runtime", "settings", "policies", "enrollment"])
+def test_v2_pilot_binds_exact_class_runtime_and_inputs_before_any_attempt(tmp_path, monkeypatch, mutation):
+    root = tmp_path / "new";store = StudyStore(root)
+    names = ["alpha.example", "bravo.example", *(f"class-{i:02d}.example" for i in range(48))]
+    store.initialize({"schema_version": 1, "record_type": study.RECORD,
+        "class_count": 50, "resources_per_session": 20, "sessions_per_mode": 400,
+        "total_sessions": 100000, "modes": list(MODES), "acceptance": network_contract.ACCEPTANCE,
+        "class_network": network_contract.build_network_plan(names),
+        "tuple_uniqueness_scope": network_contract.TUPLE_SCOPE})
+    for host in names[:2]:
+        enrollment = _enrollment(root, host)
+        enrollment["mode_policies"] = {mode: {} for mode in MODES}
+        store.enroll(enrollment)
+    path = root / "classes/alpha.example/enrollment.json"
+    candidate = {"purpose": "pilot", "hostname": "alpha.example", "mode": "undefended",
+        "runtime": _runtime(), "mode_settings": {"controlled_fixture": "undefended"}, "mode_policies": {},
+        "artifact_paths": {"enrollment": path.relative_to(root).as_posix()}}
+    if mutation == "runtime":candidate["runtime"] = _runtime(lab="b")  # Same Native client, different Lab/runtime.
+    elif mutation == "settings":candidate["mode_settings"] = {"changed": True}
+    elif mutation == "policies":candidate["mode_policies"] = {"changed": True}
+    elif mutation == "enrollment":
+        other = root / "controlled-foreign-enrollment.json"
+        value = study.load(path);value["urls"][0] += "&changed=1";_write(other, value)
+        candidate["artifact_paths"]["enrollment"] = other.relative_to(root).as_posix()
+    _write(root / "pilots/alpha.example/undefended/controlled-boundary/session.json", candidate)
+    monkeypatch.setattr(study, "verify_receipt", lambda *args: {"scope": "controlled preflight only"})
+    backend = CaptureBackend(root);stop = threading.Event();stop.set()
+    if mutation is not None:
+        with pytest.raises(ValueError, match="focused pilot"):
+            study.capture(root, _runtime(), backend=backend, modes=("undefended",), budget=1, stop=stop)
+        assert not backend.entered
+    else:
+        result = study.capture(root, _runtime(), backend=backend, modes=("undefended",), budget=1, stop=stop)
+        assert result["missing_mode_pilots"] == [{"hostname": "bravo.example", "mode": "undefended"}]
+        assert result["paused_cells"] == [("bravo.example", "undefended")]
+    assert not backend.calls and store.status()["accepted_count"] == 0
 
 
 def test_cell_reservation_refusal_does_not_abort_healthy_worker(held, monkeypatch):

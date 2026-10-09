@@ -24,6 +24,15 @@ not 50 live admissions. Implementation of the public
 The [new guide](docs/RESOURCE-DOMAIN-STUDY.md) defines the unit,
 packet evidence, 250 class/mode cells and independent recovery.
 
+That is the published handoff checkpoint under its original protocol. The
+prospective fixed-class-IP protocol now freezes exactly 50 deterministic class
+addresses and `hostname-mode-study-root` tuple uniqueness, collision checks the
+whole map, and joins raw Native/PCAP/scheduler/router evidence to each measured
+worker attachment. It needs a fresh plan/runtime and exact per-class/mode
+zero-credit pilots before formal capture. The new root starts at zero; older
+verified receipts retain their original authority and are not imported. Local
+unit and mock tests establish implementation behavior, not a live Mac pass.
+
 Four zero-credit mode pilots passed: ordinary on Fonts and Shopify,
 FRONT/Tamaraw on Shopify and CS-BuFLO on Dictionary. Shopify and Dictionary
 have all five admission readiness flags; Fonts remains ordinary-only after

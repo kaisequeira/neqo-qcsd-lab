@@ -1,6 +1,6 @@
 # Resource-domain study
 
-## Current status: 21 verified sessions across four modes
+## Prospective fixed-class-IP protocol: live validation pending
 
 The approved study is **50 exact resource hostnames × five traffic modes ×
 400 accepted connections = 100,000 sessions**. Each counted connection must
@@ -8,8 +8,14 @@ fetch all **20 distinct, fixed resource URLs** assigned to its hostname.
 The five modes are ordinary traffic (`undefended`), FRONT, Tamaraw, BuFLO and
 CS-BuFLO. Each mode contributes 20,000 sessions.
 
-The implementation is complete. **Three classes are live-enrolled and 21 formal
-sessions are independently verified:** ordinary 14, FRONT 2, Tamaraw 4,
+New plans freeze deterministic per-class addresses and an explicit tuple scope.
+This prospective implementation needs matching live pilots under its exact
+runtime and plan before formal credit. It does not import older sessions into
+the corrected protocol. Historical plans and receipts remain readable under
+their original acceptance contract.
+
+The published handoff checkpoint recorded **three live-enrolled classes and 21
+independently verified formal sessions:** ordinary 14, FRONT 2, Tamaraw 4,
 CS-BuFLO 1 and BuFLO 0. `formal-batch-000002.json` exports all 21.
 `verify --recover --all` passed with no errors, pending or interrupted attempts,
 deleted files or running containers. The original four-session export and
@@ -23,7 +29,8 @@ for four modes: ordinary on Fonts and Shopify, FRONT and Tamaraw on Shopify,
 and CS-BuFLO on Dictionary. BuFLO remains blocked: three actual pilots failed
 with WSL clock shifts of 22.9–30.8 ms. These failures receive no credit; no Native change was made. Missing mode pilots and transient Shopify FRONT/CS-BuFLO
 Native deadlines paused affected cells while healthy cells continued.
-SDK005 is installed and verified; the Mac ARM runtime remains untested.
+SDK005 was installed and verified at that checkpoint. These historical results
+do not establish Mac behavior or a pass for the prospective network protocol.
 
 The earlier website study's **392 accepted ordinary recordings** remain
 historical evidence under their original contracts. They do not count toward
@@ -79,6 +86,30 @@ State that scope in the frozen study plan and enforce it during capture and
 verification. Connection migration or a tuple change cannot count one QUIC
 connection twice.
 
+For new plans, `class_network` freezes all 50 selected exact hostnames, sorted
+lexically, onto the first 50 disjoint `/29` subnets of a private `/23` pool
+(default `10.232.0.0/23`). Each subnet reserves `.1` for the Docker bridge,
+`.2` for its router, and `.3` for its measured client. The address remains the
+same across worker lanes, modes and finite flights. A flight creates only its
+selected enrolled class networks and routers, after checking the entire frozen
+map against existing Docker IPAM and nondefault Linux host routes. Each client
+uses its class router as its sole default route for every mode.
+
+The frozen `tuple_uniqueness_scope` is `hostname-mode-study-root`: the SQLite
+ledger rejects a repeated observed five-tuple in the same hostname/mode cell
+within that study root. It does not assert global uniqueness across modes or
+historical study roots. Independent verification joins the observed Native
+endpoint and primary PCAP source IP to the frozen class address, plus the
+actual worker endpoint, measured scheduler container, class router and observer.
+Plan, mapping and scope hashes remain bound in receipts, ledger metadata and
+exports. BuFLO retains its additional raw kernel TX and post-veth gates.
+
+The map has exactly 50 classes. A reserve hostname outside it cannot silently
+become a 51st mapping. Authenticate its resource inventory, record the changed
+selection in a prospective plan/epoch, and run matching pilots for every
+affected class/mode. A full map/protocol change affects every cell and starts
+with zero credit in its new root; original receipts stay under their old plan.
+
 Retain the original packet capture and its hash. Join it to the frozen URL
 manifest, Native endpoint tuple, handshake/protocol evidence, request events
 and completed response records. Encrypted packets alone do not prove which
@@ -128,7 +159,7 @@ The public interface is `./qcsd-lab resource-study`, backed by
 | `export` | Export verified sessions and labels with source, mode, tuple and manifest provenance |
 
 ```sh
-./qcsd-lab resource-study prepare --root /absolute/fresh/study --source /absolute/frozen/resources.json
+./qcsd-lab resource-study prepare --root /absolute/fresh/study --source /absolute/frozen/resources.json --storage-reserve-bytes 64424509440 --class-network-pool 10.232.0.0/23
 ./qcsd-lab resource-study prepare --root /absolute/fresh/study --runtime /absolute/runtime/canonical-runtime.json --enroll --hostname RESOURCE_HOSTNAME
 ./qcsd-lab resource-study capture --root /absolute/fresh/study --runtime /absolute/runtime/canonical-runtime.json --hostname RESOURCE_HOSTNAME --workers 2 --pilot --chunk 1 --attempts 5
 ./qcsd-lab resource-study capture --root /absolute/fresh/study --runtime /absolute/runtime/canonical-runtime.json --hostname RESOURCE_HOSTNAME --workers 2 --mode undefended --chunk 1 --attempts 2
@@ -137,7 +168,20 @@ The public interface is `./qcsd-lab resource-study`, backed by
 ./qcsd-lab resource-study export --root /absolute/fresh/study --output /absolute/fresh/export.json
 ```
 
-Initial unchanged cells use the approved one-domain pilot for their mode.
+The storage reserve and class pool are creation parameters. They become frozen
+in `study.json`; repeating `prepare` with different values refuses the change.
+The default live storage reserve is 60 GiB. Use the supported preparation flags
+instead of editing the frozen plan.
+
+For this protocol, a pilot authorizes only its exact hostname, 20-resource
+workload, mode settings/policies and complete capture runtime. A single class
+pilot cannot qualify the other 49 mapped classes. Run zero-credit pilots for
+the selected class/modes, then start finite formal attempts for independently
+ready cells. Missing pilots and failed modes pause only the affected cells.
+No historical 9–10-hour qualification chain is required.
+
+Only historical pre-v2 plans let initial unchanged cells use the approved
+one-domain pilot for their mode. Every new v2 plan requires per-cell pilots.
 Changed scientific epochs require an exact-host, frozen-resource pilot for
 each affected cell. Omitting `--mode` selects all five modes; use explicit
 ordinary selection first. Use

@@ -20,6 +20,8 @@ from .capture import read_normalized_trace, split_endpoint, offload_evidence_is_
 from .resource_study_inputs import MODES, canonical_json, normalize_url, sha256_file
 
 ACCEPTANCE = "resource-domain-20-complete-h3-fresh-connection-pre-nat-v1"
+from .resource_study_network import (ACCEPTANCE as NETWORK_ACCEPTANCE, validate_receipt_network,
+                                     validate_attachment, validate_capture_join)
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -246,8 +248,11 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     root = Path(root).absolute()
     if (receipt.get("schema_version") != 1 or receipt.get("verified") is not True
             or receipt.get("record_type") != "qcsd-resource-domain-session-verification-v1"
-            or receipt.get("acceptance") != ACCEPTANCE or receipt.get("mode") not in MODES):
+            or receipt.get("acceptance") not in {ACCEPTANCE, NETWORK_ACCEPTANCE} or receipt.get("mode") not in MODES):
         raise ValueError("session verification contract differs")
+    plan = load(within(root, "study.json")) if (root / "study.json").exists() else {}
+    plan_sha256 = sha256_file(root / "study.json") if plan else None
+    binding = validate_receipt_network(plan, plan_sha256, receipt)
     files = receipt.get("files")
     if not isinstance(files, dict) or not files:
         raise ValueError("session artifact inventory is absent")
@@ -259,6 +264,11 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     if not required.issubset(paths) or any(name not in files for name in paths.values()):
         raise ValueError("required raw artifact is not bound")
     artifact = {key: within(root, relative) for key, relative in paths.items()}
+    if binding is not None:
+        if (paths.get("study") != "study.json" or files.get("study.json") != plan_sha256
+                or "class_network" not in artifact or "scheduler" not in artifact):
+            raise ValueError("persistent class session lacks its plan/topology raw join")
+        validate_attachment(plan, plan_sha256, receipt, load(artifact["class_network"]))
     enrollment = load(artifact["enrollment"])
     urls = enrollment["urls"]
     host = receipt["hostname"]
@@ -346,6 +356,14 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             or collector.get("runner_returncode") != 0 or collector.get("runner_binding_valid") is not True
             or collector.get("operationally_valid") is not True):
         raise ValueError("collector reports a failed attempt")
+    if binding is not None:
+        from .process_scheduler import capture_scheduler_runtime_evidence_valid
+        scheduler = load(artifact["scheduler"])
+        if not capture_scheduler_runtime_evidence_valid(scheduler):
+            raise ValueError("persistent class capture lacks valid raw peer scheduler evidence")
+        validate_capture_join(load(artifact["class_network"]), collector, scheduler,
+            scheduler_sha256=sha256_file(artifact["scheduler"]),
+            kernel_evidence=load(artifact["kernel_tx"]) if "kernel_tx" in artifact else None)
     views = collector["views"]
     if len(views) != 1 or not offload_evidence_is_valid(views[0]["capture_offload_evidence"], interface="eth0"):
         raise ValueError("capture interface or packet offload evidence differs")
@@ -428,7 +446,7 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("pilot did not demonstrate twenty multiplexed application streams")
     return {"verified": True, "five_tuple": five_tuple, "responses": 20,
             **overlap,
-            "packet_count": len(observed), "acceptance": ACCEPTANCE,
+            "packet_count": len(observed), "acceptance": receipt["acceptance"],
             "retained_bytes": sum(within(root, relative).stat().st_size for relative in files
                 if within(root, relative).parent == artifact["pcap"].parent
                 or artifact["pcap"].parent in within(root, relative).parents),

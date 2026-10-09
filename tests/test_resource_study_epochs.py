@@ -13,6 +13,7 @@ import pytest
 from qcsd_lab.resource_study_inputs import MODES, canonical_json, sha256_file
 from qcsd_lab.resource_study_store import StudyStore, DuplicateSession, _create
 from qcsd_lab.resource_study_verify import ACCEPTANCE
+from qcsd_lab import resource_study_network as class_network
 
 if Path(__file__).with_name("resource_study_epochs.py").is_file():
     SPEC = importlib.util.spec_from_file_location("qcsd_lab.resource_study_epochs", Path(__file__).with_name("resource_study_epochs.py"))
@@ -39,14 +40,20 @@ def roots(tmp_path, monkeypatch):
     monkeypatch.setattr(epochs, "docker_lock", nullcontext)
     monkeypatch.setattr(epochs, "_verify_preparation", lambda store, host: None)
     def create(name, *, hosts=("alpha.example", "beta.example"), resource_version=0,
-               parameter=0, native="a", readiness=True, acceptance=ACCEPTANCE):
+               parameter=0, native="a", readiness=True, acceptance=ACCEPTANCE, network_pool=None):
         root = tmp_path / name
         store = StudyStore(root)
-        store.initialize({"schema_version": 1, "record_type": "qcsd-resource-domain-study-v1",
+        plan = {"schema_version": 1, "record_type": "qcsd-resource-domain-study-v1",
             "class_count": 50, "resources_per_session": 20, "sessions_per_mode": 400,
             "modes": list(MODES), "total_sessions": 100000, "source_sha256": "e" * 64,
             "capture_position": "client-eth0-before-nat", "design": "controlled-resource-domain-http3-replay",
-            "acceptance": acceptance})
+            "acceptance": acceptance}
+        if network_pool is not None:
+            names = [*hosts, *(f"class-{index:02d}.example" for index in range(50-len(hosts)))]
+            plan.update(acceptance=class_network.ACCEPTANCE,
+                class_network=class_network.build_network_plan(names, pool=network_pool),
+                tuple_uniqueness_scope=class_network.TUPLE_SCOPE)
+        store.initialize(plan)
         for host in hosts:
             relative = f"inputs/{host}/workload.json"
             _create(root / relative, canonical_json({"host": host, "version": resource_version}))
@@ -112,6 +119,52 @@ def test_mode_epoch_selects_all_hosts_without_rewriting_unaffected_enrollment(ro
     progress = epochs.status(parent.root)
     assert len(progress["cells"]) == 10 and progress["accepted_count"] == 0
     assert progress["complete"] is progress["scientific_credit"] is False
+
+
+def test_network_epoch_changes_all_cells_without_importing_historical_credit(roots):
+    parent = roots("parent")
+    old = parent.allocate_attempt("alpha.example", "front")
+    old_path = receipt(parent, old)
+    old_bytes = old_path.read_bytes()
+    commit(parent, old_path)
+    new = roots("new", network_pool=class_network.DEFAULT_POOL)
+    value = admit(parent, new, change="network")
+    assert set(map(tuple, value["affected"])) == {(host, mode) for host in ("alpha.example", "beta.example") for mode in MODES}
+    assert all(cell["root"] == str(new.root) and "network" in cell["definition"] for cell in value["cells"])
+    assert new.status()["accepted_count"] == epochs.status(parent.root)["accepted_count"] == 0
+    assert parent.status()["accepted_count"] == 1
+    assert old_path.read_bytes() == old_bytes
+
+
+@pytest.mark.parametrize("scope", [{"affected_hostnames": ["alpha.example"]}, {"affected_modes": ["undefended"]}])
+def test_network_epoch_refuses_partial_class_or_mode_scope(roots, scope):
+    parent = roots("parent");new = roots("new", network_pool=class_network.DEFAULT_POOL)
+    with pytest.raises(ValueError, match="every admitted hostname"):
+        admit(parent, new, change="network", **scope)
+
+
+def test_new_standalone_plan_requires_exact_cell_pilot_before_reservation(roots, monkeypatch):
+    store = roots("new", network_pool=class_network.DEFAULT_POOL)
+    with pytest.raises(ValueError, match="matching mode pilot"):
+        reserve(store)
+    assert store.status()["reserved"] == 0
+    cell = epochs._cell(store, "alpha.example", "front")
+    enrollment = epochs._enrollments(store)["alpha.example"][0]
+    value = {"purpose": "pilot", "hostname": "alpha.example", "mode": "front",
+        "workload_sha256": enrollment["workload_sha256"], "runtime": enrollment["runtime"],
+        "mode_settings": enrollment["mode_settings"]["front"], "mode_policies": {},
+        "artifact_paths": {"enrollment": cell["enrollment_path"]},
+        "files": {cell["enrollment_path"]: cell["enrollment_sha256"]}}
+    _create(store.root / "pilots/alpha.example/front/controlled-boundary/session.json", canonical_json(value))
+    calls = []
+    monkeypatch.setattr(epochs, "verify_receipt", lambda root, receipt: calls.append((root, receipt)))
+    attempt = reserve(store)
+    assert calls and attempt["hostname"] == "alpha.example"
+    store.fail_attempt(attempt["attempt_id"], "controlled reservation cleanup")
+    for host, mode in [("beta.example", "front"), ("alpha.example", "undefended")]:
+        with pytest.raises(ValueError, match="matching mode pilot"):
+            reserve(store, host, mode)
+    assert store.status()["reserved"] == 0
 
 
 def test_resource_epoch_requires_and_selects_all_five_host_cells(roots):

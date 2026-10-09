@@ -17,10 +17,12 @@ from .resource_study_inputs import MODES, canonical_json, sha256_file
 from .resource_study_store import StudyStore, DuplicateSession, _create, _load, _tuple, _json, _hostname, _mode, _scientific_runtime
 from .resource_study_verify import verify_receipt, within, load
 from .resource_study_runtime import docker_lock
+from .resource_study_network import (ACCEPTANCE as NETWORK_ACCEPTANCE, mapping_sha256,
+                                     validate_network_plan)
 
 TYPE = "qcsd-resource-domain-cell-epoch-admission-v1"
 MEMBER = "qcsd-resource-domain-cell-epoch-membership-v1"
-CHANGES = {"resources", "mode", "native", "acceptance", "qualification", "add-host"}
+CHANGES = {"resources", "mode", "native", "acceptance", "qualification", "add-host", "network"}
 LIMIT = 16 * 1024 * 1024
 
 
@@ -168,6 +170,11 @@ def _cell(store, host, mode):
     definition = {"urls": enrollment["urls"], "workload_sha256": enrollment["workload_sha256"],
         "settings": settings, "policies": policies, "native": list(_scientific_runtime(enrollment["runtime"])),
         "acceptance": _plan(store)["acceptance"], "ready": enrollment.get("mode_readiness", {}).get(mode) is True}
+    plan = _plan(store)
+    assignments = validate_network_plan(plan)
+    if assignments is not None:
+        definition["network"] = {"mapping_sha256": mapping_sha256(plan), "assignment": assignments[host],
+                                 "tuple_uniqueness_scope": plan["tuple_uniqueness_scope"]}
     value = {"hostname": host, "mode": mode, "root": str(store.root),
             "study_sha256": store._file("study.json")[1]["sha256"], "enrollment_path": relative,
             "enrollment_sha256": digest, "definition": definition, "definition_sha256": _sha(definition)}
@@ -345,6 +352,8 @@ def _scope(cells, hostnames, modes, change):
             raise ValueError("resource changes affect all five modes of each requested hostname")
     if change == "mode" and (not modes or selected_hosts != hosts):
         raise ValueError("mode parameter changes affect every admitted hostname in that mode")
+    if change == "network" and (selected_hosts != hosts or selected_modes != set(MODES)):
+        raise ValueError("class network changes affect every admitted hostname and all five modes")
     if change != "add-host" and not selected_hosts.issubset(hosts):
         raise ValueError("epoch scope includes an unadmitted hostname")
     if not selected_hosts or not selected_modes or not selected_modes.issubset(MODES):
@@ -359,7 +368,13 @@ def _check_change(before, after, change):
     configuration = ({key: value for key, value in old["settings"].items() if key != "policies"}
                      != {key: value for key, value in new["settings"].items() if key != "policies"})
     acceptance = old["acceptance"] != new["acceptance"] or old["policies"] != new["policies"]
-    changes = {"resources": resources, "native": native, "mode": configuration, "acceptance": acceptance}
+    network = old.get("network") != new.get("network")
+    if (change == "network" and old["policies"] == new["policies"]
+            and new["acceptance"] == NETWORK_ACCEPTANCE):
+        # The v2 acceptance name declares this exact prospective topology fix.
+        acceptance = False
+    changes = {"resources": resources, "native": native, "mode": configuration,
+               "acceptance": acceptance, "network": network}
     if any(changed for name, changed in changes.items() if name != change):
         raise ValueError("epoch changes scientific inputs outside its declared change")
     if change == "qualification":
@@ -423,6 +438,9 @@ def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_
                              if key not in {"urls", "workload_sha256", "ready"}} for key, cell in cells.items() if key[1] == mode]
                 current = {key: value for key, value in candidate["definition"].items()
                            if key not in {"urls", "workload_sha256", "ready"}}
+                for profile in [*profiles, current]:
+                    if "network" in profile:
+                        profile["network"] = {key: value for key, value in profile["network"].items() if key != "assignment"}
                 if not profiles or any(profile != current for profile in profiles):
                     raise ValueError("late hostname has ambiguous or stale mode/runtime defaults")
             else:
@@ -508,6 +526,8 @@ def reserve(store, hostname, mode, operation, *, purpose="formal"):
         raise ValueError("unregistered reservation purpose")
     parent = _membership(store)
     if parent is None:
+        if purpose == "formal" and validate_network_plan(store.plan()) is not None:
+            _pilot(store, _cell(store, _hostname(hostname), _mode(mode)))
         return operation()
     with _lock(parent.root):
         records = _records(parent)
@@ -529,6 +549,9 @@ def credit(store, receipt_path, operation):
     """Store first-credit hook: active scope, pilot and ancestry tuple fence."""
     parent = _membership(store)
     if parent is None:
+        if validate_network_plan(store.plan()) is not None:
+            receipt = store._receipt(receipt_path)[0]
+            _pilot(store, _cell(store, receipt["hostname"], receipt["mode"]))
         return operation()
     with _lock(parent.root):
         path = Path(receipt_path)

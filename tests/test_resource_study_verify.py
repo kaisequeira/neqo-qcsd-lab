@@ -276,6 +276,23 @@ def replace_raw(root, receipt, role, value):
     receipt["files"][path.name] = inputs.sha256_file(path)
 
 
+def test_native_endpoint_cannot_use_an_ip_different_from_the_class_bound_tuple(early_receipt):
+    # Exercise the shared raw Native endpoint join before reconciliation. This
+    # historical-shaped fixture does not assert a prospective proof pass.
+    root, receipt, calls = early_receipt
+    receipt["five_tuple"][0] = "10.232.0.3"
+    with pytest.raises(ValueError, match="observed five-tuple differs"):
+        verifier.verify_receipt(root, receipt)
+    assert not calls
+
+
+def test_primary_pcap_cannot_borrow_a_class_tuple_from_receipt_metadata(tmp_path):
+    # PCAP contains LOCAL, independently of the expected frozen class source.
+    expected = ["10.232.0.3", *TUPLE[1:]]
+    with pytest.raises(ValueError, match="outside the recorded five-tuple"):
+        decode(tmp_path, capture_bytes(), expected)
+
+
 @pytest.mark.parametrize("change", ["nineteen", "duplicate-url", "other-host"])
 def test_malformed_twenty_url_enrollment_refuses_before_native_or_fidelity(early_receipt, change):
     root, receipt, calls = early_receipt

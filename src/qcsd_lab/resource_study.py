@@ -17,10 +17,14 @@ from .resource_study_inputs import (MODES, candidate_catalogue, canonical_json, 
 from .resource_study_store import StudyStore, DuplicateSession
 from .resource_study_verify import ACCEPTANCE, load, verify_receipt
 from .resource_study_storage import require_storage, storage_snapshot
+from .resource_study_network import (ACCEPTANCE as NETWORK_ACCEPTANCE, TUPLE_SCOPE,
+                                     DEFAULT_POOL, build_network_plan, receipt_binding,
+                                     validate_network_plan)
 
 RECORD = "qcsd-resource-domain-study-v1"
 CHUNK = 20
 INPUT_LIMIT = 16 * 1024 * 1024
+DEFAULT_STORAGE_RESERVE_BYTES = 60 * 1024 ** 3
 
 
 def coordinator_provenance() -> dict:
@@ -29,6 +33,7 @@ def coordinator_provenance() -> dict:
     names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
              "resource_study_verify.py", "resource_study_inputs.py", "resource_study_storage.py",
              "resource_study_supplements.py", "resource_study_epochs.py",
+             "resource_study_network.py",
              "fidelity.py", "capture.py", "process_scheduler.py")
     return {"record_type": "qcsd-resource-study-host-code-v1",
             "files": {name: sha256_file(source / name) for name in names},
@@ -74,15 +79,21 @@ def runtime_identity(canonical: Path) -> dict[str, Any]:
             "source": value["source"], "canonical_sha256": sha256_file(canonical)}
 
 
-def initialize(source: Path, root: Path) -> dict[str, Any]:
+def initialize(source: Path, root: Path, *, storage_reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
+               class_network_pool=DEFAULT_POOL) -> dict[str, Any]:
     catalogue = candidate_catalogue(source)
     raw = authenticated_input(source, catalogue["source_sha256"])
+    if type(storage_reserve_bytes) is not int or storage_reserve_bytes < 2 * 1024 ** 3:
+        raise ValueError("study storage reserve must be an integer of at least two GiB")
+    primary = [row["hostname"] for row in catalogue["candidates"] if row["eligible"]][:50]
+    network = build_network_plan(primary, pool=class_network_pool)
     plan = {"schema_version": 1, "record_type": RECORD, "class_count": 50,
             "resources_per_session": 20, "sessions_per_mode": 400, "modes": list(MODES),
             "total_sessions": 100000, "chunk_sessions": CHUNK,
-            "capture_position": "client-eth0-before-nat", "acceptance": ACCEPTANCE,
+            "capture_position": "client-eth0-before-nat", "acceptance": NETWORK_ACCEPTANCE,
+            "class_network": network, "tuple_uniqueness_scope": TUPLE_SCOPE,
             "source_sha256": catalogue["source_sha256"],
-            "storage_reserve_bytes": 2 * 1024 ** 3,
+            "storage_reserve_bytes": storage_reserve_bytes,
             "design": "controlled-resource-domain-http3-replay",
             "created_at": datetime.now(timezone.utc).isoformat()}
     store = StudyStore(root)
@@ -253,6 +264,18 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         "mode_settings": enrollment.get("mode_settings", {}).get(attempt["mode"], {}),
         "artifact_paths": paths, "files": files,
         "completed_at": datetime.now(timezone.utc).isoformat()}
+    plan = StudyStore(root).plan()
+    if validate_network_plan(plan) is not None:
+        receipt["acceptance"] = NETWORK_ACCEPTANCE
+        receipt["study_sha256"] = sha256_file(root / "study.json")
+        receipt["tuple_uniqueness_scope"] = TUPLE_SCOPE
+        receipt["class_network"] = receipt_binding(plan, receipt["study_sha256"], attempt["hostname"])
+        paths["study"] = "study.json"
+        paths["class_network"] = relative(destination / "class-network.json")
+        paths["scheduler"] = relative(destination / "diagnostics/scheduler-runtime-evidence.json")
+        files["study.json"] = receipt["study_sha256"]
+        if paths["class_network"] not in files or paths["scheduler"] not in files:
+            raise ValueError("capture has no bound persistent class topology/scheduler observation")
     facts = verify_receipt(root, receipt)
     # Scratch removal is allowed only after raw verification succeeds. Failed
     # attempts retain it for diagnosis; successful receipts bind the retained
@@ -308,7 +331,9 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
         raise ValueError("unregistered or duplicate traffic setting")
     store = StudyStore(root)
     from .resource_study_epochs import active_cell
-    storage = require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
+    plan = store.plan()
+    fixed_network = validate_network_plan(plan) is not None
+    storage = require_storage(root, reserve_bytes=plan.get("storage_reserve_bytes", 2 * 1024 ** 3))
     enrolled = [e for e in store.enrolled() if hostnames is None or e["hostname"] in hostnames]
     if not enrolled:
         raise ValueError("live enrollment is required before capture")
@@ -321,20 +346,36 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             if not selected:
                 continue
             ready = False
+            proven_hosts = set()
             for path in sorted((root / "pilots").glob(f"*/{mode}/*/session.json")):
                 candidate = load(path)
                 if (candidate.get("purpose") == "pilot" and candidate.get("mode") == mode
                         and candidate.get("runtime", {}).get("client_sha256")
                         == runtime.get("client_sha256")):
+                    if fixed_network and (candidate.get("runtime") != runtime
+                            or candidate.get("hostname") not in {e["hostname"] for e in selected}):
+                        continue
                     verify_receipt(root, candidate)
                     proven = load(root / candidate["artifact_paths"]["enrollment"])
+                    if fixed_network:
+                        current = next(e for e in selected if e["hostname"] == candidate["hostname"])
+                        if (proven != current or candidate.get("mode_settings") != current.get("mode_settings", {}).get(mode)
+                                or candidate.get("mode_policies") != current.get("mode_policies", {}).get(mode)):
+                            continue
+                        proven_hosts.add(candidate["hostname"])
+                        continue
                     if any(e.get("mode_settings", {}).get(mode) != proven.get("mode_settings", {}).get(mode)
                             or e.get("mode_policies", {}).get(mode) != proven.get("mode_policies", {}).get(mode)
                             for e in selected):
                         continue
                     ready = True
                     break
-            if not ready:
+            if fixed_network:
+                missing_hosts = {e["hostname"] for e in selected} - proven_hosts
+                if missing_hosts:
+                    missing_pilots.extend({"hostname": host, "mode": mode} for host in sorted(missing_hosts))
+                    pilot_blocked.update((host, mode) for host in missing_hosts)
+            elif not ready:
                 missing_pilots.append(mode)
                 pilot_blocked.update((e["hostname"], mode) for e in selected)
         ready_cells = [(e["hostname"], mode) for mode in modes for e in enrolled
@@ -345,7 +386,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             raise ValueError("requested modes need a focused pilot or live admission: capture --pilot --chunk 1")
     if backend is None:
         from .resource_study_runtime import CaptureRuntime
-        backend = CaptureRuntime(root, runtime, workers)
+        backend = CaptureRuntime(root, runtime, workers, hostnames=[e["hostname"] for e in enrolled])
     stop = stop or threading.Event()
     paused, busy, completed_pilots, attempts = set(pilot_blocked), set(), set(), 0
     allocation_errors = []
@@ -359,7 +400,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
         return next((r["accepted"] for r in store.status()["cells"]
                      if (r["hostname"], r["mode"]) == cell), 0)
 
-    def chunk(worker, cell, allowance):
+    def capture_chunk(worker, cell, allowance):
         host, mode = cell
         attempted, credited = 0, 0
         while attempted < allowance and not stop.is_set() and accepted(cell) < 400:
@@ -428,6 +469,14 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                         continue
                 return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
         return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": False}
+
+    def chunk(worker, cell, allowance):
+        try:
+            return capture_chunk(worker, cell, allowance)
+        finally:
+            release = getattr(backend, "release", None)
+            if release is not None:
+                release(worker)
 
     with backend, ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}
@@ -499,10 +548,13 @@ def parser():
             child.add_argument("--hostname", action="append", default=[])
         if action == "prepare":
             child.add_argument("--source", type=Path)
+            child.add_argument("--storage-reserve-bytes", type=int,
+                               help="freeze reserve in the new plan (default sixty GiB); cannot alter an existing plan")
+            child.add_argument("--class-network-pool", help="freeze an RFC1918 /23 for fifty disjoint class /29s")
             child.add_argument("--inventory", type=Path, action="append", default=[], help="explicitly add a Native URL inventory as a reserve pool")
             child.add_argument("--enroll", action="store_true")
             child.add_argument("--epoch-of", type=Path)
-            child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host"))
+            child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host", "network"))
             child.add_argument("--affected-hostname", action="append", default=[])
             child.add_argument("--affected-mode", choices=MODES, action="append", default=[])
         elif action == "capture":
@@ -527,9 +579,15 @@ def main(argv=None):
             if not (root / "study.json").exists():
                 if args.source is None:
                     raise ValueError("first prepare needs --source")
-                initialize(args.source.absolute(), root)
+                initialize(args.source.absolute(), root,
+                    storage_reserve_bytes=args.storage_reserve_bytes if args.storage_reserve_bytes is not None else DEFAULT_STORAGE_RESERVE_BYTES,
+                    class_network_pool=args.class_network_pool or DEFAULT_POOL)
             elif args.source is not None and sha256_file(args.source) != StudyStore(root).plan()["source_sha256"]:
                 raise ValueError("existing study has a different frozen supplied source")
+            plan = StudyStore(root).plan()
+            if (args.storage_reserve_bytes is not None and args.storage_reserve_bytes != plan.get("storage_reserve_bytes")
+                    or args.class_network_pool is not None and args.class_network_pool != plan.get("class_network", {}).get("pool")):
+                raise ValueError("existing immutable study reserve/network pool cannot change")
             if args.inventory:
                 add_inventories(root, [p.absolute() for p in args.inventory])
             if args.enroll:

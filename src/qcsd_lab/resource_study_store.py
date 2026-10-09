@@ -23,6 +23,9 @@ import threading
 from urllib.parse import urlsplit
 import uuid
 
+from .resource_study_network import (mapping_sha256, validate_network_plan,
+                                     validate_receipt_network)
+
 
 MODES = ("undefended", "front", "tamaraw", "buflo", "cs-buflo")
 CLASSES = 50
@@ -284,6 +287,7 @@ class StudyStore:
             raise ValueError("resource study requires all five canonical modes")
         if any(plan.get(key, False) not in (False, 0) for key in ("scientific_credit", "accepted_count")):
             raise ValueError("new study cannot import credit")
+        validate_network_plan(plan)
         raw = _json(plan)
         self.root.mkdir(parents=True, exist_ok=True)
         _unlinked(self.root, directory=True)
@@ -329,21 +333,39 @@ class StudyStore:
             if row is not None and row[0] != _sha(raw):
                 raise ValueError("ledger is bound to different study bytes")
             connection.execute("INSERT OR IGNORE INTO meta VALUES('study_sha256',?)", (_sha(raw),))
+            if validate_network_plan(plan) is not None:
+                for key, expected in (("tuple_uniqueness_scope", plan["tuple_uniqueness_scope"]),
+                                      ("class_network_sha256", mapping_sha256(plan))):
+                    previous = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+                    if previous is not None and previous[0] != expected:
+                        raise ValueError("ledger persistent network/tuple scope binding changed")
+                    connection.execute("INSERT OR IGNORE INTO meta VALUES(?,?)", (key, expected))
         return self.plan()
 
     def plan(self) -> dict:
         raw, observation = self._file("study.json")
+        value = _load(raw)
+        assignments = validate_network_plan(value)
         with self._transaction() as connection:
             row = connection.execute("SELECT value FROM meta WHERE key='study_sha256'").fetchone()
             if row is None or row[0] != observation["sha256"] or observation["mode"] != "0444":
                 raise ValueError("immutable study/ledger binding changed")
-        return _load(raw)
+            if assignments is not None:
+                for key, expected in (("tuple_uniqueness_scope", value["tuple_uniqueness_scope"]),
+                                      ("class_network_sha256", mapping_sha256(value))):
+                    bound = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+                    if bound is None or bound[0] != expected:
+                        raise ValueError("ledger persistent network/tuple scope binding changed")
+        return value
 
     def enroll(self, enrollment: dict) -> dict:
-        self.plan()
+        plan = self.plan()
         if not isinstance(enrollment, dict):
             raise ValueError("enrollment must be an object")
         hostname = _hostname(enrollment.get("hostname"))
+        assignments = validate_network_plan(plan)
+        if assignments is not None and hostname not in assignments:
+            raise ValueError("enrollment hostname is outside the frozen fifty-class network mapping")
         urls = enrollment.get("urls")
         if (not isinstance(urls, list) or len(urls) != RESOURCES
             or any(type(url) is not str for url in urls) or len(set(urls)) != RESOURCES):
@@ -483,6 +505,11 @@ class StudyStore:
             raise ValueError("verification receipt changes its closed identity")
         _hostname(value["hostname"]); _mode(value["mode"])
         five_tuple = _tuple(value["five_tuple"])
+        # Recovery may call this while holding its write transaction. Public
+        # entry points already validate the ledger/plan binding; never nest a
+        # second BEGIN IMMEDIATE merely to inspect these immutable plan bytes.
+        plan_raw, plan_observation = self._file("study.json")
+        validate_receipt_network(_load(plan_raw), plan_observation["sha256"], value)
         inventory = self._files(value["files"])
         if relative in inventory:
             raise ValueError("verification receipt cannot hash itself")
@@ -509,6 +536,8 @@ class StudyStore:
         else:
             raise ValueError("verification receipt is outside its exact attempt/corpus slot")
         for name, digest in value["files"].items():
+            if name == "study.json" and "class_network" in value and digest == self._file("study.json")[1]["sha256"]:
+                continue
             if not name.startswith(prefix) and (name not in held or digest != held[name]["sha256"]):
                 raise ValueError("verification borrows unregistered or foreign attempt files")
         if "workload_sha256" in value and value["workload_sha256"] != enrolled["workload_sha256"]:
@@ -589,7 +618,7 @@ class StudyStore:
 
     def status(self) -> dict:
         """Indexed verified-at-commit counts; does not reread every raw capture."""
-        self.plan()
+        plan = self.plan()
         with self._transaction() as connection:
             hosts = [row[0] for row in connection.execute("SELECT hostname FROM classes ORDER BY hostname")]
             counts = {(row[0], row[1]): row[2] for row in connection.execute("SELECT hostname,mode,count(*) FROM accepted GROUP BY hostname,mode")}
@@ -602,13 +631,17 @@ class StudyStore:
         cells = [{"hostname": host, "mode": mode, "accepted": counts.get((host, mode), 0), "target": SESSIONS}
             for host in hosts for mode in MODES]
         accepted = sum(counts.values())
-        return {"session_target": TARGET, "class_target": CLASSES, "enrolled_count": len(hosts),
+        value = {"session_target": TARGET, "class_target": CLASSES, "enrolled_count": len(hosts),
             "accepted_count": accepted, "accepted_by_mode": {mode: sum(count for (host, selected), count in counts.items() if selected == mode) for mode in MODES},
             "cells": cells, "attempts": states, "reserved": states.get("reserved", 0),
             "captured": states.get("captured", 0), "unverified": states.get("unverified", 0),
             "failed": states.get("failed", 0), "duplicate": states.get("duplicate", 0),
             "measurements_by_mode": self._measurement_summary(observations),
             "complete": len(hosts) == CLASSES and len(cells) == CLASSES * len(MODES) and all(cell["accepted"] == SESSIONS for cell in cells)}
+        if validate_network_plan(plan) is not None:
+            value.update(acceptance=plan["acceptance"], tuple_uniqueness_scope=plan["tuple_uniqueness_scope"],
+                         class_network_sha256=mapping_sha256(plan))
+        return value
 
     @staticmethod
     def _measurement_summary(observations):
@@ -665,7 +698,7 @@ class StudyStore:
         return {"interrupted": interrupted, "pending_verification": pending, "accepted_count": self.status()["accepted_count"], "files_deleted": 0}
 
     def export_manifest(self, output: Path) -> dict:
-        self.plan()
+        plan = self.plan()
         with self._transaction() as connection:
             refs = []
             for row in connection.execute("SELECT * FROM accepted ORDER BY hostname,mode,slot"):
@@ -685,5 +718,8 @@ class StudyStore:
             "accepted_count": len(refs), "complete": complete, "scientific_credit": complete,
             "scope": "independently-verified-session-receipts; raw-files-verified-at-commit",
             "accepted": refs, "exported_at": _now()}
+        if validate_network_plan(plan) is not None:
+            value.update(acceptance=plan["acceptance"], class_network=plan["class_network"],
+                         class_network_sha256=mapping_sha256(plan), tuple_uniqueness_scope=plan["tuple_uniqueness_scope"])
         _create(Path(output).absolute(), _json(value))
         return value
