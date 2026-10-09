@@ -72,10 +72,20 @@ def test_real_shaped_init_zero_tick_is_valid(guardian, monkeypatch):
 
 
 @pytest.mark.parametrize("pid", [2, 503, 12345])
-def test_zero_tick_remains_invalid_for_operation_owners(guardian, monkeypatch, pid):
+def test_zero_tick_is_a_valid_process_record_for_other_pids(guardian, monkeypatch, pid):
     mock_stat(monkeypatch, proc_stat(pid))
-    with pytest.raises(guardian.GuardianError, match="start time is invalid"):
-        guardian._process_record(pid)
+    assert guardian._process_record(pid) == ("S", 0, 1, 1, 0)
+
+
+def test_zero_tick_cannot_issue_an_operation_anchor(guardian, monkeypatch):
+    mock_stat(monkeypatch, proc_stat(12345))
+    with pytest.raises(guardian.GuardianError, match="operation start time is invalid"):
+        guardian._process_start_time(12345)
+
+
+def test_positive_operation_anchor_stays_exact(guardian, monkeypatch):
+    mock_stat(monkeypatch, proc_stat(12345, start=200))
+    assert guardian._process_start_time(12345) == 200
 
 
 @pytest.mark.parametrize("field", ["start", "parent", "group", "session"])
@@ -131,12 +141,14 @@ def test_positive_user_owner_is_still_fully_inspected(guardian, monkeypatch):
     assert closes == [91]
 
 
-def test_zero_tick_user_owner_still_fails_closed(guardian, monkeypatch):
+def test_zero_tick_user_owner_predates_positive_config_threshold(guardian, monkeypatch):
     mock_stat(monkeypatch, proc_stat(12345))
     closes = census_setup(guardian, monkeypatch, owner=503)
-    monkeypatch.setattr(guardian.time, "sleep", lambda value: None)
-    with pytest.raises(guardian.GuardianError, match="possible Buildx config user PID 12345"):
-        census(guardian, 12345)
+
+    def forbidden_reader(*args):
+        pytest.fail("a process born before the config cannot own its later paths")
+
+    assert census(guardian, 12345, reader=forbidden_reader) is False
     assert closes == [91]
 
 

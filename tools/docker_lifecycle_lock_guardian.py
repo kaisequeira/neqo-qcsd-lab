@@ -370,7 +370,12 @@ def _fail(message: str) -> NoReturn:
 
 
 def _process_start_time(pid: int) -> int:
-    return _process_identity(pid)[3]
+    start_time = _process_identity(pid)[3]
+    # Operation anchors require a positive birth tick even though a census
+    # must be able to read unrelated processes that began at tick zero.
+    if start_time <= 0:
+        _fail("guardian operation start time is invalid")
+    return start_time
 
 
 def _process_identity(pid: int) -> tuple[int, int, int, int]:
@@ -396,12 +401,12 @@ def _process_record(pid: int) -> tuple[str, int, int, int, int]:
     if (
         len(state) != 1
         or min(parent, process_group, session, start_time) < 0
-        # Linux init may start in the first clock tick. It is still subject to
-        # the census's stable pidfd, owner and before/after identity checks.
-        # Operation owners and every other PID retain the positive-tick gate.
-        or (start_time == 0 and pid != 1)
     ):
         _fail("guardian process start time is invalid")
+    # Linux reports unsigned clock ticks since boot; early tasks, including
+    # kthreadd, can legitimately start at tick zero. Zero remains an exact
+    # identity value, subject to the same pidfd, owner and before/after checks.
+    # Buildx operation authority keeps its separate strictly positive gate.
     return state, parent, process_group, session, start_time
 
 
@@ -5050,6 +5055,10 @@ def _bind_child_identity(pid: int, command: tuple[str, ...]) -> ChildIdentity:
     while True:
         try:
             state, _, process_group, session, start_time = _process_record(pid)
+            # Census records may legitimately have zero ticks; a newly issued
+            # operation-owned child anchor must retain its positive birth fence.
+            if start_time <= 0:
+                _fail("inner qcsd operation start time is invalid")
             owner = _process_uid(pid)
         except GuardianError:
             if time.monotonic() >= deadline:
