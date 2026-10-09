@@ -23,7 +23,7 @@ from .resource_study_audit import ReceiptReplay, verification_workers as _verifi
 
 TYPE = "qcsd-resource-domain-cell-epoch-admission-v1"
 MEMBER = "qcsd-resource-domain-cell-epoch-membership-v1"
-CHANGES = {"resources", "mode", "native", "acceptance", "qualification", "add-host", "network"}
+CHANGES = {"resources", "mode", "native", "acceptance", "qualification", "add-host", "network", "replace-unused-class"}
 LIMIT = 16 * 1024 * 1024
 
 
@@ -120,7 +120,8 @@ def _bind(store, parent):
             previous = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
             if previous is not None and previous[0] != expected:
                 raise ValueError("epoch membership ledger binding cannot change")
-            connection.execute("INSERT OR IGNORE INTO meta VALUES(?,?)", (key, expected))
+            if previous is None:
+                connection.execute("INSERT INTO meta VALUES(?,?)", (key, expected))
 
 
 def _plan(store):
@@ -202,17 +203,42 @@ def _records(parent):
     if cached is not None and cached[0] == head:
         if cached[1] != stamps:
             raise ValueError("immutable epoch admission metadata changed")
+        if cached[2][-1].get("class_transition") is not None:
+            from .resource_study_lineage import enforce_selected
+            enforce_selected(parent, cached[2])
         return cached[2]
     records, previous = [], None
     for sequence in range(authority["sequence"] + 1):
         value = _read(parent.root / "epoch-admissions" / f"{sequence:06d}.json")
-        if (set(value) != {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells", "exclusions"}
-                or value["record_type"] != TYPE or value["sequence"] != sequence
+        stable = value.get("record_type") == "qcsd-resource-domain-cell-epoch-admission-v3"
+        expected_keys = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells", "exclusions"}
+        if stable:
+            expected_keys.update({"class_transition", "write_fences"})
+        if (set(value) != expected_keys
+                or value["record_type"] not in {TYPE, "qcsd-resource-domain-cell-epoch-admission-v3"} or value["sequence"] != sequence
                 or value["previous_sha256"] != previous
                 or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
                 or not isinstance(value["cells"], list) or not isinstance(value["exclusions"], list)
                 or value["change"] not in (CHANGES | {"initial"})):
             raise ValueError("epoch admission ancestry or fields changed")
+        prior_transition = records[-1].get("class_transition") if records else None
+        if stable:
+            from .resource_study_lineage import validate_transition, INCLUDED
+            if prior_transition is None:
+                validate_transition(parent, records, value["class_transition"])
+                old_cells = {_key(c): c for c in records[-1]["cells"]}
+                new_cells = {_key(c): c for c in value["cells"]}
+                added = set(new_cells) - set(old_cells)
+                if (value["change"] != "replace-unused-class" or not added
+                        or any(k[0] != INCLUDED for k in added)
+                        or value["affected"] != [list(k) for k in sorted(added)]
+                        or any(new_cells.get(k) != c for k, c in old_cells.items())
+                        or value["exclusions"] != records[-1]["exclusions"]):
+                    raise ValueError("stable transition changes historical cells or exclusions")
+            elif value["class_transition"] != prior_transition or value["change"] == "replace-unused-class":
+                raise ValueError("stable class transition cannot change or repeat")
+        elif prior_transition is not None or value["change"] == "replace-unused-class":
+            raise ValueError("stable admission cannot downgrade to historical authority")
         keys = [_key(cell) for cell in value["cells"]]
         if len(keys) != len(set(keys)) or len({key[0] for key in keys}) > 50:
             raise ValueError("epoch admission repeats cells or exceeds fifty hosts")
@@ -229,26 +255,37 @@ def _records(parent):
     if previous != authority["sha256"]:
         raise ValueError("epoch admission head SHA256 changed")
     parent._epoch_records_cache = (head, stamps, records)
+    if records[-1].get("class_transition") is not None:
+        from .resource_study_lineage import enforce_selected
+        enforce_selected(parent, records)
     return records
 
 
-def _publish(parent, records, cells, change, affected, exclusions=None):
+def _publish(parent, records, cells, change, affected, exclusions=None, class_transition=None, write_fences=None):
     value = {"record_type": TYPE, "sequence": len(records), "previous_sha256": _sha(records[-1]) if records else None,
              "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": change,
              "affected": [list(key) for key in sorted(affected)], "cells": [cells[key] for key in sorted(cells)],
              "exclusions": exclusions if exclusions is not None else []}
+    transition = class_transition if class_transition is not None else records[-1].get("class_transition") if records else None
+    if transition is not None:
+        value.update(record_type="qcsd-resource-domain-cell-epoch-admission-v3", class_transition=transition,
+                     write_fences=write_fences if write_fences is not None else records[-1]["write_fences"])
     path = parent.root / "epoch-admissions" / f"{len(records):06d}.json"
     if path.exists():
         if _read(path) != value:
             raise ValueError("a different uncommitted admission already owns this sequence")
     else:
         _create(path, canonical_json(value))
-    with parent._transaction() as connection:
+    scope = nullcontext()
+    if transition is not None:
+        from .resource_study_lineage import publication_scope
+        scope = publication_scope(parent, records, value)
+    with scope, parent._transaction() as connection:
         expected = None if not records else canonical_json({"sequence": len(records) - 1, "sha256": _sha(records[-1])}).decode()
         current = connection.execute("SELECT value FROM meta WHERE key='epoch_head'").fetchone()
         if (None if current is None else current[0]) != expected:
             raise ValueError("epoch parent changed during admission")
-        connection.execute("INSERT OR REPLACE INTO meta VALUES('epoch_head',?)",
+        connection.execute("INSERT INTO meta VALUES('epoch_head',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (canonical_json({"sequence": len(records), "sha256": _sha(value)}).decode(),))
     return value
 
@@ -315,7 +352,7 @@ def _verify_preparation(store, host, *, enrollment=None):
         enrollment = _enrollments(store)[host][0]
     else:
         if (not isinstance(enrollment, dict) or enrollment.get("hostname") != host
-                or "resource_selection" not in enrollment
+                or not ({"resource_selection", "class_selection"} & enrollment.keys())
                 or not isinstance(enrollment.get("files"), dict) or not enrollment["files"]):
             raise ValueError("provisional preparation lacks an exact host/file inventory")
         for relative, digest in enrollment["files"].items():
@@ -324,6 +361,9 @@ def _verify_preparation(store, host, *, enrollment=None):
     if selection_proof_present(enrollment):
         from .resource_study_selection import validate_selection_proof
         validate_selection_proof(store.root, enrollment)
+    if "class_selection" in store.plan() or "class_selection" in enrollment:
+        from .resource_study_lineage import validate_enrollment
+        validate_enrollment(store, enrollment)
     prepared_path = within(store.root, enrollment["paths"]["prepared_workload"])
     prepared = load(prepared_path)
     preparation = prepared["preparation"]
@@ -369,22 +409,25 @@ def _scope(cells, hostnames, modes, change):
         raise ValueError("mode parameter changes affect every admitted hostname in that mode")
     if change == "network" and (selected_hosts != hosts or selected_modes != set(MODES)):
         raise ValueError("class network changes affect every admitted hostname and all five modes")
-    if change != "add-host" and not selected_hosts.issubset(hosts):
+    if change not in {"add-host", "replace-unused-class"} and not selected_hosts.issubset(hosts):
         raise ValueError("epoch scope includes an unadmitted hostname")
     if not selected_hosts or not selected_modes or not selected_modes.issubset(MODES):
         raise ValueError("epoch scope is empty or has an unregistered mode")
     selected = {(host, mode) for host in selected_hosts for mode in selected_modes}
-    if change != "add-host" and not selected.issubset(cells):
+    if change not in {"add-host", "replace-unused-class"} and not selected.issubset(cells):
         raise ValueError("epoch scope includes an unadmitted hostname/mode cell")
     return selected
 
 
-def _check_added_cell(cells, candidate):
+def _check_added_cell(cells, candidate, *, transition=None):
     """Admit only an absent cell with current per-mode and per-class inputs."""
     host, mode = _key(candidate)
     if (host, mode) in cells:
         raise ValueError("add-host cannot replace an already admitted hostname/mode cell")
     current = candidate["definition"]
+    if transition is not None:
+        from .resource_study_lineage import validate_cells
+        validate_cells([*cells.values(), candidate], transition)
     for cell in cells.values():
         if cell["hostname"] != host:
             continue
@@ -399,6 +442,8 @@ def _check_added_cell(cells, candidate):
         value = {key: item for key, item in definition.items() if key not in {"urls", "workload_sha256", "ready"}}
         if "network" in value:
             value["network"] = {key: item for key, item in value["network"].items() if key != "assignment"}
+            if transition is not None:
+                value["network"].pop("mapping_sha256", None)
         return value
     profiles = [profile(cell["definition"]) for cell in cells.values() if cell["mode"] == mode]
     if not profiles or any(value != profile(current) for value in profiles):
@@ -459,6 +504,21 @@ def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_
             _publish(parent, [], initial, "initial", initial)
             records = _records(parent)
         cells = {_key(cell): cell for cell in records[-1]["cells"]}
+        transition = records[-1].get("class_transition")
+        if change == "replace-unused-class":
+            from .resource_study_lineage import unused, validate_transition, TRANSITION, INCLUDED
+            if transition is not None or hostnames != [INCLUDED] or "class_selection" not in new_plan:
+                raise ValueError("stable transition requires one first-reserve MAL class and a fresh stable-map child")
+            transition = {"record_type": TRANSITION, "class_selection": new_plan["class_selection"],
+                          "class_network": new_plan["class_network"], "member_proof": unused(parent, records)}
+            validate_transition(parent, records, transition)
+        elif "class_selection" in new_plan and transition is None:
+            raise ValueError("stable-map child requires explicit replace-unused-class admission")
+        if transition is not None and any(host not in transition["class_network"]["assignments"] for host in hostnames):
+            raise ValueError("epoch hostname is outside committed selected50")
+        if transition is not None:
+            from .resource_study_lineage import no_retired_history
+            no_retired_history(new)
         previous_roots = {cell["root"] for record in records for cell in record["cells"]}
         if str(new.root) in previous_roots and change != "add-host":
             raise ValueError("scientific epoch requires a fresh independent root")
@@ -468,7 +528,7 @@ def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_
             if change != "add-host" and connection.execute("SELECT 1 FROM attempts").fetchone():
                 raise ValueError("new epoch cannot contain pre-admission session attempts")
         affected = _scope(cells, hostnames, modes, change)
-        if change == "add-host":
+        if change in {"add-host", "replace-unused-class"}:
             if not hostnames:
                 raise ValueError("add-host requires explicit hostnames and absent hostname/mode cells")
             if affected.intersection(cells):
@@ -485,8 +545,10 @@ def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_
         updated = dict(cells)
         for host, mode in sorted(affected):
             candidate = _cell(new, host, mode)
-            if change == "add-host":
-                _check_added_cell(cells, candidate)
+            if change in {"add-host", "replace-unused-class"}:
+                if transition is not None and candidate["hostname"] == "cdn.myanimelist.net" and not candidate["definition"]["ready"]:
+                    raise ValueError("reserve mode lacks actual preparation qualification")
+                _check_added_cell(cells, candidate, transition=transition)
             else:
                 _check_change(cells[(host, mode)], candidate, change)
             updated[(host, mode)] = candidate
@@ -498,7 +560,95 @@ def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_
         _idle(stores)
         exclusions = _freeze_exclusions(parent, records, cells, affected)
         _bind(new, parent)
-        return _publish(parent, records, updated, change, affected, exclusions)
+        fences = None
+        if transition is not None:
+            from .resource_study_lineage import prepare_fences
+            fences = prepare_fences(parent, records, updated, transition)
+        return _publish(parent, records, updated, change, affected, exclusions,
+                        class_transition=transition, write_fences=fences)
+
+
+def check_enrollment_selection(store, hostnames):
+    """Prospective selection refusal before preparation publishes any inputs."""
+    plan = store.plan()
+    if "class_selection" in plan and any(h not in plan["class_network"]["assignments"] for h in hostnames):
+        raise ValueError("hostname is outside prospective selected50")
+    parent = _membership(store)
+    if parent is not None:
+        with _lock(parent.root):
+            records = _records(parent)
+            transition = records[-1].get("class_transition") if records else None
+            if transition is not None and any(h not in transition["class_network"]["assignments"] for h in hostnames):
+                raise ValueError("hostname is retired from committed selected50")
+
+
+def enroll_class(store, hostname, operation):
+    """Serialize enrollment against retirement, including original roots."""
+    parent = _membership(store)
+    if parent is None:
+        return operation()
+    with _lock(parent.root):
+        records = _records(parent)
+        transition = records[-1].get("class_transition") if records else None
+        if transition is not None and hostname not in transition["class_network"]["assignments"]:
+            raise ValueError("hostname is retired from committed selected50")
+        if transition is None:
+            return operation()
+        from .resource_study_lineage import write_scope
+        with write_scope(store, parent, records, [(hostname, "", "")], {("classes", "INSERT")}):
+            return operation()
+
+
+def mutate_attempt(store, identifier, operation):
+    """Guard state/measurement writes without granting reserve or credit rights."""
+    if not (store.root / "class-write-fence.json").exists():
+        return operation()  # Historical behavior; a damaged trigger still denies SQL.
+    if getattr(store._stable_write_local, "scope", None) is not None:
+        return operation()  # A narrower enclosing reserve/credit scope owns cleanup.
+    parent = _membership(store)
+    if parent is None:
+        return operation()
+    with _lock(parent.root):
+        records = _records(parent)
+        if not records or "class_transition" not in records[-1]:
+            return operation()
+        with store._transaction() as connection:
+            row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (identifier,)).fetchone()
+        if row is None:
+            raise ValueError("stable state change has no reserved attempt")
+        _active(store, row["hostname"], row["mode"], records)
+        from .resource_study_lineage import write_scope
+        with write_scope(store, parent, records, [(row["hostname"], row["mode"], identifier)],
+                         {("attempts", "UPDATE"), ("measurements", "INSERT"), ("measurements", "UPDATE")}):
+            return operation()
+
+
+def recover_ledger(store, operation):
+    if not (store.root / "class-write-fence.json").exists():
+        return operation()
+    parent = _membership(store)
+    if parent is None:
+        return operation()
+    with _lock(parent.root):
+        records = _records(parent)
+        if not records or "class_transition" not in records[-1]:
+            return operation()
+        with store._transaction() as connection:
+            rows = connection.execute("SELECT * FROM attempts WHERE state IN ('reserved','captured','unverified')").fetchall()
+        for row in rows:
+            _active(store, row["hostname"], row["mode"], records)
+        from .resource_study_lineage import write_scope
+        with write_scope(store, parent, records,
+                         [(r["hostname"], r["mode"], r["attempt_id"]) for r in rows], {("attempts", "UPDATE")}):
+            return operation()
+
+
+def stable_lineage_active(store):
+    parent = _membership(store)
+    if parent is None:
+        return False
+    records = _records(parent)
+    return bool(records and records[-1].get("class_transition") is not None)
 
 
 def _active(store, host, mode, records):
@@ -513,6 +663,8 @@ def active_cell(store, host, mode):
     """Filter scheduler cells; direct Store hooks still enforce this boundary."""
     parent = _membership(store)
     if parent is None:
+        if "class_selection" in store.plan():
+            raise ValueError("stable-map child has no committed parent admission")
         return True
     with _lock(parent.root):
         records = _records(parent)
@@ -570,6 +722,8 @@ def reserve(store, hostname, mode, operation, *, purpose="formal"):
         raise ValueError("unregistered reservation purpose")
     parent = _membership(store)
     if parent is None:
+        if "class_selection" in store.plan():
+            raise ValueError("stable-map child has no committed parent admission")
         if purpose == "formal" and validate_network_plan(store.plan()) is not None:
             _pilot(store, _cell(store, _hostname(hostname), _mode(mode)))
         return operation()
@@ -578,21 +732,29 @@ def reserve(store, hostname, mode, operation, *, purpose="formal"):
         cell = _active(store, _hostname(hostname), _mode(mode), records)
         if purpose == "formal":
             _pilot(store, cell)
-        attempt = operation()
-        try:
-            _create(store.root / attempt["path"] / "epoch-purpose.json", canonical_json({
-                "purpose": purpose, "attempt_id": attempt["attempt_id"], "admission_sha256": _sha(records[-1]),
-                "definition_sha256": cell["definition_sha256"]}))
-        except BaseException:
-            store.fail_attempt(attempt["attempt_id"], "epoch purpose publication failed", kind="filesystem")
-            raise
-        return attempt
+        scope = nullcontext()
+        if "class_transition" in records[-1]:
+            from .resource_study_lineage import write_scope
+            scope = write_scope(store, parent, records, [(hostname, mode, None)],
+                {("attempts", "INSERT"), ("attempts", "UPDATE"), ("measurements", "INSERT"), ("measurements", "UPDATE")})
+        with scope:
+            attempt = operation()
+            try:
+                _create(store.root / attempt["path"] / "epoch-purpose.json", canonical_json({
+                    "purpose": purpose, "attempt_id": attempt["attempt_id"], "admission_sha256": _sha(records[-1]),
+                    "definition_sha256": cell["definition_sha256"]}))
+            except BaseException:
+                store.fail_attempt(attempt["attempt_id"], "epoch purpose publication failed", kind="filesystem")
+                raise
+            return attempt
 
 
 def credit(store, receipt_path, operation):
     """Store first-credit hook: active scope, pilot and ancestry tuple fence."""
     parent = _membership(store)
     if parent is None:
+        if "class_selection" in store.plan():
+            raise ValueError("stable-map child has no committed parent admission")
         if validate_network_plan(store.plan()) is not None:
             receipt = store._receipt(receipt_path)[0]
             _pilot(store, _cell(store, receipt["hostname"], receipt["mode"]))
@@ -616,11 +778,17 @@ def credit(store, receipt_path, operation):
                 or intent.get("definition_sha256") != cell["definition_sha256"]):
             raise ValueError("epoch credit changes its original formal reservation")
         _pilot(store, cell)
-        five_tuple = _json(_tuple(receipt["five_tuple"])).decode()
-        if five_tuple in _excluded(parent, records, (host, mode)):
-            store.fail_attempt(receipt["attempt_id"], "five-tuple already credited in an ancestor epoch", kind="duplicate")
-            raise DuplicateSession("five-tuple already credited in an ancestor epoch")
-        return operation()
+        scope = nullcontext()
+        if "class_transition" in records[-1]:
+            from .resource_study_lineage import write_scope
+            scope = write_scope(store, parent, records, [(host, mode, receipt["attempt_id"])],
+                {("attempts", "UPDATE"), ("accepted", "INSERT"), ("measurements", "INSERT"), ("measurements", "UPDATE")})
+        with scope:
+            five_tuple = _json(_tuple(receipt["five_tuple"])).decode()
+            if five_tuple in _excluded(parent, records, (host, mode)):
+                store.fail_attempt(receipt["attempt_id"], "five-tuple already credited in an ancestor epoch", kind="duplicate")
+                raise DuplicateSession("five-tuple already credited in an ancestor epoch")
+            return operation()
 
 
 def status(parent, *, deep=False, verification_workers=1):
@@ -679,11 +847,19 @@ def status(parent, *, deep=False, verification_workers=1):
         hosts = {cell["hostname"] for cell in cells}
         complete = (len(hosts) == 50 and len(cells) == 250 and all(cell["accepted"] == 400 for cell in cells)
                     and accepted_count == 100000)
-        return {"record_type": "qcsd-resource-domain-cell-epoch-composition-v1", "parent_study_sha256": parent._file("study.json")[1]["sha256"],
+        result = {"record_type": "qcsd-resource-domain-cell-epoch-composition-v1", "parent_study_sha256": parent._file("study.json")[1]["sha256"],
                 "admission_sha256": _sha(records[-1]), "cells": cells, "accepted": refs, "accepted_count": accepted_count,
                 "total_sessions": 100000, "complete": complete, "raw_deep_verified": deep,
                 "scientific_credit": deep and complete, "scope": "active-cell-root-only; no mixed scientific epochs",
                 "status_authority": "raw-deep-verified" if deep else "selected-ledger-verified-at-commit-index"}
+        if records[-1].get("class_transition") is not None:
+            from .resource_study_lineage import COMPOSITION, digest
+            transition = records[-1]["class_transition"]
+            result.update(record_type=COMPOSITION, class_selection_sha256=digest(transition["class_selection"]),
+                          class_transition_sha256=digest(transition),
+                          selected_hostnames=transition["class_selection"]["selected_hostnames"],
+                          scope="active-cell-root-only; verified stable class-map lineage")
+        return result
 
 
 def export_manifest(parent, output, *, verification_workers=1):

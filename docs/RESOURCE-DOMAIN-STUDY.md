@@ -110,6 +110,116 @@ selection in a prospective plan/epoch, and run matching pilots for every
 affected class/mode. A full map/protocol change affects every cell and starts
 with zero credit in its new root; original receipts stay under their old plan.
 
+### Prospective unused-class replacement with stable addresses
+
+The separately versioned stable-map implementation supports one narrow
+transition: replace **unselected `static.xoilacxba.tv`** with the first declared
+reserve, **`cdn.myanimelist.net`**. This is a new exact-host class, with its own
+preparation and pilots. It is not an alias or a relabelled Xoilac receipt.
+This branch is implemented and host-tested; it has no issued live admission
+or reserve eligibility merely from those tests.
+The final frozen 50-host selection is global for every defense. A class cannot
+be replaced for one mode independently. Future WT/TM acquisition must use this
+same global final class set under its reviewed mode protocol; the current
+five-mode, 100,000-session target remains unchanged.
+
+The new map retains all 49 other assignments byte-for-byte and gives MAL only
+the former Xoilac slot. It freezes the original source SHA, a separate selected
+50-host manifest, the authenticated literal MAL inventory and the predecessor
+map/study/admission hashes. Initialization and admission inspect every root in
+the parent's historical admissions. Xoilac and MAL must never have been selected,
+enrolled, attempted as sessions or accepted there. Failed preparation evidence
+is retained. Participating flights must be closed without cleanup errors.
+Any other replacement, chained map migration or changed retained address is
+refused by this deliberately limited version.
+
+Freeze a candidate child separately from parent admission:
+
+```sh
+./qcsd-lab resource-study prepare --root "$NEW_HEALTHY_ROOT" \
+  --stable-map-parent "$PARENT" --inventory "$MAL_INVENTORY"
+./qcsd-lab resource-study prepare --root "$NEW_HEALTHY_ROOT" \
+  --runtime "$CANONICAL_NATIVE2" --enroll --hostname cdn.myanimelist.net
+```
+
+The second command must retain and independently replay the actual complete,
+nonempty Native HTTP/3 GETs for all 20 selected URLs before enrollment. Ordered
+URLs and all source occurrences must match the frozen inventory. The candidate
+root cannot allocate a session or receive formal credit while unadmitted.
+The existing four healthy mode profiles can then be selected explicitly:
+
+```sh
+./qcsd-lab resource-study prepare --root "$NEW_HEALTHY_ROOT" \
+  --epoch-of "$PARENT" --epoch-change replace-unused-class \
+  --affected-hostname cdn.myanimelist.net \
+  --affected-mode undefended --affected-mode front \
+  --affected-mode tamaraw --affected-mode cs-buflo
+```
+
+Use a separate fresh candidate root and the existing Native3 runtime for BuFLO.
+Its initialization reuses the identical committed stable selection, and its
+prepared ordered URLs and workload must equal its sibling modes. Add its absent
+BuFLO cell with the existing `add-host` change after full preparation. An unready
+reserve mode is refused; it does not reset or block unaffected ready cells.
+Each new reserve mode needs its own exact-host, exact-input zero-credit live
+pilot before formal capture. None of these commands replace the operational
+keeper, finite-budget, storage, clock or cleanup supervision requirements.
+
+Parent admissions and compositions use explicit `v3` records after the
+transition. Admission explicitly installs a versioned SQLite write fence in
+every historical member ledger and the new member. This additive schema change
+preserves all existing rows and binds exact before/after schema hashes, trigger
+DDL, historical-row hash, selected50 SHA and predecessor admission head in an
+immutable per-root receipt. Every v3 admission binds the complete cumulative
+root-to-fence receipt map. No read or import installs or repairs a fence.
+
+The exact 15 INSERT/UPDATE/DELETE triggers protect classes, attempts, accepted
+rows, measurements and meta. Historical HOST connections lack their required SQL
+function and cannot commit those writes. New connections deny writes by default;
+only the existing parent-locked enrollment, active-cell reservation, state,
+recovery and full raw-credit hooks grant their narrowly named row/action scope.
+Deletion and accepted-row rewriting remain denied. A reservation consumes one
+new attempt UUID, and its cleanup scope cannot mutate another attempt. Schema,
+trigger, selection or head tampering refuses further operations. Historical
+read-only raw receipt verification remains filesystem-only and does not need
+the new function.
+
+Meta writes are denied except for exact parent-locked prospective `epoch_head`
+publication. That separate scope validates the already immutable next admission,
+all fence refs and both the old/new head JSON values. It cannot change any other
+meta key or delete a row. An identical existing member binding is read without
+an SQL INSERT; new member bindings precede fence installation. The installation
+before/after row hash includes meta. Publishing the reviewed new head is the
+explicit later change; all other existing meta rows remain unchanged.
+
+This is an explicit quiescent operational migration: protect all historical
+ledgers with query-only keepers and own the parent/runtime locks before the
+reviewed transition. Complete preparation, eligibility and preservation checks
+precede fence installation. A crash or exception during the multi-ledger fence
+installation can leave a partial, fail-closed migration; retain it for explicit
+reviewed recovery. There is no automatic rollback or on-read healing. Old HOST
+enrollment code publishes its immutable enrollment file before its SQL INSERT,
+so a refused old writer can leave an orphan file. Retain it as failed
+nonadmission, with zero credit; the retired-class absence check then refuses
+operation until that incident has an explicitly reviewed resolution. Do not
+delete the orphan or treat it as an enrollment. Stop using old writers after
+the transition, including for otherwise healthy cells.
+
+Old cells retain their exact
+root, study/map SHA, definition and accepted rows; their receipts are verified
+against their original plans. Only a verified stable lineage permits different
+global map SHAs in the composition. Native, settings, policy, resource and
+measured address comparisons remain strict. The physical acceptance contract,
+raw PCAP/Native/router/scheduler gates and tuple scope are unchanged. The HOST
+coordinator records its new code separately and can reuse the original immutable
+SDK/Native runtime: no new collector code is claimed inside that image.
+
+This does not establish that every possible Xoilac URL is unusable. A newly
+discovered literal same-host pool can still use the ordinary inventory/enrollment
+route before any reserve transition. If MAL fails, preserve that failure;
+automatic fallback, arbitrary replacement and quota reduction are not supported
+by this one-transition implementation.
+
 Retain the original packet capture and its hash. Join it to the frozen URL
 manifest, Native endpoint tuple, handshake/protocol evidence, request events
 and completed response records. Encrypted packets alone do not prove which

@@ -37,11 +37,20 @@ def build_network_plan(hostnames, *, pool=DEFAULT_POOL):
 def validate_network_plan(plan, *, require=False):
     """Return validated assignments, or None for an unchanged historical plan."""
     present = {key for key in ("class_network", "tuple_uniqueness_scope") if key in plan}
+    if "class_selection" in plan and present != {"class_network", "tuple_uniqueness_scope"}:
+        raise ValueError("stable selection requires its complete map and tuple scope")
     if not present and not require and plan.get("acceptance") != ACCEPTANCE:
         return None
     if present != {"class_network", "tuple_uniqueness_scope"}:
         raise ValueError("study requires frozen class network mapping and tuple uniqueness scope")
     value = plan["class_network"]
+    if isinstance(value, dict) and value.get("record_type") == "qcsd-resource-study-class-network-v3":
+        if plan.get("acceptance") != ACCEPTANCE or plan["tuple_uniqueness_scope"] != TUPLE_SCOPE:
+            raise ValueError("stable map cannot change physical acceptance or tuple scope")
+        from .resource_study_lineage import validate_map
+        return validate_map(plan)
+    if "class_selection" in plan:
+        raise ValueError("historical mapping cannot gain stable class selection authority")
     if (plan.get("acceptance") != ACCEPTANCE or plan["tuple_uniqueness_scope"] != TUPLE_SCOPE
             or not isinstance(value, dict) or set(value) != {"record_type", "pool", "assignments"}
             or value.get("record_type") != NETWORK_RECORD or not isinstance(value.get("assignments"), dict)):
@@ -61,7 +70,7 @@ def receipt_binding(plan, study_sha256, hostname):
     assignments = validate_network_plan(plan, require=True)
     if hostname not in assignments:
         raise ValueError("hostname has no frozen class network assignment")
-    return {"record_type": NETWORK_RECORD, "hostname": hostname,
+    return {"record_type": plan["class_network"]["record_type"], "hostname": hostname,
             "mapping_sha256": mapping_sha256(plan), "assignment": assignments[hostname],
             "study_sha256": study_sha256, "tuple_uniqueness_scope": TUPLE_SCOPE}
 

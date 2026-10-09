@@ -171,6 +171,7 @@ class StudyStore:
         self._enrollment_cache = {}
         self._enrollment_lock = threading.RLock()
         self._measurement_schema_ready = False
+        self._stable_write_local = threading.local()
 
     def _relative(self, value):
         if type(value) is not str or not value or "\\" in value:
@@ -248,10 +249,20 @@ class StudyStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA synchronous=FULL")
+        fenced = ((self.root / "class-write-fence.json").exists()
+                  or (self.root / "class-write-fence.json").is_symlink()
+                  or connection.execute("SELECT 1 FROM sqlite_master WHERE name GLOB 'qcsd_class_v3_*'").fetchone() is not None)
+        if fenced:
+            try:
+                from .resource_study_lineage import register_fence_connection
+                register_fence_connection(self, connection)
+            except BaseException:
+                connection.close()
+                raise
         # Additive index migration also supports a stopped ledger initialized
         # before measurements existed. It imports no timing or credit claims.
         with self._enrollment_lock:
-            if not self._measurement_schema_ready:
+            if not self._measurement_schema_ready and not fenced:
                 connection.execute("""CREATE TABLE IF NOT EXISTS measurements(
                     attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id),
                     hostname TEXT NOT NULL, mode TEXT NOT NULL, outcome TEXT NOT NULL,
@@ -346,6 +357,9 @@ class StudyStore:
         raw, observation = self._file("study.json")
         value = _load(raw)
         assignments = validate_network_plan(value)
+        if "class_selection" in value:
+            from .resource_study_lineage import validate_context
+            validate_context(self, value)
         with self._transaction() as connection:
             row = connection.execute("SELECT value FROM meta WHERE key='study_sha256'").fetchone()
             if row is None or row[0] != observation["sha256"] or observation["mode"] != "0444":
@@ -359,9 +373,18 @@ class StudyStore:
         return value
 
     def enroll(self, enrollment: dict) -> dict:
+        if not isinstance(enrollment, dict):
+            raise ValueError("enrollment must be an object")
+        from .resource_study_epochs import enroll_class
+        return enroll_class(self, _hostname(enrollment.get("hostname")), lambda: self._enroll(enrollment))
+
+    def _enroll(self, enrollment: dict) -> dict:
         plan = self.plan()
         if not isinstance(enrollment, dict):
             raise ValueError("enrollment must be an object")
+        if "class_selection" in plan or "class_selection" in enrollment:
+            from .resource_study_lineage import validate_enrollment
+            validate_enrollment(self, enrollment)
         hostname = _hostname(enrollment.get("hostname"))
         assignments = validate_network_plan(plan)
         if assignments is not None and hostname not in assignments:
@@ -458,6 +481,11 @@ class StudyStore:
             "attempt_id": identifier, "path": path}
 
     def fail_attempt(self, attempt_id, reason, kind="failed", *, wall_seconds=None) -> None:
+        from .resource_study_epochs import mutate_attempt
+        return mutate_attempt(self, attempt_id, lambda: self._fail_attempt(
+            attempt_id, reason, kind, wall_seconds=wall_seconds))
+
+    def _fail_attempt(self, attempt_id, reason, kind="failed", *, wall_seconds=None) -> None:
         if type(reason) is not str or not reason or type(kind) is not str or not kind:
             raise ValueError("failure needs a reason and kind")
         wall_seconds = _wall(wall_seconds)
@@ -482,6 +510,10 @@ class StudyStore:
 
     def mark_captured(self, attempt_id) -> None:
         """Record capture completion without granting verification or credit."""
+        from .resource_study_epochs import mutate_attempt
+        return mutate_attempt(self, attempt_id, lambda: self._mark_captured(attempt_id))
+
+    def _mark_captured(self, attempt_id) -> None:
         with self._transaction() as connection:
             changed = connection.execute("UPDATE attempts SET state='captured',updated_at=? WHERE attempt_id=? AND state='reserved'",
                 (_now(), attempt_id)).rowcount
@@ -668,6 +700,10 @@ class StudyStore:
 
     def recover(self) -> dict:
         """After worker quiescence, retain captured evidence and fail interruptions."""
+        from .resource_study_epochs import recover_ledger
+        return recover_ledger(self, self._recover)
+
+    def _recover(self) -> dict:
         self.plan()
         interrupted, pending = [], []
         with self._transaction() as connection:

@@ -49,6 +49,21 @@ authority is SQLite plus immutable receipts, with incremental verification.
 It does not import the old fixed-target history or require all five modes to
 be ready before an independently ready mode starts.
 
+The prospective HOST-only
+[stable-map reserve branch](docs/RESOURCE-DOMAIN-STUDY.md#prospective-unused-class-replacement-with-stable-addresses)
+implements one prospective unselected-Xoilac-to-MAL transition, preserving
+all49 other assignments and unchanged cells in their original roots. Its
+versioned source/selection/map lineage and host controls grant no live reserve
+admission, pilot or recording credit. Actual preparation and affected pilots
+remain required; old runtime and receipt bytes are unchanged. An explicit
+quiescent transition also adds hash-bound, denied-by-default SQLite write-fence
+triggers to participating ledgers. Existing rows remain unchanged; no reader
+migrates or repairs a ledger automatically. Old HOST writers cannot commit
+enrollment, attempt, credit or measurement changes after this transition.
+Meta is also fenced, with only exact parent-locked prospective admission-head
+publication allowed. The final selected50 is global for all defenses, including
+future WT/TM acquisition; no per-mode class substitution is authorized.
+
 The verified Native D2 implementation and cached client can be reused for
 Lab-only changes through a matching public SDK/runtime binding. SDK005 is
 verified at canonical SHA-256

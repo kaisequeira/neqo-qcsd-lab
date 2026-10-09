@@ -28,7 +28,7 @@ INPUT_LIMIT = 16 * 1024 * 1024
 DEFAULT_STORAGE_RESERVE_BYTES = 60 * 1024 ** 3
 
 
-def coordinator_provenance(*, resource_selection=False) -> dict:
+def coordinator_provenance(*, resource_selection=False, class_selection=False) -> dict:
     """Record the host code actually coordinating and verifying this attempt."""
     source = Path(__file__).parent
     names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
@@ -38,6 +38,8 @@ def coordinator_provenance(*, resource_selection=False) -> dict:
              "fidelity.py", "capture.py", "process_scheduler.py")
     if resource_selection:
         names += ("resource_study_selection.py",)
+    if class_selection:
+        names += ("resource_study_lineage.py",)
     return {"record_type": "qcsd-resource-study-host-code-v1",
             "files": {name: sha256_file(source / name) for name in names},
             "installed_native_and_sdk": "recorded separately in runtime"}
@@ -196,6 +198,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            resource_selection: Path | None = None, resource_selection_sha256: str | None = None) -> dict:
     selection_requested = _selection_request(resource_selection, resource_selection_sha256, hostnames)
     store = StudyStore(root)
+    from .resource_study_epochs import check_enrollment_selection
+    check_enrollment_selection(store, hostnames)
     selection = binding = None
     if selection_requested:
         from .resource_study_selection import load_selection, freeze_selection
@@ -215,6 +219,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         candidate = candidates.get(hostname)
         if candidate is None or not candidate["eligible"]:
             raise ValueError("hostname is not an eligible frozen candidate")
+        if "class_selection" in store.plan() and hostname not in store.plan()["class_network"]["assignments"]:
+            raise ValueError("hostname is outside the prospective selected50")
         if selection is not None:
             candidate = deepcopy(candidate)
             candidate["urls"] = list(selection["manifest"]["urls"])
@@ -235,6 +241,12 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
                 enrollment = bind_preparation(root, enrollment, binding, attempt / "job.json")
                 validate_selection_proof(root, enrollment)
                 from .resource_study_epochs import _verify_preparation
+                _verify_preparation(store, hostname, enrollment=enrollment)
+            if "class_selection" in store.plan():
+                from .resource_study_lineage import bind_enrollment, validate_enrollment
+                from .resource_study_epochs import _verify_preparation
+                enrollment = bind_enrollment(store, enrollment)
+                validate_enrollment(store, enrollment)
                 _verify_preparation(store, hostname, enrollment=enrollment)
             store.enroll(enrollment)
             completed.add(hostname)
@@ -282,6 +294,11 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         from .resource_study_selection import selection_artifact_paths, validate_selection_proof
         validate_selection_proof(root, enrollment)
         paths.update(selection_artifact_paths(enrollment))
+    if "class_selection" in enrollment:
+        from .resource_study_lineage import MANIFEST, INVENTORY, SOURCE, validate_enrollment
+        validate_enrollment(StudyStore(root), enrollment)
+        paths.update(class_selection=MANIFEST, class_selection_inventory=INVENTORY,
+                     class_selection_source=SOURCE)
     from .capture import split_endpoint
     endpoint = load(destination / "neqo/run.json")["endpoints"][0]
     local_ip, local_port = split_endpoint(endpoint["local_address"])
@@ -308,6 +325,10 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         "artifact_paths": paths, "files": files,
         "completed_at": datetime.now(timezone.utc).isoformat()}
     plan = StudyStore(root).plan()
+    from .resource_study_epochs import stable_lineage_active
+    if "class_selection" in plan or stable_lineage_active(StudyStore(root)):
+        receipt["coordinator_provenance"] = coordinator_provenance(
+            resource_selection="resource_selection" in enrollment, class_selection=True)
     if validate_network_plan(plan) is not None:
         receipt["acceptance"] = NETWORK_ACCEPTANCE
         receipt["study_sha256"] = sha256_file(root / "study.json")
@@ -594,13 +615,15 @@ def parser():
             child.add_argument("--storage-reserve-bytes", type=int,
                                help="freeze reserve in the new plan (default sixty GiB); cannot alter an existing plan")
             child.add_argument("--class-network-pool", help="freeze an RFC1918 /23 for fifty disjoint class /29s")
+            child.add_argument("--stable-map-parent", type=Path,
+                               help="freeze a fresh Xoilac-to-MAL candidate root retaining49 class assignments; no parent admission")
             child.add_argument("--inventory", type=Path, action="append", default=[], help="explicitly add a Native URL inventory as a reserve pool")
             child.add_argument("--enroll", action="store_true")
             child.add_argument("--resource-selection", type=Path,
                                help="immutable exact twenty-URL selection from the authenticated class pool")
             child.add_argument("--resource-selection-sha256", help="SHA-256 of the exact selection manifest bytes")
             child.add_argument("--epoch-of", type=Path)
-            child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host", "network"))
+            child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host", "network", "replace-unused-class"))
             child.add_argument("--affected-hostname", action="append", default=[])
             child.add_argument("--affected-mode", choices=MODES, action="append", default=[])
         elif action == "capture":
@@ -625,6 +648,19 @@ def main(argv=None):
     root = args.root.absolute()
     try:
         if args.action == "prepare":
+            stable_initialized = False
+            if args.stable_map_parent is not None:
+                if (len(args.inventory) != 1 or args.class_network_pool is not None
+                        or args.resource_selection is not None or args.resource_selection_sha256 is not None
+                        or args.epoch_of is not None or args.epoch_change is not None
+                        or args.affected_hostname or args.affected_mode):
+                    raise ValueError("stable-map initialization needs one reserve inventory and a separate admission operation")
+                from .resource_study_lineage import initialize as initialize_stable
+                if args.source is not None and sha256_file(args.source) != StudyStore(args.stable_map_parent).plan()["source_sha256"]:
+                    raise ValueError("stable-map original source differs from its parent")
+                initialize_stable(args.stable_map_parent.absolute(), root, args.inventory[0].absolute(),
+                    storage_reserve_bytes=args.storage_reserve_bytes if args.storage_reserve_bytes is not None else DEFAULT_STORAGE_RESERVE_BYTES)
+                stable_initialized = True
             selection_requested = _selection_request(args.resource_selection, args.resource_selection_sha256, args.hostname)
             if selection_requested:
                 if not args.enroll or args.runtime is None:
@@ -650,7 +686,7 @@ def main(argv=None):
             if (args.storage_reserve_bytes is not None and args.storage_reserve_bytes != plan.get("storage_reserve_bytes")
                     or args.class_network_pool is not None and args.class_network_pool != plan.get("class_network", {}).get("pool")):
                 raise ValueError("existing immutable study reserve/network pool cannot change")
-            if args.inventory:
+            if args.inventory and not stable_initialized:
                 add_inventories(root, [p.absolute() for p in args.inventory])
             if args.enroll:
                 if args.runtime is None or not args.hostname:

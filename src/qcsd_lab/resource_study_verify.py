@@ -314,6 +314,16 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("persistent class session lacks its plan/topology raw join")
         validate_attachment(plan, plan_sha256, receipt, load(artifact["class_network"]))
     enrollment = load(artifact["enrollment"])
+    if ("class_selection" in plan or "class_selection" in enrollment
+            or {"class_selection", "class_selection_inventory", "class_selection_source"}.intersection(paths)):
+        from .resource_study_lineage import validate_receipt_enrollment, MANIFEST, INVENTORY, SOURCE
+        validate_receipt_enrollment(root, plan, enrollment)
+        if ("class_selection" not in plan
+                or paths.get("class_selection") != MANIFEST
+                or paths.get("class_selection_inventory") != INVENTORY
+                or paths.get("class_selection_source") != SOURCE
+                or any(files.get(name) != enrollment["files"].get(name) for name in (MANIFEST, INVENTORY, SOURCE))):
+            raise ValueError("receipt stable selection context differs from enrollment/plan")
     urls = enrollment["urls"]
     host = receipt["hostname"]
     if (enrollment["hostname"] != host or len(urls) != 20 or len(set(urls)) != 20
