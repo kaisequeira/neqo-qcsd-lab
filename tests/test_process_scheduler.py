@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -606,6 +607,114 @@ def test_scheduler_runtime_receipt_proves_portable_guest_scope(tmp_path: Path) -
         "host-kernel and hypervisor physical-CPU placement or isolation"
         in evidence["unavailable_scope"]
     )
+
+
+@pytest.mark.parametrize("filename", ["status", "stat"])
+@pytest.mark.parametrize("error_type,error_number", [
+    (FileNotFoundError, errno.ENOENT),
+    (ProcessLookupError, errno.ESRCH),
+])
+def test_scheduler_runtime_receipt_handles_task_exit_during_procfs_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str,
+    error_type: type[OSError], error_number: int,
+) -> None:
+    monitor, proc_root, _cpu_stat = _monitor(tmp_path)
+    _write_task(proc_root, tgid=88, tid=88, process_group=88, cpus="11", name="exiting-helper")
+    target = proc_root / "88/task/88" / filename
+    original_read = Path.read_text
+    reads = 0
+
+    def read_with_task_exit(path: Path, *args: object, **kwargs: object) -> str:
+        nonlocal reads
+        if path == target:
+            reads += 1
+            raise error_type(error_number, "task exited", str(path))
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_with_task_exit)
+    evidence = monitor.finish()
+
+    assert reads >= 1
+    assert evidence["guest_task_monitor"]["scan_errors"] == []
+    assert evidence["guest_task_monitor"]["expected_client_cpu_task_observed"] is True
+    assert capture_scheduler_runtime_evidence_valid(evidence)
+
+
+@pytest.mark.parametrize("filename", ["status", "stat"])
+@pytest.mark.parametrize("error_type,error_number", [
+    (PermissionError, errno.EACCES),
+    (OSError, errno.EIO),
+])
+def test_scheduler_runtime_receipt_still_rejects_other_procfs_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str,
+    error_type: type[OSError], error_number: int,
+) -> None:
+    monitor, proc_root, _cpu_stat = _monitor(tmp_path)
+    _write_task(proc_root, tgid=88, tid=88, process_group=88, cpus="11", name="unreadable-helper")
+    target = proc_root / "88/task/88" / filename
+    original_read = Path.read_text
+
+    def failed_read(path: Path, *args: object, **kwargs: object) -> str:
+        if path == target:
+            raise error_type(error_number, "injected read failure", str(path))
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", failed_read)
+    evidence = monitor.finish()
+
+    errors = evidence["guest_task_monitor"]["scan_errors"]
+    assert len(errors) == 1
+    assert f"cannot inspect task 88: {error_type.__name__}" in errors[0]
+    assert evidence["valid"] is False
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
+
+
+def test_task_exit_does_not_erase_an_observed_cpu_competitor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monitor, proc_root, _cpu_stat = _monitor(tmp_path)
+    _write_task(proc_root, tgid=88, tid=88, process_group=88, cpus="10", name="exiting-competitor")
+    monitor._scan_once()
+    target = proc_root / "88/task/88/status"
+    original_read = Path.read_text
+
+    def read_after_exit(path: Path, *args: object, **kwargs: object) -> str:
+        if path == target:
+            raise ProcessLookupError(errno.ESRCH, "task exited", str(path))
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_after_exit)
+    evidence = monitor.finish()
+
+    assert evidence["guest_task_monitor"]["scan_errors"] == []
+    assert evidence["guest_task_monitor"]["unexpected_client_cpu_tasks"][0]["tid"] == 88
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
+
+
+def test_task_exit_does_not_supply_missing_client_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root, cpu_stat = _fixture(tmp_path)
+    monitor = CaptureSchedulerMonitor(
+        proc_root=proc_root, cgroup_cpu_stat_paths=(cpu_stat,),
+        interval_us=1_000_000, host_partition=_host_partition(),
+    )
+    _write_task(proc_root, tgid=77, tid=77, process_group=77, cpus="10", name="unobserved-client")
+    target = proc_root / "77/task/77/status"
+    original_read = Path.read_text
+
+    def read_after_exit(path: Path, *args: object, **kwargs: object) -> str:
+        if path == target:
+            raise ProcessLookupError(errno.ESRCH, "task exited", str(path))
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_after_exit)
+    monitor.process_started(77)
+    evidence = monitor.finish()
+
+    assert evidence["guest_task_monitor"]["scan_errors"] == []
+    assert evidence["guest_task_monitor"]["expected_client_cpu_task_observed"] is False
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
 
 
 def test_kernel_timed_scheduler_receipts_both_protected_cpus(
