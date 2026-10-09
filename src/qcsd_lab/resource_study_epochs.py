@@ -312,7 +312,7 @@ def _verify_preparation(store, host):
     prepared_path = within(store.root, enrollment["paths"]["prepared_workload"])
     prepared = load(prepared_path)
     preparation = prepared["preparation"]
-    base = within(store.root, enrollment["preparation_dir"])
+    base = _regular(store._relative(enrollment["preparation_dir"]), directory=True)
     run_path = within(base, preparation["actual_preparation_run"])
     input_path, completed_path = base / "preparation-get/input.json", base / "preparation-get/completed.json"
     for path in (prepared_path, run_path, input_path, completed_path):

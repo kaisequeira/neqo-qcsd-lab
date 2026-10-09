@@ -132,6 +132,110 @@ def controlled_pilot(store, host, mode):
     _create(store.root / "pilots" / host / mode / "controlled-boundary/session.json", canonical_json(value))
 
 
+@pytest.fixture
+def retained_preparation(tmp_path):
+    """Synthetic complete GET artifacts checked by the actual preparation reader."""
+    from qcsd_lab import resource_study_native as native
+    def create(*, directory_change=None, proof_change=None):
+        store = StudyStore(tmp_path / "study")
+        store.initialize({"schema_version":1,"record_type":"qcsd-resource-domain-study-v1",
+            "class_count":50,"resources_per_session":20,"sessions_per_mode":400,
+            "modes":list(MODES),"total_sessions":100000,"source_sha256":"e"*64,
+            "capture_position":"client-eth0-before-nat","design":"controlled-resource-domain-http3-replay",
+            "acceptance":ACCEPTANCE})
+        host = "alpha.example"
+        urls = [f"https://{host}/resource-{i}?id={i}" for i in range(20)]
+        base = store.root / "enrollment-attempts/alpha.example/attempt-000001/prepared"
+        manifest = native._manifest(host,urls,require_twenty=True)
+        _create(base / "preparation-get/input.json",canonical_json(manifest))
+        rows = [{"resource_id":r["id"],"url":r["url"],"request_headers":r["headers"],
+            "response_headers":[[":status","200"],["content-length","2000"]],
+            "status":200,"content_length":2000,"bytes":2000,"body_sha256":"b"*64,
+            "request_stream_bytes":150,"complete":True,"outcome":"succeeded"} for r in manifest["resources"]]
+        run = {"method":"GET","request_policy":"as-defined","seed":0,
+            "workload_hash_sha256":sha256_file(base / "preparation-get/input.json"),
+            "max_response_bytes":native.MAX_RESPONSE_BYTES,"completion_status":"complete",
+            "error":None,"error_class":None,"terminal_evidence_render_errors":[],"migration_commit":"c"*40,
+            "application_response_policy":"http-2xx-only-v1","application_workload_source_hash_sha256":None,
+            "chaff_manifest_hash_sha256":None,"chaff_responses":[],"resolved_configuration":{"defense":{"kind":"none"}},
+            "endpoints":[{"id":0,"origin":f"https://{host}/","negotiated_protocol":"h3"}],"responses":rows}
+        completed = {"returncode":0,"timed_out":False,"client_unchanged":True,"client_sha256":"a"*64}
+        if proof_change == "response":run["responses"][0]["status"] = 404
+        elif proof_change == "native":run["migration_commit"] = "d"*40
+        elif proof_change == "defense":run["resolved_configuration"]["defense"] = {"kind":"front"}
+        elif proof_change == "completed":completed["client_unchanged"] = False
+        _create(base / "preparation-get/native/run.json",canonical_json(run))
+        _create(base / "preparation-get/completed.json",canonical_json(completed))
+        expected = [{key:r[key] for key in ("resource_id","status","bytes","body_sha256")} for r in rows]
+        if proof_change == "expected":expected[0]["bytes"] += 1
+        prepared = {**manifest,"preparation":{"role":native.ROLE,
+            "actual_preparation_run":"preparation-get/native/run.json",
+            "actual_preparation_run_sha256":sha256_file(base / "preparation-get/native/run.json"),
+            "expected_responses":expected}}
+        _create(base / "prepared-workload.json",canonical_json(prepared))
+        workload = deepcopy(manifest)
+        if proof_change == "workload":workload["resources"][0]["url"] += "&changed=1"
+        _create(base / "resources.json",canonical_json(workload))
+        relative = base.relative_to(store.root).as_posix()
+        reference = relative
+        if directory_change == "file":reference += "/prepared-workload.json"
+        elif directory_change == "symlink":
+            (store.root / "alias").symlink_to(base,target_is_directory=True);reference = "alias"
+        elif directory_change == "symlink-parent":
+            (store.root / "alias").symlink_to(base.parent,target_is_directory=True);reference = "alias/prepared"
+        elif directory_change == "absolute":reference = str(base)
+        elif directory_change == "traversal":reference = "../" + relative
+        elif directory_change == "dot":reference = relative + "/."
+        elif directory_change == "double-slash":reference = relative.replace("/","//",1)
+        elif directory_change == "trailing-slash":reference += "/"
+        elif directory_change == "backslash":reference = relative.replace("/","\\",1)
+        elif directory_change == "empty":reference = ""
+        elif directory_change == "missing":reference = "missing"
+        files = {p.relative_to(store.root).as_posix():sha256_file(p) for p in base.rglob("*") if p.is_file()}
+        store.enroll({"hostname":host,"urls":urls,"preparation_dir":reference,
+            "paths":{"prepared_workload":relative + "/prepared-workload.json"},
+            "workload_path":relative + "/resources.json","workload_sha256":sha256_file(base / "resources.json"),
+            "runtime":{"client_sha256":"a"*64,"platform":"linux/arm64","source":{"neqo_commit":"c"*40}},
+            "mode_settings":{mode:{} for mode in MODES},"mode_policies":{mode:{} for mode in MODES},
+            "mode_readiness":dict.fromkeys(MODES,True),"files":files,"scientific_credit":False})
+        return store,host,base
+    return create
+
+
+def test_actual_preparation_reader_accepts_canonical_retained_directory(retained_preparation):
+    store,host,base = retained_preparation()
+    assert base.is_dir()
+    epochs._verify_preparation(store,host)
+    assert store.status()["accepted_count"] == 0
+
+
+@pytest.mark.parametrize("change",["file","symlink","symlink-parent","absolute","traversal","dot",
+    "double-slash","trailing-slash","backslash","empty","missing"])
+def test_actual_preparation_reader_rejects_invalid_directory_authority(retained_preparation,change):
+    store,host,base = retained_preparation(directory_change=change)
+    with pytest.raises((ValueError,OSError)):
+        epochs._verify_preparation(store,host)
+    assert store.status()["accepted_count"] == 0
+
+
+@pytest.mark.parametrize("change",["response","native","defense","completed","expected","workload"])
+def test_actual_preparation_reader_keeps_full_bound_get_checks(retained_preparation,change):
+    store,host,base = retained_preparation(proof_change=change)
+    with pytest.raises(ValueError):
+        epochs._verify_preparation(store,host)
+    assert store.status()["accepted_count"] == 0
+
+
+@pytest.mark.parametrize("change",["mutable","hard-linked"])
+def test_actual_preparation_reader_keeps_immutable_file_authority(retained_preparation,change):
+    store,host,base = retained_preparation()
+    path = base / "preparation-get/input.json"
+    if change == "mutable":path.chmod(0o644)
+    else:(base / "extra-authority.json").hardlink_to(path)
+    with pytest.raises(ValueError):
+        epochs._verify_preparation(store,host)
+
+
 def test_mode_epoch_selects_all_hosts_without_rewriting_unaffected_enrollment(roots):
     parent, new = roots("parent"), roots("new", parameter=1)
     original = {host: row[2] for host, row in epochs._enrollments(parent).items()}
