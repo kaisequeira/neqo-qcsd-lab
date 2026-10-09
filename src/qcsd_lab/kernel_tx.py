@@ -22,6 +22,8 @@ import ipaddress
 import json
 import re
 from collections.abc import Mapping, Sequence
+from collections import OrderedDict
+from copy import deepcopy
 from typing import Any
 
 from .process_scheduler import (
@@ -34,6 +36,10 @@ from .process_scheduler import (
 KERNEL_TX_RUNNER_SCHEMA_VERSION = 11
 KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION = 12
 KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION = 13
+KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION = 14
+KERNEL_TX_COMPLETED_HISTORY_LIMIT = 128
+KERNEL_TX_EVENTS_PER_TRANSMISSION_LIMIT = 16
+KERNEL_TX_EVENT_INVENTORY_LIMIT = 1_048_576
 KERNEL_TX_CADENCE64_NS = 64_000_000
 KERNEL_TX_CADENCE64_INCOMING_WINDOW_NS = 32_000_000
 KERNEL_TX_RUNNER_V10_SCHEMA_VERSION = 10
@@ -4361,10 +4367,168 @@ def _reserve_marker_valid(value: Any) -> bool:
     return True
 
 
+KERNEL_TX_LAYERED_TX_SEMANTICS = "client_only_buflo_kernel_timed_egress_v14; historical_schema13_unchanged=true; layered_tx_feedback=bounded_complete_inventory_v1; required_first_TX_SCHED_and_TX_SOFTWARE_pair_unchanged=true; unknown_reused_wrapped_ids_and_timestamp_reversals_fatal=true; shutdown_socket_schema2_required=true; rolling_selection_and_dispatch_deadline=release_plus_4ms; preparation_reserve_ns=1000000; physical_deadline=release_plus_5ms; tick_zero_selection_and_dispatch_deadline=release; admission=release_minus_10ms; nominal_selection=release_minus_5ms; period_ns=64000000; packet_bytes=1200; incoming_window=bound_half_period_32000000ns; truthful_main_construction_lateness_us_lt_5000=true; enqueue_cutoff=release_plus_5ms; scm_txtime=release_plus_10ms; etf_delta=10ms; deadline_mode=false; no_catch_up=true; omission_allowance=false; clock_regression_fatal=true; exact_kernel_TX_and_post_veth_required=true; paper_equivalent=false"
+
+_TIMESTAMP_INVENTORY_KEYS = frozenset({
+    "schema_version", "socket_index", "local_address", "completed_history_limit",
+    "events_per_transmission_limit", "event_inventory_limit", "completed_transmissions",
+    "evicted_completed_ids", "highest_completed_id", "observed_timestamp_events", "events",
+})
+_TIMESTAMP_EVENT_KEYS = frozenset({
+    "sequence", "kernel_timestamp_id", "kind", "realtime_ns", "phase",
+    "required_first_of_kind", "already_completed",
+})
+
+
+def _layered_timestamp_inventory_valid(value: Mapping[str, Any]) -> bool:
+    """Replay every consumed report and join each required pair to raw items.
+
+    These are fatal engineering bounds, not timing windows or omission budgets.
+    Historical timing validation is applied independently after this replay.
+    """
+    runtime = value.get("runtime_contract")
+    if not isinstance(runtime, Mapping):
+        return False
+    shutdown = runtime.get("helper_shutdown")
+    socket_state = shutdown.get("socket_state") if isinstance(shutdown, Mapping) else None
+    state = _exact_mapping(socket_state, _HELPER_SOCKET_SHUTDOWN_KEYS | {"timestamp_inventories"})
+    setups = runtime.get("socket_setup")
+    jobs = value.get("jobs")
+    if (state is None or not _schema(state, 2) or not isinstance(setups, list)
+        or not isinstance(jobs, list) or not _u64(runtime.get("socket_count"))
+        or len(setups) != runtime["socket_count"]
+        or state.get("socket_count") != len(setups)
+        or not isinstance(state.get("timestamp_inventories"), list)
+        or len(state["timestamp_inventories"]) != len(setups)):
+        return False
+    expected: dict[str, dict[int, Mapping[str, Any]]] = {}
+    for setup in setups:
+        if not isinstance(setup, Mapping) or not _socket_address(setup.get("local_address")):
+            return False
+        address = setup["local_address"]
+        if address in expected:
+            return False
+        expected[address] = {}
+    for job in jobs:
+        if not isinstance(job, Mapping) or not isinstance(job.get("items"), list):
+            return False
+        for item in job["items"]:
+            if not isinstance(item, Mapping):
+                return False
+            kernel_id = item.get("socket_timestamp_id")
+            if kernel_id is None:
+                continue
+            address = item.get("source_address")
+            if (not _u64(kernel_id) or kernel_id > 2**32 - 1 or type(address) is not str or address not in expected
+                or kernel_id in expected[address]):
+                return False
+            expected[address][kernel_id] = item
+    for index, raw_inventory in enumerate(state["timestamp_inventories"]):
+        inventory = _exact_mapping(raw_inventory, _TIMESTAMP_INVENTORY_KEYS)
+        if (inventory is None or not _schema(inventory)
+            or type(inventory.get("socket_index")) is not int or inventory["socket_index"] != index
+            or inventory.get("local_address") != setups[index]["local_address"]
+            or type(inventory.get("completed_history_limit")) is not int
+            or inventory["completed_history_limit"] != KERNEL_TX_COMPLETED_HISTORY_LIMIT
+            or type(inventory.get("events_per_transmission_limit")) is not int
+            or inventory["events_per_transmission_limit"] != KERNEL_TX_EVENTS_PER_TRANSMISSION_LIMIT
+            or type(inventory.get("event_inventory_limit")) is not int
+            or inventory["event_inventory_limit"] != KERNEL_TX_EVENT_INVENTORY_LIMIT
+            or not _u64(inventory.get("completed_transmissions"))
+            or not _u64(inventory.get("evicted_completed_ids"))
+            or not _nullable_u64(inventory.get("highest_completed_id"))
+            or not isinstance(inventory.get("events"), list)
+            or not _u64(inventory.get("observed_timestamp_events"))
+            or inventory["observed_timestamp_events"] != len(inventory["events"])
+            or len(inventory["events"]) > KERNEL_TX_EVENT_INVENTORY_LIMIT):
+            return False
+        completed: OrderedDict[int, dict[str, Any]] = OrderedDict()
+        pending_id: int | None = None
+        pending: dict[str, Any] | None = None
+        highest: int | None = None
+        completed_count = 0
+        seen_pairs: set[int] = set()
+        shutdown_started = False
+        for sequence, raw_event in enumerate(inventory["events"]):
+            event = _exact_mapping(raw_event, _TIMESTAMP_EVENT_KEYS)
+            if (event is None or type(event.get("sequence")) is not int or event["sequence"] != sequence
+                or not _u64(event.get("kernel_timestamp_id")) or event["kernel_timestamp_id"] > 2**32 - 1
+                or type(event.get("kind")) is not str or event["kind"] not in {"scheduled", "software"}
+                or not _u64(event.get("realtime_ns"))
+                or type(event.get("phase")) is not str or event["phase"] not in {"pending", "before_timed_enqueue", "before_immediate_enqueue", "shutdown"}
+                or type(event.get("required_first_of_kind")) is not bool
+                or type(event.get("already_completed")) is not bool
+                or shutdown_started and event["phase"] != "shutdown"):
+                return False
+            shutdown_started |= event["phase"] == "shutdown"
+            kernel_id = event["kernel_timestamp_id"]
+            known = kernel_id in completed
+            if known:
+                transmission = completed[kernel_id]
+            else:
+                if (event["phase"] != "pending" or event["already_completed"]
+                    or highest is not None and kernel_id <= highest):
+                    return False
+                if pending_id is None:
+                    pending_id, pending = kernel_id, {"first": {}, "last": {}, "count": 0}
+                if kernel_id != pending_id:
+                    return False
+                assert pending is not None
+                transmission = pending
+            kind, realtime = event["kind"], event["realtime_ns"]
+            first = kind not in transmission["first"]
+            if (event["already_completed"] != known or event["required_first_of_kind"] != first
+                or known and first or transmission["count"] >= KERNEL_TX_EVENTS_PER_TRANSMISSION_LIMIT):
+                return False
+            previous = transmission["last"].get(kind)
+            other = transmission["last"].get("software" if kind == "scheduled" else "scheduled")
+            if (previous is not None and realtime <= previous
+                or other is not None and (kind == "software" or previous is not None) and realtime < other):
+                return False
+            transmission["first"].setdefault(kind, realtime)
+            transmission["last"][kind] = realtime
+            transmission["count"] += 1
+            if not known and len(transmission["first"]) == 2:
+                pair = transmission["first"]
+                item = expected[inventory["local_address"]].get(kernel_id)
+                if (pair["software"] < pair["scheduled"] or item is None
+                    or item.get("tx_sched_realtime_ns") != pair["scheduled"]
+                    or item.get("tx_software_realtime_ns") != pair["software"]):
+                    return False
+                seen_pairs.add(kernel_id)
+                completed[kernel_id] = transmission
+                if len(completed) > KERNEL_TX_COMPLETED_HISTORY_LIMIT:
+                    completed.popitem(last=False)
+                highest, pending_id, pending = kernel_id, None, None
+                completed_count += 1
+        if (inventory["completed_transmissions"] != completed_count
+            or inventory["evicted_completed_ids"] != max(0, completed_count - KERNEL_TX_COMPLETED_HISTORY_LIMIT)
+            or inventory["highest_completed_id"] != highest
+            or value.get("terminal_outcome") == "complete" and (
+                pending_id is not None or seen_pairs != set(expected[inventory["local_address"]]))):
+            return False
+    return True
+
+
+def _layered_timing_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Project only after schema-14 inventory validation; preserve all timings."""
+    projected = deepcopy(dict(value))
+    projected["schema_version"] = KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION
+    projected["semantics"] = KERNEL_TX_CADENCE64_TX_SEMANTICS
+    socket_state = projected["runtime_contract"]["helper_shutdown"]["socket_state"]
+    socket_state["schema_version"] = 1
+    del socket_state["timestamp_inventories"]
+    return projected
+
+
 def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     """Validate Rust-observable kernel timing evidence without capture claims."""
 
     receipt_schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+    if type(receipt_schema_version) is int and receipt_schema_version == KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION:
+        return bool(value.get("semantics") == KERNEL_TX_LAYERED_TX_SEMANTICS
+            and _layered_timestamp_inventory_valid(value)
+            and kernel_tx_runner_receipt_valid(_layered_timing_projection(value)))
     receipt_keys = (
         _RUNNER_V10_RECEIPT_KEYS | {"preparation_policy"}
         if receipt_schema_version in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
@@ -4665,13 +4829,13 @@ def kernel_tx_incoming_window_bound_to_run_valid(run: Mapping[str, Any]) -> bool
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
     if not isinstance(raw, Mapping) or raw.get("schema_version") not in {
-        KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
+        KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION, KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION,
     }:
         return True
     from .capture_acceptance_policy import (buflo_incoming_release_window,
         BUFLO_KERNEL_PREPARATION_FIELD, validate_buflo_kernel_preparation_marker, _exact_json)
 
-    if raw.get("schema_version") in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}:
+    if raw.get("schema_version") in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION, KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION}:
         try:
             marker = validate_buflo_kernel_preparation_marker(run.get(BUFLO_KERNEL_PREPARATION_FIELD))
         except (TypeError, ValueError):

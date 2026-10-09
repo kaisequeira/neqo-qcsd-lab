@@ -33,6 +33,20 @@ _STARTUP_IDENTIFIERS = ("ready_endpoint", "ready_stream", "ready_resource_id", "
 _STARTUP_NULLABLE = (*_STARTUP_IDENTIFIERS, "armed_at_us", "ready_at_us",
                      "request_stream_final_size", "ack_observed_at_us", "eligible_exact_capacity_bytes")
 _U64_MAX = 2**64 - 1
+# The reviewed Native identity requires full layered feedback for cadence64.
+# Historical source identities retain their schema-13 reader authority.
+LAYERED_TX_REQUIRED_NATIVE_COMMITS: frozenset[str] = frozenset({
+    "01e226fb43000691acbda57feb338855b26e66ca",
+})
+
+
+def _require_layered_tx_source_contract(run: Mapping[str, Any], raw: Any) -> None:
+    commit = run.get("migration_commit")
+    if type(commit) is str and commit in LAYERED_TX_REQUIRED_NATIVE_COMMITS and (
+        not isinstance(raw, Mapping) or type(raw.get("schema_version")) is not int
+        or raw["schema_version"] != 14
+    ):
+        raise ValueError("this Native source identity requires schema-14 complete layered TX inventory")
 
 
 def validate_buflo_kernel_preparation_policy(preparation: Mapping[str, Any]) -> str | None:
@@ -88,7 +102,9 @@ def validate_buflo_kernel_preparation_source_binding(prepared: Mapping[str, Any]
     buflo = isinstance(defense, Mapping) and defense.get("kind") == "buflo"
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    new_raw = isinstance(raw, Mapping) and type(raw.get("schema_version")) is int and raw["schema_version"] in {12, 13}
+    if buflo and declared == CADENCE64_KERNEL_PREPARATION_POLICY:
+        _require_layered_tx_source_contract(run, raw)
+    new_raw = isinstance(raw, Mapping) and type(raw.get("schema_version")) is int and raw["schema_version"] in {12, 13, 14}
     if BUFLO_KERNEL_PREPARATION_FIELD in run:
         if declared is None or not buflo:
             raise ValueError("native BuFLO preparation reserve lacks matching prepared source")
@@ -98,7 +114,7 @@ def validate_buflo_kernel_preparation_source_binding(prepared: Mapping[str, Any]
             raise ValueError("Native BuFLO preparation policy differs from its prospective prepared source")
         incoming = run.get(FIELD)
         if (not new_raw or type(wakeups.get("schema_version")) is not int or wakeups["schema_version"] != (22 if prospective else 21)
-            or raw.get("schema_version") != (13 if prospective else 12)
+            or raw.get("schema_version") not in ({13, 14} if prospective else {12})
             or not _exact_json(raw.get("preparation_policy"), marker)
             or not isinstance(incoming, Mapping) or incoming.get("policy") != (CADENCE64_ACK_START_POLICY if prospective else ACK_START_POLICY)
             or buflo_incoming_release_window(run) != (32_000 if prospective else 10_000)):
@@ -681,6 +697,7 @@ def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
             validate_receipt(parameters.get(RUN_FIELD))
             wakeups = run.get("runner_wakeup_metrics")
             raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+            _require_layered_tx_source_contract(run, raw)
             marker = validate_buflo_kernel_preparation_marker(run.get(BUFLO_KERNEL_PREPARATION_FIELD))
             if (not _exact_json(parameters[RUN_FIELD], CADENCE64_RECEIPT)
                 or run.get("method") != "GET"
@@ -691,11 +708,11 @@ def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
                 or parameters.get("paper_equivalent") is not False
                 or marker["policy"] != CADENCE64_KERNEL_PREPARATION_POLICY
                 or not isinstance(raw, Mapping) or type(raw.get("schema_version")) is not int
-                or raw["schema_version"] != 13
+                or raw["schema_version"] not in {13, 14}
                 or not isinstance(wakeups, Mapping) or type(wakeups.get("schema_version")) is not int
                 or wakeups["schema_version"] != 22
                 or not _exact_json(raw.get("preparation_policy"), marker)):
-                raise ValueError("64ms BuFLO lacks matching Native parameters, preparation and13/22 receipts")
+                raise ValueError("64ms BuFLO lacks matching Native parameters, preparation and13-or14/22 receipts")
         summary = run.get("buflo_summary")
         validate_buflo_startup_receipt(summary.get("incoming_startup") if isinstance(summary, Mapping) else None,
             period_us=64_000 if prospective else 20_000)

@@ -20,6 +20,8 @@ from .kernel_tx import (
     KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS,
     KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
     KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
+    KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION,
+    KERNEL_TX_LAYERED_TX_SEMANTICS,
     KERNEL_TX_CADENCE64_TX_SEMANTICS,
     KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS,
     KERNEL_TX_RESERVE_TX_SEMANTICS,
@@ -439,7 +441,7 @@ def _buflo_run_period_us(run: Mapping[str, Any]) -> int:
     parameters = run.get("defense_parameters")
     receipt = parameters.get(RUN_FIELD) if isinstance(parameters, Mapping) else None
     prospective = (isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22
-        or isinstance(raw, Mapping) and raw.get("schema_version") == 13
+        or isinstance(raw, Mapping) and raw.get("schema_version") in {13, 14}
         or isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_ACK_START_POLICY
         or isinstance(receipt, Mapping) and receipt.get("policy") == CADENCE64_POLICY)
     if not prospective:
@@ -2383,6 +2385,7 @@ def _buflo_kernel_credit_release_intervals(
     from .kernel_tx import (
         KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION,
         KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
+        KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION,
         kernel_tx_incoming_window_bound_to_run_valid,
         kernel_tx_runner_receipt_success_valid,
     )
@@ -2397,6 +2400,7 @@ def _buflo_kernel_credit_release_intervals(
         or raw["schema_version"] not in {
             KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION,
             KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION,
+            KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION,
         }
         or not kernel_tx_runner_receipt_success_valid(raw)
         or not kernel_tx_incoming_window_bound_to_run_valid(run)):
@@ -3309,6 +3313,14 @@ RUNNER_WAKEUP_V22_SEMANTICS = (
     "runner_schema22_retains_schema21_layout_for_non_kernel_metrics_and_requires_opted_in_kernel_schema13=true; "
     "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
     f"buflo_kernel_tx_raw_semantics={KERNEL_TX_CADENCE64_TX_SEMANTICS}; "
+    f"buflo_kernel_protected_selection_wait_semantics={KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS}; "
+    "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+)
+RUNNER_WAKEUP_V22_LAYERED_SEMANTICS = (
+    f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
+    "runner_schema22_retains_schema21_layout_for_non_kernel_metrics_and_requires_opted_in_kernel_schema14_with_socket_schema2=true; "
+    "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+    f"buflo_kernel_tx_raw_semantics={KERNEL_TX_LAYERED_TX_SEMANTICS}; "
     f"buflo_kernel_protected_selection_wait_semantics={KERNEL_TX_CADENCE64_SELECTION_WAIT_SEMANTICS}; "
     "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
 )
@@ -7107,18 +7119,20 @@ def _runner_wakeup_v21_valid(value: Any) -> bool:
 
 def _runner_wakeup_v22_valid(value: Any) -> bool:
     """Validate prospective64ms preparation reserve with unchanged physical evidence."""
+    kernel_tx = value.get("buflo_kernel_tx") if isinstance(value, Mapping) else None
+    layered = isinstance(kernel_tx, Mapping) and kernel_tx.get("schema_version") == KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION
     if (
         not isinstance(value, Mapping)
         or set(value) != RUNNER_WAKEUP_V22_REQUIRED_KEYS
         or type(value.get("schema_version")) is not int or value["schema_version"] != 22
-        or value.get("semantics") != RUNNER_WAKEUP_V22_SEMANTICS
+        or value.get("semantics") != (RUNNER_WAKEUP_V22_LAYERED_SEMANTICS if layered else RUNNER_WAKEUP_V22_SEMANTICS)
         or not _runner_wakeup_v10_valid(_runner_wakeup_v11_project_schema_ten(value))
     ):
         return False
     kernel_tx = value.get("buflo_kernel_tx")
     return bool(
         isinstance(kernel_tx, Mapping)
-        and kernel_tx.get("schema_version") == KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION == 13
+        and kernel_tx.get("schema_version") == (KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION if layered else KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION)
         and kernel_tx_runner_receipt_valid(kernel_tx)
         and _runner_wakeup_v11_legacy_buflo_metrics_neutral(value)
     )

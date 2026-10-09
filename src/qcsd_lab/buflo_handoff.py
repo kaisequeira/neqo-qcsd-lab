@@ -2255,7 +2255,7 @@ def _buflo_diagnostic_period_us(run: Mapping[str, Any], *, runtime_kind: str) ->
     marker = run.get(FIELD)
     prospective = (
         isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22
-        or isinstance(raw, Mapping) and raw.get("schema_version") == 13
+        or isinstance(raw, Mapping) and raw.get("schema_version") in {13, 14}
         or isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_ACK_START_POLICY
         or isinstance(parameter, Mapping) and isinstance(parameter.get(RUN_FIELD), Mapping)
         and parameter[RUN_FIELD].get("policy") == CADENCE64_RECEIPT["policy"]
