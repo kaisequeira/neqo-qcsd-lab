@@ -396,7 +396,10 @@ def _process_record(pid: int) -> tuple[str, int, int, int, int]:
     if (
         len(state) != 1
         or min(parent, process_group, session, start_time) < 0
-        or start_time == 0
+        # Linux init may start in the first clock tick. It is still subject to
+        # the census's stable pidfd, owner and before/after identity checks.
+        # Operation owners and every other PID retain the positive-tick gate.
+        or (start_time == 0 and pid != 1)
     ):
         _fail("guardian process start time is invalid")
     return state, parent, process_group, session, start_time
