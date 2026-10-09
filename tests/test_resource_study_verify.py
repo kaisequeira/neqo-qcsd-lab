@@ -457,3 +457,88 @@ def test_bound_raw_file_cannot_be_replaced_by_a_symlink(early_receipt):
     with pytest.raises(ValueError, match="regular unlinked"):
         verifier.verify_receipt(root, receipt)
     assert calls == []
+
+
+def ipv6_udp_frame(payload, *, source="fe80::1234", destination="ff02::fb", port=5353):
+    udp = struct.pack("!HHHH", port, port, len(payload) + 8, 0) + payload
+    header = struct.pack("!IHBB16s16s", 6 << 28, len(udp), 17, 64,
+                         ipaddress.ip_address(source).packed, ipaddress.ip_address(destination).packed)
+    return bytes.fromhex("3333000000fb02000000000286dd") + header + udp
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+def test_raw_router_inventory_keeps_ambient_udp_and_original_order(tmp_path, endian):
+    # Ambient data can resemble a malformed QUIC Initial. It is opaque here.
+    ambient = ipv6_udp_frame(b"\xc0\x00\x00\x00\x01\xff")
+    target = frame(initial())
+    raw = section(endian) + interface(endian)
+    raw += enhanced(ambient, TIME + 1000, endian)
+    raw += enhanced(target, TIME, endian)  # File order is authoritative.
+    path = tmp_path / "router.pcapng"
+    path.write_bytes(raw)
+    actual = verifier.router_udp_packets(path)
+    assert actual == [
+        {"schema_version": 1, "packet_index": 0, "frame_number": 1,
+         "capture_realtime_ns": TIME + 1000, "source_address": "[fe80::1234]:5353",
+         "destination_address": "[ff02::fb]:5353", "udp_payload_bytes": 6,
+         "datagram_sha256": hashlib.sha256(ambient[62:]).hexdigest()},
+        {"schema_version": 1, "packet_index": 1, "frame_number": 2,
+         "capture_realtime_ns": TIME, "source_address": f"{LOCAL}:43001",
+         "destination_address": f"{REMOTE}:443", "udp_payload_bytes": 1200,
+         "datagram_sha256": hashlib.sha256(target[42:]).hexdigest()},
+    ]
+    with pytest.raises(ValueError, match="outside the recorded five-tuple"):
+        verifier.packets(path, TUPLE, require_fresh=False)
+
+
+def test_raw_router_indices_are_global_across_redeclared_sections(tmp_path):
+    path = tmp_path / "router.pcapng"
+    path.write_bytes(capture_bytes() + capture_bytes(endian=">", timestamp=TIME - 1000))
+    actual = verifier.router_udp_packets(path)
+    assert [p["packet_index"] for p in actual] == [0, 1, 2, 3]
+    assert [p["frame_number"] for p in actual] == [1, 2, 3, 4]
+    assert [p["capture_realtime_ns"] for p in actual] == [TIME, TIME + 127, TIME - 1000, TIME - 873]
+
+
+def test_raw_router_does_not_round_subnanosecond_timestamp(tmp_path):
+    path = tmp_path / "router.pcapng"
+    path.write_bytes(capture_bytes(resolution=10, timestamp=TIME))
+    with pytest.raises(ValueError, match="integral nanosecond"):
+        verifier.router_udp_packets(path)
+
+
+@pytest.mark.parametrize("resolution,timestamp,offset,expected", [
+    (6, 1234567, 0, 1234567000), (0x8A, 2048, -2, 0), (9, TIME, 2, TIME + 2_000_000_000),
+])
+def test_raw_router_matches_exact_collector_timestamp_units(tmp_path, resolution, timestamp, offset, expected):
+    path = tmp_path / "router.pcapng"
+    raw = section("<") + interface("<", resolution=resolution, offset=offset)
+    raw += enhanced(frame(b"opaque"), timestamp, "<")
+    path.write_bytes(raw)
+    assert verifier.router_udp_packets(path)[0]["capture_realtime_ns"] == expected
+
+
+@pytest.mark.parametrize("change", ["cut", "trailer", "capture-length", "unknown-interface",
+    "snaplen", "link", "fragment", "udp-length", "non-ip", "ipv6-extension", "port-zero", "old-packet-block", "empty"])
+def test_raw_router_cannot_supply_a_partial_or_ambiguous_udp_inventory(tmp_path, change):
+    packet = frame(b"opaque")
+    interface_options, packet_options = {}, {}
+    if change == "capture-length": packet_options["captured"] = len(packet) - 1
+    elif change == "unknown-interface": packet_options["interface_id"] = 1
+    elif change == "snaplen": interface_options["snaplen"] = 42
+    elif change == "link": interface_options["link"] = 101
+    elif change == "fragment": packet = frame(b"opaque", fragment=0x2000)
+    elif change == "udp-length": packet = frame(b"opaque", udp_length=13)
+    elif change == "port-zero": packet = frame(b"opaque", source_port=0)
+    elif change == "non-ip": packet = packet[:12] + b"\x08\x06" + packet[14:]
+    elif change == "ipv6-extension":
+        packet = bytearray(ipv6_udp_frame(b"opaque")); packet[20] = 0; packet = bytes(packet)
+    raw = section("<") + interface("<", **interface_options)
+    if change == "old-packet-block": raw += block(3, bytes(4), "<")
+    elif change != "empty": raw += enhanced(packet, TIME, "<", **packet_options)
+    if change == "cut": raw = raw[:-1]
+    elif change == "trailer": raw = raw[:-4] + struct.pack("<I", 1234)
+    path = tmp_path / "router.pcapng"
+    path.write_bytes(raw)
+    with pytest.raises(ValueError):
+        verifier.router_udp_packets(path)

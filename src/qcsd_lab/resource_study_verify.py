@@ -101,19 +101,11 @@ def _options(raw: bytes, endian: str) -> Iterator[tuple[int, bytes]]:
         offset += (size + 3) & ~3
 
 
-def packets(path: Path, five_tuple: list[Any], *, require_fresh=True) -> list[dict[str, Any]]:
-    """Read the declared Ethernet, nonfragmented IP/UDP primary PCAPNG.
-
-    Unsupported link types, truncation and off-tuple packets fail closed. No
-    Wireshark installation is required for verification after migration.
-    """
-    local_ip, local_port, remote_ip, remote_port, protocol = five_tuple
-    if protocol != 17:
-        raise ValueError("session protocol is not UDP")
-    endpoint = (local_ip, local_port, remote_ip, remote_port)
+def _udp_packet_inventory(path: Path, *, exact_timestamps=False):
+    """Decode every declared UDP frame in original file order, without flow selection."""
     interfaces: list[tuple[int, int, int]] = []
     endian = None
-    observed = []
+    packet_index = 0
     with path.open("rb") as handle:
         while True:
             head = handle.read(12)
@@ -194,23 +186,65 @@ def packets(path: Path, five_tuple: list[Any], *, require_fresh=True) -> list[di
                 if udp_length < 8 or start + udp_length != ip_end:
                     raise ValueError("inconsistent UDP length")
                 key = (source, source_port, destination, destination_port)
-                if key == endpoint:
-                    direction = "outgoing"
-                elif (destination, destination_port, source, source_port) == endpoint:
-                    direction = "incoming"
-                else:
-                    raise ValueError("primary packet is outside the recorded five-tuple")
                 payload = frame[start + 8:ip_end]
-                initial = _initial(payload)
-                observed.append({"timestamp_unix_ns": (((hi << 32) | lo) * 1_000_000_000) // divisor
-                                 + clock_offset * 1_000_000_000,
-                                 "direction": direction, "length_bytes": original,
-                                 "udp_payload_bytes": udp_length - 8, "initial": initial,
-                                 "packet_index": len(observed), "source_address": f"[{source}]:{source_port}" if ":" in source else f"{source}:{source_port}",
-                                 "destination_address": f"[{destination}]:{destination_port}" if ":" in destination else f"{destination}:{destination_port}",
-                                 "datagram_sha256": hashlib.sha256(payload).hexdigest()})
+                timestamp_ticks = (hi << 32) | lo
+                if exact_timestamps and (timestamp_ticks * 1_000_000_000) % divisor:
+                    raise ValueError("router timestamp is not an integral nanosecond")
+                packet = {"timestamp_unix_ns": (timestamp_ticks * 1_000_000_000) // divisor
+                          + clock_offset * 1_000_000_000,
+                          "length_bytes": original, "udp_payload_bytes": udp_length - 8,
+                          "packet_index": packet_index,
+                          "source_address": f"[{source}]:{source_port}" if ":" in source else f"{source}:{source_port}",
+                          "destination_address": f"[{destination}]:{destination_port}" if ":" in destination else f"{destination}:{destination_port}",
+                          "datagram_sha256": hashlib.sha256(payload).hexdigest()}
+                yield packet, key, payload
+                packet_index += 1
             elif kind in {2, 3}:
                 raise ValueError("unverifiable packet block in primary capture")
+
+
+def router_udp_packets(path: Path) -> list[dict[str, Any]]:
+    """Read the complete post-veth UDP inventory, including ambient traffic.
+
+    The collector's kernel-TX proof binds original frame indices, file order,
+    exact nanosecond timestamps and datagram hashes. No flow is removed or
+    reordered, and ambient payload is never interpreted as a QUIC handshake.
+    """
+    observed = []
+    for packet, key, _payload in _udp_packet_inventory(path, exact_timestamps=True):
+        if not 1 <= key[1] <= 65535 or not 1 <= key[3] <= 65535:
+            raise ValueError("router capture contains an invalid UDP port")
+        observed.append({"schema_version": 1, "packet_index": packet["packet_index"],
+            "frame_number": packet["packet_index"] + 1,
+            "capture_realtime_ns": packet["timestamp_unix_ns"],
+            "source_address": packet["source_address"],
+            "destination_address": packet["destination_address"],
+            "udp_payload_bytes": packet["udp_payload_bytes"],
+            "datagram_sha256": packet["datagram_sha256"]})
+    if not observed:
+        raise ValueError("empty router UDP capture")
+    return observed
+
+
+def packets(path: Path, five_tuple: list[Any], *, require_fresh=True) -> list[dict[str, Any]]:
+    """Read the declared Ethernet, nonfragmented IP/UDP primary PCAPNG.
+
+    Unsupported link types, truncation and off-tuple packets fail closed. No
+    Wireshark installation is required for verification after migration.
+    """
+    local_ip, local_port, remote_ip, remote_port, protocol = five_tuple
+    if protocol != 17:
+        raise ValueError("session protocol is not UDP")
+    endpoint = (local_ip, local_port, remote_ip, remote_port)
+    observed = []
+    for packet, key, payload in _udp_packet_inventory(path):
+        if key == endpoint:
+            direction = "outgoing"
+        elif (key[2], key[3], key[0], key[1]) == endpoint:
+            direction = "incoming"
+        else:
+            raise ValueError("primary packet is outside the recorded five-tuple")
+        observed.append({**packet, "direction": direction, "initial": _initial(payload)})
     if not observed:
         raise ValueError("empty primary capture")
     if require_fresh and not any(p["initial"] and p["direction"] == "outgoing" for p in observed):
@@ -428,12 +462,7 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
         if mode == "buflo":
             from .kernel_tx import kernel_tx_evidence_success_valid
             evidence = load(artifact["kernel_tx"])
-            raw_router = packets(artifact["post_veth"], five_tuple, require_fresh=False)
-            router_packets = [{"schema_version": 1, "packet_index": p["packet_index"],
-                "frame_number": p["packet_index"] + 1, "capture_realtime_ns": p["timestamp_unix_ns"],
-                "source_address": p["source_address"], "destination_address": p["destination_address"],
-                "udp_payload_bytes": p["udp_payload_bytes"], "datagram_sha256": p["datagram_sha256"]}
-                for p in sorted(raw_router, key=lambda p: p["packet_index"])]
+            router_packets = router_udp_packets(artifact["post_veth"])
             if not kernel_tx_evidence_success_valid(evidence,
                     runner_receipt=run["runner_wakeup_metrics"]["buflo_kernel_tx"],
                     expected_run_json_sha256=sha256_file(artifact["run"]),
