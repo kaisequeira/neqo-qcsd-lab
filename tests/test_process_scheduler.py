@@ -717,6 +717,135 @@ def test_task_exit_does_not_supply_missing_client_observation(
     assert not capture_scheduler_runtime_evidence_valid(evidence)
 
 
+@pytest.mark.parametrize("error_type,error_number", [
+    (FileNotFoundError, errno.ENOENT),
+    (ProcessLookupError, errno.ESRCH),
+])
+def test_task_directory_exit_after_process_enumeration_is_not_scan_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    error_type: type[OSError], error_number: int,
+) -> None:
+    monitor, proc_root, _cpu_stat = _monitor(tmp_path)
+    _write_task(proc_root, tgid=88, tid=88, process_group=88, cpus="11", name="exiting-helper")
+    target = proc_root / "88/task"
+    original_glob = Path.glob
+    enumerations = 0
+
+    def glob_after_exit(path: Path, pattern: str):
+        nonlocal enumerations
+        if path == target:
+            enumerations += 1
+            raise error_type(error_number, "process exited", str(path))
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", glob_after_exit)
+    evidence = monitor.finish()
+
+    assert enumerations >= 1
+    assert evidence["guest_task_monitor"]["scan_errors"] == []
+    assert evidence["guest_task_monitor"]["expected_client_cpu_task_observed"] is True
+    assert capture_scheduler_runtime_evidence_valid(evidence)
+
+
+@pytest.mark.parametrize("error_type,error_number", [
+    (PermissionError, errno.EACCES),
+    (OSError, errno.EIO),
+])
+def test_task_directory_other_enumeration_errors_still_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    error_type: type[OSError], error_number: int,
+) -> None:
+    monitor, proc_root, _cpu_stat = _monitor(tmp_path)
+    target = proc_root / "77/task"
+    original_glob = Path.glob
+
+    def failed_glob(path: Path, pattern: str):
+        if path == target:
+            raise error_type(error_number, "injected directory failure", str(path))
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", failed_glob)
+    evidence = monitor.finish()
+
+    assert len(evidence["guest_task_monitor"]["scan_errors"]) == 1
+    assert "cannot enumerate" in evidence["guest_task_monitor"]["scan_errors"][0]
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
+
+
+@pytest.mark.parametrize("error_type,error_number", [
+    (FileNotFoundError, errno.ENOENT),
+    (ProcessLookupError, errno.ESRCH),
+    (PermissionError, errno.EACCES),
+    (OSError, errno.EIO),
+])
+def test_proc_root_enumeration_errors_still_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    error_type: type[OSError], error_number: int,
+) -> None:
+    monitor, proc_root, _cpu_stat = _monitor(tmp_path)
+    original_glob = Path.glob
+
+    def failed_glob(path: Path, pattern: str):
+        if path == proc_root:
+            raise error_type(error_number, "injected proc root failure", str(path))
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", failed_glob)
+    evidence = monitor.finish()
+
+    assert len(evidence["guest_task_monitor"]["scan_errors"]) == 1
+    assert "cannot enumerate" in evidence["guest_task_monitor"]["scan_errors"][0]
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
+
+
+def test_task_directory_exit_preserves_prior_competitor_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monitor, proc_root, _cpu_stat = _monitor(tmp_path)
+    _write_task(proc_root, tgid=88, tid=88, process_group=88, cpus="10", name="exiting-competitor")
+    monitor._scan_once()
+    target = proc_root / "88/task"
+    original_glob = Path.glob
+
+    def glob_after_exit(path: Path, pattern: str):
+        if path == target:
+            raise FileNotFoundError(errno.ENOENT, "process exited", str(path))
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", glob_after_exit)
+    evidence = monitor.finish()
+
+    assert evidence["guest_task_monitor"]["scan_errors"] == []
+    assert evidence["guest_task_monitor"]["unexpected_client_cpu_tasks"][0]["tid"] == 88
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
+
+
+def test_task_directory_exit_does_not_invent_client_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root, cpu_stat = _fixture(tmp_path)
+    monitor = CaptureSchedulerMonitor(
+        proc_root=proc_root, cgroup_cpu_stat_paths=(cpu_stat,),
+        interval_us=1_000_000, host_partition=_host_partition(),
+    )
+    _write_task(proc_root, tgid=77, tid=77, process_group=77, cpus="10", name="unobserved-client")
+    target = proc_root / "77/task"
+    original_glob = Path.glob
+
+    def glob_after_exit(path: Path, pattern: str):
+        if path == target:
+            raise FileNotFoundError(errno.ENOENT, "process exited", str(path))
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", glob_after_exit)
+    monitor.process_started(77)
+    evidence = monitor.finish()
+
+    assert evidence["guest_task_monitor"]["scan_errors"] == []
+    assert evidence["guest_task_monitor"]["expected_client_cpu_task_observed"] is False
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
+
+
 def test_kernel_timed_scheduler_receipts_both_protected_cpus(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1085,6 +1085,10 @@ class CaptureSchedulerMonitor:
             task_root = process_path / "task"
             try:
                 task_paths = tuple(task_root.glob("[0-9]*"))
+            except (FileNotFoundError, ProcessLookupError):
+                # A process can exit after its /proc entry was enumerated.
+                # Only that vanished process's task directory is skipped.
+                continue
             except OSError as error:
                 self._record_scan_error(f"cannot enumerate {task_root}: {error}")
                 continue
