@@ -64,6 +64,12 @@ Meta is also fenced, with only exact parent-locked prospective admission-head
 publication allowed. The final selected50 is global for all defenses, including
 future WT/TM acquisition; no per-mode class substitution is authorized.
 
+The prospective retained-original enrollment successor also permits a fresh
+stable child to prepare a retained49 class against its authenticated original
+source pool and exact ordered twenty-URL proof. MAL keeps its separate reserve
+inventory. Selected jobs bind both selection and stable context before the full
+Native preparation reader; these host controls add no live admission or credit.
+
 The verified Native D2 implementation and cached client can be reused for
 Lab-only changes through a matching public SDK/runtime binding. SDK005 is
 verified at canonical SHA-256

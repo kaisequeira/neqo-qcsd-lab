@@ -240,8 +240,9 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
                     raise ValueError("prepared enrollment differs from its exact explicit resource selection")
                 enrollment = bind_preparation(root, enrollment, binding, attempt / "job.json")
                 validate_selection_proof(root, enrollment)
-                from .resource_study_epochs import _verify_preparation
-                _verify_preparation(store, hostname, enrollment=enrollment)
+                if "class_selection" not in store.plan():
+                    from .resource_study_epochs import _verify_preparation
+                    _verify_preparation(store, hostname, enrollment=enrollment)
             if "class_selection" in store.plan():
                 from .resource_study_lineage import bind_enrollment, validate_enrollment
                 from .resource_study_epochs import _verify_preparation

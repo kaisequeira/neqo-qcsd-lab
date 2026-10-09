@@ -174,15 +174,34 @@ def validate_enrollment(store, enrollment, *, plan=None):
         raise ValueError("enrollment lacks its immutable stable selection context")
     if enrollment["hostname"] not in plan["class_network"]["assignments"]:
         raise ValueError("enrollment hostname is outside selected50")
-    from .resource_study_supplements import load_inventory_candidates
-    candidate = load_inventory_candidates([store.root / INVENTORY])["candidates"][0]
+    if enrollment["hostname"] == INCLUDED:
+        # Keep the reserve's original literal inventory authority unchanged.
+        from .resource_study_supplements import load_inventory_candidates
+        candidate = load_inventory_candidates([store.root / INVENTORY])["candidates"][0]
+    else:
+        # A stable child also carries the authenticated original source. Its
+        # retained49 keep their original URL/order/occurrence authority; the
+        # MAL reserve catalogue cannot authorize another hostname's resources.
+        candidates = candidate_catalogue(store.root / SOURCE)["candidates"]
+        candidate = next((row for row in candidates if row["hostname"] == enrollment["hostname"]), None)
+        if (enrollment["hostname"] not in plan["class_network"]["predecessor"]["assignments"]
+                or candidate is None or candidate["eligible"] is not True):
+            raise ValueError("stable retained enrollment is outside the authenticated original49 pool")
     urls = enrollment.get("urls")
-    if (enrollment["hostname"] != INCLUDED or not isinstance(urls, list) or len(urls) != 20
+    if (not isinstance(urls, list) or len(urls) != 20
             or any(type(url) is not str for url in urls)
             or len(set(urls)) != 20 or any(url not in candidate["urls"] for url in urls)
             or urls != sorted(urls, key=candidate["urls"].index)
             or enrollment.get("source_occurrences") != candidate["source_occurrences"]):
-        raise ValueError("stable reserve enrollment differs from authenticated literal pool/order/provenance")
+        label = "reserve" if enrollment["hostname"] == INCLUDED else "retained"
+        raise ValueError(f"stable {label} enrollment differs from authenticated literal pool/order/provenance")
+    # The historical/default path imports no unbound selector module. An
+    # explicit or partial selector must replay its complete immutable job and
+    # input/workload proof, including on pure receipt-reader workers.
+    if (any(name == "resource_selection" or name.startswith("resource_selection_") for name in enrollment)
+            or any(name.startswith("inputs/resource-selections/") for name in enrollment.get("files", {}))):
+        from .resource_study_selection import validate_selection_proof
+        validate_selection_proof(store.root, enrollment)
 
 
 def validate_receipt_enrollment(root, plan, enrollment):

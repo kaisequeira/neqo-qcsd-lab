@@ -165,6 +165,26 @@ Each new reserve mode needs its own exact-host, exact-input zero-credit live
 pilot before formal capture. None of these commands replace the operational
 keeper, finite-budget, storage, clock or cleanup supervision requirements.
 
+A fresh child with the committed selection can also prepare a retained original
+class. Its twenty URLs must be an ordered subset of that exact hostname's
+authenticated original source pool, with all original source occurrences
+preserved. The retired hostname and foreign pools remain refused. MAL continues
+to use only its separate frozen reserve inventory. Supplemental URLs for another
+retained class are not authorized by this retained-original path.
+
+For a retained class that needs an explicit twenty-URL subset, first initialize
+the fresh child as above, then generate and freeze its selection manifest against
+that exact child's immutable context. Pass both selection flags to the separate
+`prepare --enroll` command. The coordinator binds the selector/job and stable
+class context before replaying the full Native twenty-GET proof and enrolling.
+Default preparation still freezes the first twenty successful GETs in source
+order; explicit selection accepts only its twenty URLs, with no tail replacement.
+Add only the absent class/mode keys using a later `--epoch-change add-host`
+command, omitting selection flags there. Ordered URLs and workload must match
+existing sibling modes, and each new cell requires its own fresh live pilot.
+These host-tested paths grant no live eligibility or recording credit by
+themselves and do not alter installed SDKs, Native identities or timing limits.
+
 Parent admissions and compositions use explicit `v3` records after the
 transition. Admission explicitly installs a versioned SQLite write fence in
 every historical member ledger and the new member. This additive schema change
