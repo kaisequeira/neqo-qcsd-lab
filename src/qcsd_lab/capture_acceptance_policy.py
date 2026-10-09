@@ -632,7 +632,7 @@ def validate_buflo_startup_receipt(value: Any, *, require_armed: bool = True, pe
             raise ValueError("BuFLO incoming startup is unarmed or has fabricated readiness")
         return value
     if (any(not _uint(value[key]) for key in _STARTUP_NULLABLE)
-        or value["ready_resource_id"] == 0 or value["request_stream_final_size"] == 0
+        or value["request_stream_final_size"] == 0
         or value["eligible_exact_capacity_bytes"] < 1_200
         or value["ready_at_us"] < value["ack_observed_at_us"]
         or value["armed_at_us"] != (value["ready_at_us"] // period_us + 1) * period_us
