@@ -37,6 +37,14 @@ REQUEST_HEADERS = [["accept", "*/*"], ["accept-encoding", "identity"],
                    ["accept-language", "en-US,en;q=0.9"]]
 
 
+def _request_headers(hostname: str) -> list[list[str]]:
+    """Fresh class inputs use the truthful study agent on this exact origin."""
+    headers = [pair[:] for pair in REQUEST_HEADERS]
+    if hostname == "www.euronews.com":
+        headers.append(["user-agent", "qcsd-resource-study/1.0"])
+    return headers
+
+
 def _regular(path: str | Path) -> Path:
     path = Path(os.path.abspath(path))
     if (any(parent.is_symlink() for parent in (path, *path.parents))
@@ -105,7 +113,7 @@ def _positive(value: Any, label: str) -> int:
 def _manifest(hostname: str, urls: Iterable[str], *, require_twenty: bool) -> dict[str, Any]:
     result = native_manifest(hostname, urls, require_twenty=require_twenty)
     for resource in result["resources"]:
-        resource["headers"] = [pair[:] for pair in REQUEST_HEADERS]
+        resource["headers"] = _request_headers(urlsplit(resource["url"]).hostname)
     return result
 
 
@@ -542,7 +550,7 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     lengths = {row["url"]: row["bytes"] for row in responses}
     manifest = native_manifest(hostname, urls20, lengths)
     for resource in manifest["resources"]:
-        resource["headers"] = [pair[:] for pair in REQUEST_HEADERS]
+        resource["headers"] = _request_headers(urlsplit(resource["url"]).hostname)
     manifest["resources"][0]["type"] = "Document"
     from . import capture_acceptance_policy as acceptance
     expected = [{key: row[key] for key in ("resource_id", "status", "bytes", "body_sha256")}

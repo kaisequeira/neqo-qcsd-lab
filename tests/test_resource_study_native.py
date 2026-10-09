@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -62,7 +63,9 @@ def get_run(manifest, digest, *, seed=0):
         "application_workload_source_hash_sha256": None,
         "chaff_manifest_hash_sha256": None, "chaff_responses": [],
         "resolved_configuration": {"defense": {"kind": "none"}},
-        "endpoints": [{"id": 0, "origin": f"https://{HOST}/", "negotiated_protocol": "h3"}],
+        "endpoints": [{"id": 0,
+                       "origin": f"https://{urlsplit(manifest['resources'][0]['url']).hostname}/",
+                       "negotiated_protocol": "h3"}],
         "responses": rows}
 
 
@@ -134,6 +137,88 @@ def prepared(tmp_path, executable, monkeypatch, **stub):
     root = tmp_path / "enrollment"
     result = native.prepare_domain(HOST, URLS, root, client=executable, runtime=runtime(executable))
     return root, result, calls
+
+
+@pytest.mark.parametrize("hostname", [HOST, "euronews.com", "cdn.euronews.com",
+                                      "www.euronews.com.example.org", "example.org"])
+def test_non_euronews_manifest_bytes_keep_the_historical_headers(hostname):
+    urls = [f"https://{hostname}/resource-{index}?q={index}" for index in range(20)]
+    before = native.native_manifest(hostname, urls, require_twenty=True)
+    for resource in before["resources"]:
+        resource["headers"] = [pair[:] for pair in native.REQUEST_HEADERS]
+    assert canonical_json(native._manifest(hostname, urls, require_twenty=True)) == canonical_json(before)
+
+
+def test_euronews_exact_host_gets_only_the_truthful_agent_and_independent_header_lists():
+    urls = [f"https://www.euronews.com/build/{index}.js?v={index}" for index in range(20)]
+    manifest = native._manifest("www.euronews.com", urls, require_twenty=True)
+    expected = native.REQUEST_HEADERS + [["user-agent", "qcsd-resource-study/1.0"]]
+    assert all(resource["headers"] == expected for resource in manifest["resources"])
+    assert native.REQUEST_HEADERS == [["accept", "*/*"], ["accept-encoding", "identity"],
+                                      ["accept-language", "en-US,en;q=0.9"]]
+    manifest["resources"][0]["headers"][0][1] = "mutated test copy"
+    assert manifest["resources"][1]["headers"] == expected
+    assert native._manifest("www.euronews.com", urls, require_twenty=True)["resources"][0]["headers"] == expected
+
+
+def test_euronews_probe_twenty_get_prepared_chaff_and_sidecar_keep_one_header_contract(
+        tmp_path, executable, monkeypatch):
+    calls = install_process_stub(monkeypatch)
+    urls = [f"https://www.euronews.com/build/{index}.js?v={index}" for index in range(22)]
+    root = tmp_path / "euronews-preparation"
+    enrollment = native.prepare_domain("www.euronews.com", urls, root,
+                                       client=executable, runtime=runtime(executable))
+    expected = native.REQUEST_HEADERS + [["user-agent", "qcsd-resource-study/1.0"]]
+    assert enrollment["urls"] == urls[:20]
+    assert enrollment["mode_readiness"] == dict.fromkeys(native.MODES, True)
+    assert enrollment["scientific_credit"] is False
+    for command in calls:
+        source = json.loads(Path(command[command.index("--workload") + 1]).read_bytes())
+        assert all(resource["headers"] == expected for resource in source["resources"])
+    for path in [root / "preparation-get/input.json", root / "resources.json",
+                 root / "prepared-workload.json"]:
+        manifest = json.loads(path.read_bytes())
+        assert [resource["url"] for resource in manifest["resources"]] == urls[:20]
+        assert all(resource["headers"] == expected for resource in manifest["resources"])
+    prepared_workload = root / "prepared-workload.json"
+    chaff_manifest = json.loads((root / "chaff-manifest.json").read_bytes())
+    assert all(resource["headers"] == expected for resource in chaff_manifest["resources"])
+    assert chaff_manifest["application_workload_sha256"] == sha256_file(prepared_workload)
+    core = json.loads((root / "chaff-core.json").read_bytes())
+    assert all(resource["headers"] == expected for resource in core["resources"])
+    assert core["application_workload_sha256"] == sha256_file(prepared_workload)
+    checked = json.loads((root / "preparation-get/native/run.json").read_bytes())
+    assert all(response["request_headers"] == expected for response in checked["responses"])
+
+
+@pytest.mark.parametrize("change", ["missing-agent", "wrong-agent", "changed-encoding"])
+def test_euronews_actual_get_header_mismatch_is_still_refused(change):
+    urls = [f"https://www.euronews.com/build/{index}.js" for index in range(20)]
+    manifest = native._manifest("www.euronews.com", urls, require_twenty=True)
+    value = get_run(manifest, "c" * 64)
+    value["responses"][7]["request_headers"] = copy.deepcopy(value["responses"][7]["request_headers"])
+    headers = value["responses"][7]["request_headers"]
+    if change == "missing-agent":
+        headers.pop()
+    elif change == "wrong-agent":
+        headers[-1][1] = "another-agent"
+    else:
+        headers[1][1] = "gzip"
+    with pytest.raises(ValueError, match="selected resource"):
+        native.inspect_completed_run(value, manifest, manifest_sha256="c" * 64,
+            max_response_bytes=native.MAX_RESPONSE_BYTES, native_commit=COMMIT)
+
+
+def test_euronews_missing_agent_in_actual_chaff_receipt_keeps_ordinary_only(
+        tmp_path, executable, monkeypatch):
+    install_process_stub(monkeypatch,
+        corrupt_qualification=lambda receipt: receipt.update(request_headers=native.REQUEST_HEADERS))
+    urls = [f"https://www.euronews.com/build/{index}.js" for index in range(20)]
+    enrollment = native.prepare_domain("www.euronews.com", urls, tmp_path / "failed-qualification",
+                                       client=executable, runtime=runtime(executable))
+    assert enrollment["mode_readiness"] == {mode: mode == "undefended" for mode in native.MODES}
+    assert enrollment["qualification_error"]
+    assert enrollment["paths"]["chaff_manifest"] is None
 
 
 def test_real_qualifier_contract_and_frozen_resource_anchor(tmp_path, executable, monkeypatch):
@@ -246,13 +331,30 @@ def test_timeout_retains_raw_process_boundaries(tmp_path, executable, monkeypatc
 
 
 @pytest.mark.parametrize("mode", native.MODES)
-def test_public_capture_uses_unchanged_collector_inputs_and_returns_actual_paths(tmp_path, executable, monkeypatch, mode):
-    root, enrollment, _ = prepared(tmp_path, executable, monkeypatch)
+@pytest.mark.parametrize("hostname", [HOST, "www.euronews.com"])
+def test_public_capture_uses_unchanged_collector_inputs_and_returns_actual_paths(
+        tmp_path, executable, monkeypatch, mode, hostname):
+    install_process_stub(monkeypatch)
+    root = tmp_path / "enrollment"
+    urls = [f"https://{hostname}/resource-{index}?id={index}" for index in range(22)]
+    enrollment = native.prepare_domain(hostname, urls, root,
+                                       client=executable, runtime=runtime(executable))
+    expected_headers = native.REQUEST_HEADERS + (
+        [["user-agent", "qcsd-resource-study/1.0"]] if hostname == "www.euronews.com" else [])
+    monkeypatch.setattr(native, "_request_headers",
+        lambda _host: pytest.fail("capture must consume frozen headers rather than regenerate them"))
     monkeypatch.setattr(collector, "NEQO_CLIENT", str(executable))
     observed = {}
 
     def collect(attempt, manifest, chaff_input, hostname, defense, seed, context, **kwargs):
         observed.update(defense=defense, context=context, kwargs=kwargs)
+        assert all(resource["headers"] == expected_headers
+                   for resource in json.loads(manifest.read_bytes())["resources"])
+        if chaff_input is not None:
+            assert all(resource["headers"] == expected_headers
+                       for resource in json.loads(chaff_input.read_bytes())["resources"])
+            assert all(resource["headers"] == expected_headers for resource in
+                json.loads(kwargs["application_workload_source"].read_bytes())["resources"])
         command = collector._client_command(manifest, chaff_input, hostname, defense, seed,
             context, attempt / "neqo", **kwargs)
         observed["command"] = command
@@ -270,7 +372,7 @@ def test_public_capture_uses_unchanged_collector_inputs_and_returns_actual_paths
         return {"success": True}
 
     monkeypatch.setattr(collector, "_collect_attempt", collect)
-    result = native.capture_session(HOST, mode, root, tmp_path / "attempt", seed=9,
+    result = native.capture_session(hostname, mode, root, tmp_path / "attempt", seed=9,
                                    runtime=runtime(executable), client=executable)
     assert result["scientific_credit"] is False
     assert result["result"] == {"success": True}

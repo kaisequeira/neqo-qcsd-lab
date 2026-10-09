@@ -173,6 +173,25 @@ in `study.json`; repeating `prepare` with different values refuses the change.
 The default live storage reserve is 60 GiB. Use the supported preparation flags
 instead of editing the frozen plan.
 
+### Exact request headers for a prospective class
+
+New preparation for the exact resource hostname `www.euronews.com` sends the
+truthful `User-Agent: qcsd-resource-study/1.0` alongside the existing accept,
+identity encoding and language headers. Other resource hostnames retain their
+existing headers. The single-URL probes and complete twenty-GET preparation
+freeze these headers into the resource workload; response qualification,
+chaff sidecar and later capture reuse that exact frozen workload. Actual Native
+responses must report those same request headers. Header diagnostics over
+HTTP/1.1 are not Native HTTP/3 qualification.
+
+This applies only to newly prepared inputs under the new installed SDK source.
+It never rewrites an enrollment or promotes an old failed attempt. An absent
+class still needs full live preparation, public admission and fresh mode pilots.
+A header change for an already admitted class changes its workload and requires
+the prospective all-five-mode resource epoch. Reusing the identical Native
+client under a new SDK keeps its scientific runtime identity; the actual SDK
+and workload hashes remain separately recorded.
+
 ### Explicit prospective twenty-resource selection
 
 The default preparation path still probes the authenticated candidate pool in
