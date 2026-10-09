@@ -6,7 +6,7 @@ This module does not change scientific validators or import session counts.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import fcntl
 import hashlib
 import json
@@ -19,6 +19,7 @@ from .resource_study_verify import verify_receipt, within, load
 from .resource_study_runtime import docker_lock
 from .resource_study_network import (ACCEPTANCE as NETWORK_ACCEPTANCE, mapping_sha256,
                                      validate_network_plan)
+from .resource_study_audit import ReceiptReplay, verification_workers as _verification_workers
 
 TYPE = "qcsd-resource-domain-cell-epoch-admission-v1"
 MEMBER = "qcsd-resource-domain-cell-epoch-membership-v1"
@@ -608,10 +609,14 @@ def credit(store, receipt_path, operation):
         return operation()
 
 
-def status(parent, *, deep=False):
+def status(parent, *, deep=False, verification_workers=1):
     """Select actual receipt rows; deep mode independently rechecks raw evidence."""
+    _verification_workers(verification_workers)
+    if not deep and verification_workers != 1:
+        raise ValueError("parallel receipt verification requires a deep parent audit")
     parent = StudyStore(_regular(Path(parent).absolute(), directory=True))
-    with _lock(parent.root):
+    with _lock(parent.root), (ReceiptReplay(verification_workers)
+            if deep and verification_workers > 1 else nullcontext(None)) as replay:
         records = _records(parent)
         if not records:
             raise ValueError("parent has no committed epoch admissions")
@@ -645,7 +650,9 @@ def status(parent, *, deep=False):
                 if row["five_tuple"] in excluded:
                     raise ValueError("selected cell repeats an ancestor epoch tuple")
                 tuples.add(row["five_tuple"])
-                if deep:
+                if replay is not None:
+                    replay.submit(store.root, raw, row["five_tuple"])
+                elif deep:
                     facts = verify_receipt(store.root, receipt)
                     if _json(facts["five_tuple"]).decode() != row["five_tuple"]:
                         raise ValueError("deep epoch tuple differs from its accepted index")
@@ -665,14 +672,15 @@ def status(parent, *, deep=False):
                 "status_authority": "raw-deep-verified" if deep else "selected-ledger-verified-at-commit-index"}
 
 
-def export_manifest(parent, output):
-    value = status(parent, deep=True)
+def export_manifest(parent, output, *, verification_workers=1):
+    value = status(parent, deep=True, verification_workers=verification_workers)
     _create(Path(output).absolute(), canonical_json(value))
     return value
 
 
-def verify(parent, *, recover=False):
+def verify(parent, *, recover=False, verification_workers=1):
     """Recover selected ledgers through their existing API, then audit raw proof."""
+    _verification_workers(verification_workers)
     recovered = {}
     if recover:
         parent_store = StudyStore(_regular(Path(parent).absolute(), directory=True))
@@ -687,7 +695,7 @@ def verify(parent, *, recover=False):
             # parent lock itself. The runtime lock prevents a concurrent flight.
             for root in roots:
                 recovered[root] = StudyStore(root).recover()
-    value = status(parent, deep=True)
+    value = status(parent, deep=True, verification_workers=verification_workers)
     value["recovery"] = recovered
     return value
 
@@ -708,15 +716,18 @@ def main(argv=None):
             child.add_argument("--output", type=Path, required=True)
         elif name == "verify":
             child.add_argument("--recover", action="store_true", help="only after capture workers have stopped")
+        if name in {"verify", "export"}:
+            child.add_argument("--verification-workers", type=int, default=1,
+                               help="bounded spawned raw-proof workers for this parent audit (default one)")
     args = parser.parse_args(argv)
     try:
         if args.action == "admit":
             value = create_epoch(args.parent, args.root, change=args.change,
                 affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
         elif args.action == "export":
-            value = export_manifest(args.parent, args.output)
+            value = export_manifest(args.parent, args.output, verification_workers=args.verification_workers)
         elif args.action == "verify":
-            value = verify(args.parent, recover=args.recover)
+            value = verify(args.parent, recover=args.recover, verification_workers=args.verification_workers)
         else:
             value = status(args.parent)
         print(json.dumps(value, sort_keys=True, allow_nan=False))

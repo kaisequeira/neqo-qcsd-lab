@@ -173,6 +173,34 @@ in `study.json`; repeating `prepare` with different values refuses the change.
 The default live storage reserve is 60 GiB. Use the supported preparation flags
 instead of editing the frozen plan.
 
+After all capture and preparation processes close, an epoch parent can opt in
+to bounded parallel raw replay with `verify --all --verification-workers 4`
+and `export --output /absolute/fresh/export.json --verification-workers 4`.
+The default remains one serial verifier; standalone ledgers require that
+default. Spawned workers run the complete existing receipt verifier without
+Store or SQLite access. The parent retains the epoch lock and every immutable
+index, membership, profile, tuple and ancestor check. Results and refusals retain
+the frozen cell/slot order. The export performs its own full replay and publishes
+only after every proof passes; no earlier audit result is cached or imported.
+Keep all member query-only SQLite observers and storage guards alive through
+both passes and complete child joins. Operator SIGINT/SIGTERM stops submission,
+joins started read-only proofs, and refuses the audit or export.
+Send SIGTERM to the coordinator PID; terminal Ctrl-C is handled for the group.
+An abruptly failed proof worker causes refused, joined pool cleanup.
+Record the new
+host coordinator and worker source separately from the unchanged collection
+SDK and Native runtime. Measure memory, disk and elapsed time before choosing
+more verification workers; capture worker capacity does not establish audit
+worker capacity.
+Parallel-only stderr contains a separate operational record of source/interpreter
+checks, actual worker PIDs, inherited affinity and replay CPU/wall time; it adds
+no scientific credit. The worker handshake binds the audit and raw verifier
+modules, while the full clean coordinator checkout and its external provenance
+remain the authority for imported fidelity and kernel readers. A coordinator
+pinned to CPU 0 passes that affinity to its children. For measured CPU parallelism,
+the quiescent audit launcher must explicitly restore its reviewed available CPU
+mask before starting the public command, and retain these observations.
+
 For this protocol, a pilot authorizes only its exact hostname, 20-resource
 workload, mode settings/policies and complete capture runtime. A single class
 pilot cannot qualify the other 49 mapped classes. Run zero-credit pilots for

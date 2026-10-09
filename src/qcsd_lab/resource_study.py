@@ -33,7 +33,7 @@ def coordinator_provenance() -> dict:
     names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
              "resource_study_verify.py", "resource_study_inputs.py", "resource_study_storage.py",
              "resource_study_supplements.py", "resource_study_epochs.py",
-             "resource_study_network.py",
+             "resource_study_network.py", "resource_study_audit.py",
              "fidelity.py", "capture.py", "process_scheduler.py")
     return {"record_type": "qcsd-resource-study-host-code-v1",
             "files": {name: sha256_file(source / name) for name in names},
@@ -568,6 +568,9 @@ def parser():
             child.add_argument("--all", action="store_true", dest="all_receipts")
         elif action == "export":
             child.add_argument("--output", type=Path, required=True)
+        if action in {"verify", "export"}:
+            child.add_argument("--verification-workers", type=int, default=1,
+                               help="bounded spawned raw-proof workers for parent audits only (default one)")
     return result
 
 
@@ -623,10 +626,22 @@ def main(argv=None):
             output = status(root) if is_parent(root) else StudyStore(root).status()
         elif args.action == "verify":
             from .resource_study_epochs import is_parent, verify as verify_epochs
-            output = verify_epochs(root, recover=args.recover) if is_parent(root) else verify(root, recover=args.recover, all_receipts=args.all_receipts)
+            from .resource_study_audit import verification_workers
+            verification_workers(args.verification_workers)
+            parent = is_parent(root)
+            if not parent and args.verification_workers != 1:
+                raise ValueError("parallel receipt verification requires an epoch parent study")
+            output = (verify_epochs(root, recover=args.recover, verification_workers=args.verification_workers)
+                      if parent else verify(root, recover=args.recover, all_receipts=args.all_receipts))
         else:
             from .resource_study_epochs import is_parent, export_manifest
-            output = export_manifest(root, args.output.absolute()) if is_parent(root) else StudyStore(root).export_manifest(args.output.absolute())
+            from .resource_study_audit import verification_workers
+            verification_workers(args.verification_workers)
+            parent = is_parent(root)
+            if not parent and args.verification_workers != 1:
+                raise ValueError("parallel receipt verification requires an epoch parent study")
+            output = (export_manifest(root, args.output.absolute(), verification_workers=args.verification_workers)
+                      if parent else StudyStore(root).export_manifest(args.output.absolute()))
         print(json.dumps(output, sort_keys=True, allow_nan=False))
         return 1 if output.get("errors") or output.get("paused_cells") else 0
     except (OSError, ValueError, RuntimeError) as error:
