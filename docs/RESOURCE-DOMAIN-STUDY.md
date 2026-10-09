@@ -196,6 +196,60 @@ and clock controls passed 36 focused checks. A new scientific epoch still needs
 an explicit admission selecting affected cells and their own matching pilots;
 this checkpoint issues no such admission and preserves unaffected receipts.
 
+### Late classes after a mode-specific Native epoch
+
+An `add-host` admission selects **absent hostname/mode cells**. Omitted
+`--affected-mode` still means all five modes. Explicit modes allow a new class
+to join healthy modes under their current runtime, then add its remaining mode
+under that mode's current runtime. An existing hostname is allowed only when
+every requested cell is missing; selecting an occupied cell refuses the entire
+admission. A selected cell must have no prior session attempts in its candidate
+root, including zero-credit pilots or failed attempts. Other cells' historical
+attempts can remain in a reused root; they are not retrospectively admitted.
+The union of hostnames cannot exceed 50.
+
+Each selected mode must match all of its active cells' Native commit, client
+hash, platform, fixed settings, acceptance policies, network map and tuple
+scope. Unavailable cells participate in this comparison. For example, a
+BuFLO-only Native epoch must include all 11 currently admitted BuFLO cells,
+including an unready Fonts cell, before its new runtime becomes an unambiguous
+default. Admission does not make that cell ready or supply its pilot. The
+other four modes keep their original runtimes, pilots and valid counts.
+
+When adding a missing mode for an existing hostname, its ordered 20 URLs,
+workload hash (including the manifest's resource length hints) and persistent
+class address must match every current sibling cell. A new preparation that
+changes these inputs needs the appropriate prospective resource/network epoch;
+`add-host` cannot hide that change. Live prepare first, inspect those immutable
+bindings, then admit the explicit cells.
+Preparation and admission add no recording credit. Each new cell still needs
+its own matching zero-credit pilot before formal attempts. Existing ancestry
+tuple exclusions remain enforced, and a partial composition remains incomplete.
+
+For an already prepared late class, these public commands add its healthy four
+cells from the original root and its missing BuFLO cell from the Native epoch
+root. Both roots must already have the same frozen candidate source and class
+mapping; complete their live preparations under their respective runtimes
+before issuing these admissions:
+
+```sh
+./qcsd-lab resource-study prepare --root /absolute/study/healthy-root \
+  --epoch-of /absolute/study/parent-root --epoch-change add-host \
+  --affected-hostname LATE_RESOURCE_HOSTNAME \
+  --affected-mode undefended --affected-mode front \
+  --affected-mode tamaraw --affected-mode cs-buflo
+./qcsd-lab resource-study prepare --root /absolute/study/buflo-native-epoch \
+  --epoch-of /absolute/study/parent-root --epoch-change add-host \
+  --affected-hostname LATE_RESOURCE_HOSTNAME --affected-mode buflo
+```
+
+The healthy root may be the parent itself, and the BuFLO root may already own
+other admitted BuFLO cells. These additions preserve existing selected roots
+and receipt counts. Record the actual host coordinator Git commit and code
+hashes separately from the immutable SDK002/SDK003 runtime identities; a host
+admission repair does not install new code in an old image or reset healthy-mode
+runtime/pilot bindings.
+
 ## Runtime and machine requirements
 
 Reuse the verified Native D2 implementation and cached client through the

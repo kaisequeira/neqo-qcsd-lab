@@ -3,6 +3,7 @@
 Temporary receipt fixtures are not real captures or scientific passes.
 """
 from contextlib import nullcontext
+from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
@@ -40,30 +41,34 @@ def roots(tmp_path, monkeypatch):
     monkeypatch.setattr(epochs, "docker_lock", nullcontext)
     monkeypatch.setattr(epochs, "_verify_preparation", lambda store, host: None)
     def create(name, *, hosts=("alpha.example", "beta.example"), resource_version=0,
-               parameter=0, native="a", readiness=True, acceptance=ACCEPTANCE, network_pool=None):
-        root = tmp_path / name
-        store = StudyStore(root)
+               parameter=0, native="a", readiness=True, acceptance=ACCEPTANCE, network_pool=None,
+               network_hosts=None, native_commit="c", platform="linux/amd64", unready=(),
+               settings=None, policies=None, reverse_urls=False, workload_version=None, existing=None):
+        root = existing.root if existing is not None else tmp_path / name
+        store = existing or StudyStore(root)
         plan = {"schema_version": 1, "record_type": "qcsd-resource-domain-study-v1",
             "class_count": 50, "resources_per_session": 20, "sessions_per_mode": 400,
             "modes": list(MODES), "total_sessions": 100000, "source_sha256": "e" * 64,
             "capture_position": "client-eth0-before-nat", "design": "controlled-resource-domain-http3-replay",
             "acceptance": acceptance}
         if network_pool is not None:
-            names = [*hosts, *(f"class-{index:02d}.example" for index in range(50-len(hosts)))]
+            names = network_hosts or [*hosts, *(f"class-{index:02d}.example" for index in range(50-len(hosts)))]
             plan.update(acceptance=class_network.ACCEPTANCE,
                 class_network=class_network.build_network_plan(names, pool=network_pool),
                 tuple_uniqueness_scope=class_network.TUPLE_SCOPE)
-        store.initialize(plan)
+        if existing is None:
+            store.initialize(plan)
         for host in hosts:
             relative = f"inputs/{host}/workload.json"
-            _create(root / relative, canonical_json({"host": host, "version": resource_version}))
-            store.enroll({"hostname": host, "urls": [f"https://{host}/{resource_version}/{i}" for i in range(20)],
+            _create(root / relative, canonical_json({"host": host, "version": resource_version if workload_version is None else workload_version}))
+            urls = [f"https://{host}/{resource_version}/{i}" for i in range(20)]
+            store.enroll({"hostname": host, "urls": list(reversed(urls)) if reverse_urls else urls,
                 "workload_path": relative, "workload_sha256": sha256_file(root / relative),
-                "runtime": {"client_sha256": native * 64, "platform": "linux/amd64",
-                            "source": {"neqo_commit": "c" * 40}},
-                "mode_settings": {mode: {"fixed_parameter": parameter if mode == "front" else 0} for mode in MODES},
-                "mode_policies": {mode: {} for mode in MODES},
-                "mode_readiness": {mode: readiness if mode == "front" else True for mode in MODES},
+                "runtime": {"client_sha256": native * 64, "platform": platform,
+                            "source": {"neqo_commit": native_commit * 40}},
+                "mode_settings": {**{mode: {"fixed_parameter": parameter if mode == "front" else 0} for mode in MODES}, **(settings or {})},
+                "mode_policies": {**{mode: {} for mode in MODES}, **(policies or {})},
+                "mode_readiness": {mode: False if (host,mode) in unready else readiness if mode == "front" else True for mode in MODES},
                 "files": {relative: sha256_file(root / relative)}, "scientific_credit": False})
         return store
     return create
@@ -95,6 +100,13 @@ def receipt(store, attempt, *, port=31000, purpose="formal"):
         "five_tuple": ["10.1.0.2", port, "192.0.2.1", 443, 17], "files": {relative: sha256_file(store.root / relative)},
         "workload_sha256": enrollment["workload_sha256"], "runtime": enrollment["runtime"],
         "mode_settings": enrollment["mode_settings"][attempt["mode"]]}
+    plan = store.plan()
+    if class_network.validate_network_plan(plan) is not None:
+        digest = sha256_file(store.root / "study.json")
+        value.update(acceptance=class_network.ACCEPTANCE, study_sha256=digest,
+            tuple_uniqueness_scope=class_network.TUPLE_SCOPE,
+            class_network=class_network.receipt_binding(plan, digest, attempt["hostname"]))
+        value["five_tuple"][0] = plan["class_network"]["assignments"][attempt["hostname"]]["client_ipv4"]
     path = store.root / attempt["path"] / "session.json"
     _create(path, canonical_json(value))
     return path
@@ -106,6 +118,18 @@ def commit(store, path):
             validator=lambda root, value: {"verified": True, "five_tuple": value["five_tuple"]})
     return epochs.credit(store, path, lambda: store.commit_verified(path,
         validator=lambda root, value: {"verified": True, "five_tuple": value["five_tuple"]}))
+
+
+def controlled_pilot(store, host, mode):
+    """Exact-cell metadata for a controlled raw-reader boundary, no live proof."""
+    cell = epochs._cell(store, host, mode)
+    enrollment = epochs._enrollments(store)[host][0]
+    value = {"purpose": "pilot", "hostname": host, "mode": mode,
+        "workload_sha256": enrollment["workload_sha256"], "runtime": enrollment["runtime"],
+        "mode_settings": enrollment["mode_settings"][mode], "mode_policies": enrollment["mode_policies"][mode],
+        "artifact_paths": {"enrollment": cell["enrollment_path"]},
+        "files": {cell["enrollment_path"]: cell["enrollment_sha256"]}}
+    _create(store.root / "pilots" / host / mode / "controlled-boundary/session.json", canonical_json(value))
 
 
 def test_mode_epoch_selects_all_hosts_without_rewriting_unaffected_enrollment(roots):
@@ -334,6 +358,204 @@ def test_late_host_needs_explicit_five_cell_admission_and_current_defaults(roots
     assert len(value["cells"]) == 15
     assert set(map(tuple, value["affected"])) == {("gamma.example", mode) for mode in MODES}
     assert epochs.active_cell(healthy, "gamma.example", "front") is True
+
+
+def test_eleven_class_buflo_epoch_then_late_class_two_runtime_admission(roots, monkeypatch):
+    """Real epoch/ledger joins; raw scientific readers remain controlled fixtures."""
+    hosts = [*(f"current-{i:02d}.example" for i in range(10)), "fonts.example"]
+    late = "late.example"
+    mapping = [*hosts, late, *(f"future-{i:02d}.example" for i in range(38))]
+    unavailable = [("fonts.example", mode) for mode in MODES if mode != "undefended"]
+    options = {"network_pool": class_network.DEFAULT_POOL, "network_hosts": mapping,
+               "platform": "linux/arm64", "unready": unavailable}
+    parent = roots("runtime002", hosts=hosts, **options)
+    # Seed unchanged healthy cells and one historical BuFLO tuple to exercise
+    # inherited exclusions. These are synthetic ledger-control samples only.
+    old_paths = []
+    with monkeypatch.context() as controlled:
+        controlled.setattr(epochs, "_pilot", lambda *args: None)
+        for mode, port in [("undefended",31000), ("front",31001), ("buflo",31002)]:
+            attempt = reserve(parent, hosts[0], mode)
+            path = receipt(parent, attempt, port=port);commit(parent,path);old_paths.append(path)
+    old_bytes = [path.read_bytes() for path in old_paths]
+    buflo = roots("runtime003", hosts=hosts, native="b", native_commit="d", **options)
+    native_epoch = admit(parent,buflo,change="native",affected_modes=["buflo"])
+    assert len(native_epoch["affected"]) == 11
+    assert epochs.status(parent.root)["accepted_count"] == 2
+    font = next(cell for cell in native_epoch["cells"] if (cell["hostname"],cell["mode"]) == ("fonts.example","buflo"))
+    assert font["definition"]["native"] == ["b"*64,"linux/arm64","d"*40]
+    assert font["definition"]["ready"] is False
+    with pytest.raises(ValueError,match="not qualified"):
+        reserve(buflo,"fonts.example","buflo")
+
+    roots("late-healthy",hosts=[late],existing=parent,**options)
+    healthy_modes = [mode for mode in MODES if mode != "buflo"]
+    healthy = admit(parent,parent,change="add-host",affected_hostnames=[late],affected_modes=healthy_modes)
+    assert len(healthy["cells"]) == 59 and healthy["exclusions"] == native_epoch["exclusions"]
+    assert {epochs._key(cell):cell for cell in healthy["cells"] if cell["hostname"] != late} == {epochs._key(cell):cell for cell in native_epoch["cells"]}
+    assert epochs.status(parent.root)["accepted_count"] == 2
+    assert epochs.status(parent.root)["complete"] is False
+    with pytest.raises(ValueError,match="excluded"):
+        reserve(parent,late,"buflo",purpose="pilot")
+    with pytest.raises(ValueError,match="own genuine"):
+        reserve(parent,late,"undefended")
+    monkeypatch.setattr(epochs,"verify_receipt",lambda root,value:{"verified":True,"five_tuple":value.get("five_tuple")})
+    controlled_pilot(parent,late,"undefended")
+    attempt = reserve(parent,late,"undefended");commit(parent,receipt(parent,attempt,port=32000))
+    with pytest.raises(ValueError,match="own genuine"):
+        reserve(parent,late,"front")
+    assert epochs.status(parent.root)["accepted_count"] == 3
+
+    roots("late-buflo",hosts=[late],existing=buflo,native="b",native_commit="d",**options)
+    added = admit(parent,buflo,change="add-host",affected_hostnames=[late],affected_modes=["buflo"])
+    assert len(added["cells"]) == 60 and added["exclusions"] == native_epoch["exclusions"]
+    assert epochs.status(parent.root)["accepted_count"] == 3
+    assert {epochs._key(cell):cell for cell in added["cells"] if epochs._key(cell)!=(late,"buflo")} == {epochs._key(cell):cell for cell in healthy["cells"]}
+    with pytest.raises(ValueError,match="own genuine"):
+        reserve(buflo,late,"buflo")
+    controlled_pilot(buflo,late,"buflo")
+    attempt = reserve(buflo,late,"buflo");commit(buflo,receipt(buflo,attempt,port=32001))
+    assert epochs.status(parent.root)["accepted_count"] == 4
+    assert epochs.status(parent.root)["complete"] is False
+    assert commit(parent,old_paths[0])["idempotent"] is True
+    assert [path.read_bytes() for path in old_paths] == old_bytes
+
+    controlled_pilot(buflo,hosts[0],"buflo")
+    attempt = reserve(buflo,hosts[0],"buflo")
+    with pytest.raises(DuplicateSession,match="ancestor"):
+        commit(buflo,receipt(buflo,attempt,port=31002))
+    assert epochs.status(parent.root)["accepted_count"] == 4
+    assert parent.status()["accepted_count"] == 4  # Three original rows plus late ordinary.
+
+
+@pytest.mark.parametrize("modes", [["front"], ["front","buflo"], []])
+def test_add_host_refuses_occupied_keys_without_superseding_counts(roots,modes):
+    parent = roots("parent");new = roots("new",parameter=1)
+    attempt = reserve(parent,"alpha.example","undefended")
+    commit(parent,receipt(parent,attempt))
+    initial = admit(parent,new,change="mode",affected_modes=["front"])
+    before = epochs.status(parent.root)
+    with pytest.raises(ValueError,match="already admitted"):
+        admit(parent,new,change="add-host",affected_hostnames=["alpha.example"],affected_modes=modes)
+    assert epochs._records(parent)[-1] == initial
+    assert epochs.status(parent.root) == before
+
+
+@pytest.mark.parametrize("history", ["pilot", "formal", "accepted"])
+def test_add_host_refuses_pre_admission_attempts_in_selected_standalone_cell(roots,history):
+    parent = roots("parent");changed = roots("changed",native="b")
+    head = admit(parent,changed,change="native",affected_modes=["buflo"])
+    late = roots("late",hosts=["late.example"])
+    attempt = reserve(late,"late.example","undefended",purpose="pilot" if history == "pilot" else "formal")
+    if history == "accepted":
+        path = receipt(late,attempt);commit(late,path);original = path.read_bytes()
+    else:
+        late.fail_attempt(attempt["attempt_id"],"controlled pre-admission attempt",kind="pilot" if history == "pilot" else "failed")
+    before = late.status()
+    with pytest.raises(ValueError,match="cell cannot contain pre-admission session attempts"):
+        admit(parent,late,change="add-host",affected_hostnames=["late.example"],affected_modes=["undefended"])
+    assert epochs._records(parent)[-1] == head
+    assert epochs._membership(late) is None
+    assert late.status() == before
+    assert epochs.status(parent.root)["accepted_count"] == 0
+    if history == "accepted":assert path.read_bytes() == original
+
+
+def test_add_host_preserves_other_cell_attempts_without_importing_them(roots):
+    parent = roots("parent");changed = roots("changed",native="b")
+    admit(parent,changed,change="native",affected_modes=["buflo"])
+    late = roots("late",hosts=["late.example"])
+    attempt = reserve(late,"late.example","front")
+    path = receipt(late,attempt);commit(late,path);original = path.read_bytes()
+    head = admit(parent,late,change="add-host",affected_hostnames=["late.example"],affected_modes=["undefended"])
+    assert head["affected"] == [["late.example","undefended"]]
+    assert late.status()["accepted_count"] == 1
+    assert epochs.status(parent.root)["accepted_count"] == 0
+    assert path.read_bytes() == original
+    with pytest.raises(ValueError,match="cell cannot contain pre-admission session attempts"):
+        admit(parent,late,change="add-host",affected_hostnames=["late.example"],affected_modes=["front"])
+    assert epochs._records(parent)[-1] == head
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("difference", ["urls","url-order","workload-hash","class-address"])
+def test_existing_host_added_mode_cannot_change_its_class_identity(roots,difference):
+    mapping = ["alpha.example","beta.example","late.example",*(f"future-{i:02d}.example" for i in range(47))]
+    options = {"network_pool":class_network.DEFAULT_POOL,"network_hosts":mapping}
+    parent = roots("parent",**options);buflo = roots("buflo",native="b",**options)
+    admit(parent,buflo,change="native",affected_modes=["buflo"])
+    healthy = roots("healthy",hosts=["late.example"],**options)
+    head = admit(parent,healthy,change="add-host",affected_hostnames=["late.example"],affected_modes=["undefended","front","tamaraw","cs-buflo"])
+    changed = dict(options)
+    if difference == "urls":changed["resource_version"] = 1
+    elif difference == "url-order":changed["reverse_urls"] = True
+    elif difference == "workload-hash":changed["workload_version"] = 1
+    else:changed["network_pool"] = "10.233.0.0/23"
+    candidate = roots("candidate",hosts=["late.example"],native="b",**changed)
+    with pytest.raises(ValueError,match="ordered resources or class address"):
+        admit(parent,candidate,change="add-host",affected_hostnames=["late.example"],affected_modes=["buflo"])
+    assert epochs._records(parent)[-1] == head
+    assert len(head["cells"]) == 14 and epochs.status(parent.root)["accepted_count"] == 0
+
+
+@pytest.mark.parametrize("difference", ["client","commit","platform","settings","policies","network"])
+def test_partial_mode_admission_requires_exact_selected_mode_defaults(roots,difference):
+    mapping = ["alpha.example","beta.example","late.example",*(f"future-{i:02d}.example" for i in range(47))]
+    options = {"network_pool":class_network.DEFAULT_POOL,"network_hosts":mapping,"platform":"linux/arm64"}
+    parent = roots("parent",**options);buflo = roots("buflo",native="b",native_commit="d",**options)
+    head = admit(parent,buflo,change="native",affected_modes=["buflo"])
+    changed = {**options,"native":"b","native_commit":"d"}
+    if difference == "client":changed["native"] = "a"
+    elif difference == "commit":changed["native_commit"] = "c"
+    elif difference == "platform":changed["platform"] = "linux/amd64"
+    elif difference == "settings":changed["settings"] = {"buflo":{"fixed_parameter":9}}
+    elif difference == "policies":changed["policies"] = {"buflo":{"unregistered-policy":True}}
+    else:changed["network_pool"] = "10.233.0.0/23"
+    candidate = roots("candidate",hosts=["late.example"],**changed)
+    with pytest.raises(ValueError,match="ambiguous or stale"):
+        admit(parent,candidate,change="add-host",affected_hostnames=["late.example"],affected_modes=["buflo"])
+    assert epochs._records(parent)[-1] == head
+
+
+def test_unavailable_cells_cannot_be_ignored_to_hide_mixed_native_defaults(roots):
+    parent = roots("parent",unready=[("beta.example","buflo")])
+    changed = roots("changed",hosts=["alpha.example"],native="b")
+    head = admit(parent,changed,change="native",affected_hostnames=["alpha.example"],affected_modes=["buflo"])
+    late = roots("late",hosts=["late.example"],native="b")
+    with pytest.raises(ValueError,match="ambiguous or stale"):
+        admit(parent,late,change="add-host",affected_hostnames=["late.example"],affected_modes=["buflo"])
+    assert epochs._records(parent)[-1] == head
+
+
+def test_partial_mode_admission_cannot_change_the_acceptance_contract(roots):
+    parent = roots("parent");changed = roots("changed",parameter=1)
+    head = admit(parent,changed,change="mode",affected_modes=["front"])
+    late = roots("late",hosts=["late.example"],acceptance="different-acceptance-contract")
+    with pytest.raises(ValueError,match="ambiguous or stale"):
+        admit(parent,late,change="add-host",affected_hostnames=["late.example"],affected_modes=["undefended"])
+    assert epochs._records(parent)[-1] == head
+
+
+def test_other_epoch_types_refuse_missing_mode_cells_explicitly(roots):
+    parent = roots("parent");changed = roots("changed",parameter=1)
+    admit(parent,changed,change="mode",affected_modes=["front"])
+    late = roots("late",hosts=["late.example"],parameter=1)
+    head = admit(parent,late,change="add-host",affected_hostnames=["late.example"],affected_modes=["undefended"])
+    candidate = roots("candidate",hosts=["late.example"],native="b",parameter=1)
+    with pytest.raises(ValueError,match="unadmitted hostname/mode cell"):
+        admit(parent,candidate,change="native",affected_hostnames=["late.example"],affected_modes=["buflo"])
+    assert epochs._records(parent)[-1] == head
+
+
+def test_late_cell_admission_caps_union_at_fifty_hostnames(roots):
+    hosts = [f"class-{i:02d}.example" for i in range(50)]
+    parent = roots("parent",hosts=hosts)
+    attempt = reserve(parent,hosts[0],"undefended");commit(parent,receipt(parent,attempt))
+    late = roots("late",hosts=["class-fifty-one.example"])
+    with pytest.raises(ValueError,match="fifty distinct classes"):
+        admit(parent,late,change="add-host",affected_hostnames=["class-fifty-one.example"],affected_modes=["undefended"])
+    assert len(epochs._records(parent)[-1]["cells"]) == 250
+    assert parent.status()["accepted_count"] == epochs.status(parent.root)["accepted_count"] == 1
 
 
 def test_deep_composition_rederives_selected_raw_receipts_and_never_claims_partial_complete(roots, monkeypatch, tmp_path):

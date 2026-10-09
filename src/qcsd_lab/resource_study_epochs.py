@@ -358,7 +358,36 @@ def _scope(cells, hostnames, modes, change):
         raise ValueError("epoch scope includes an unadmitted hostname")
     if not selected_hosts or not selected_modes or not selected_modes.issubset(MODES):
         raise ValueError("epoch scope is empty or has an unregistered mode")
-    return {(host, mode) for host in selected_hosts for mode in selected_modes}
+    selected = {(host, mode) for host in selected_hosts for mode in selected_modes}
+    if change != "add-host" and not selected.issubset(cells):
+        raise ValueError("epoch scope includes an unadmitted hostname/mode cell")
+    return selected
+
+
+def _check_added_cell(cells, candidate):
+    """Admit only an absent cell with current per-mode and per-class inputs."""
+    host, mode = _key(candidate)
+    if (host, mode) in cells:
+        raise ValueError("add-host cannot replace an already admitted hostname/mode cell")
+    current = candidate["definition"]
+    for cell in cells.values():
+        if cell["hostname"] != host:
+            continue
+        sibling = cell["definition"]
+        if (current["urls"] != sibling["urls"] or current["workload_sha256"] != sibling["workload_sha256"]
+                or current.get("network", {}).get("assignment") != sibling.get("network", {}).get("assignment")):
+            raise ValueError("existing hostname's added mode changes ordered resources or class address; requires a resource/network epoch")
+    # Readiness is not a scientific default. Include unavailable cells when
+    # checking the active Native/settings/policy profile; dropping them could
+    # conceal a partially applied Native epoch.
+    def profile(definition):
+        value = {key: item for key, item in definition.items() if key not in {"urls", "workload_sha256", "ready"}}
+        if "network" in value:
+            value["network"] = {key: item for key, item in value["network"].items() if key != "assignment"}
+        return value
+    profiles = [profile(cell["definition"]) for cell in cells.values() if cell["mode"] == mode]
+    if not profiles or any(value != profile(current) for value in profiles):
+        raise ValueError("late hostname has ambiguous or stale mode/runtime defaults")
 
 
 def _check_change(before, after, change):
@@ -387,8 +416,10 @@ def _check_change(before, after, change):
 def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_modes=()):
     """Admit prepared fresh inputs; new epoch pilots precede formal credit.
 
-    New roots must have no session attempts. Preparation and qualification do
-    not count sessions. Existing root counts and enrollment are never rewritten.
+    New scientific roots must have no session attempts. Add-host may reuse
+    historical roots, but its selected cells must have no pre-admission attempts.
+    Preparation and qualification do not count sessions. Existing root counts
+    and enrollment are never rewritten.
     """
     if change not in CHANGES:
         raise ValueError("unknown epoch change")
@@ -423,26 +454,24 @@ def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_
                 raise ValueError("new epoch cannot contain pre-admission session attempts")
         affected = _scope(cells, hostnames, modes, change)
         if change == "add-host":
-            if not hostnames or modes and set(modes) != set(MODES) or any(host in {key[0] for key in cells} for host in hostnames):
-                raise ValueError("new-host admission must add all five cells of new hostnames")
+            if not hostnames:
+                raise ValueError("add-host requires explicit hostnames and absent hostname/mode cells")
+            if affected.intersection(cells):
+                raise ValueError("add-host cannot replace an already admitted hostname/mode cell")
             if len({key[0] for key in cells} | set(hostnames)) > 50:
                 raise ValueError("parent already has fifty distinct classes")
+            with new._transaction() as connection:
+                for host, mode in sorted(affected):
+                    if connection.execute("SELECT 1 FROM attempts WHERE hostname=? AND mode=?",
+                                          (host, mode)).fetchone():
+                        raise ValueError("add-host cell cannot contain pre-admission session attempts")
         for host in sorted({key[0] for key in affected}):
             _verify_preparation(new, host)
         updated = dict(cells)
         for host, mode in sorted(affected):
             candidate = _cell(new, host, mode)
             if change == "add-host":
-                # Compare mode/runtime defaults, excluding each class resource set.
-                profiles = [{key: value for key, value in cell["definition"].items()
-                             if key not in {"urls", "workload_sha256", "ready"}} for key, cell in cells.items() if key[1] == mode]
-                current = {key: value for key, value in candidate["definition"].items()
-                           if key not in {"urls", "workload_sha256", "ready"}}
-                for profile in [*profiles, current]:
-                    if "network" in profile:
-                        profile["network"] = {key: value for key, value in profile["network"].items() if key != "assignment"}
-                if not profiles or any(profile != current for profile in profiles):
-                    raise ValueError("late hostname has ambiguous or stale mode/runtime defaults")
+                _check_added_cell(cells, candidate)
             else:
                 _check_change(cells[(host, mode)], candidate, change)
             updated[(host, mode)] = candidate
