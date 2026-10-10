@@ -378,6 +378,72 @@ def temporary_clock_failure(result: dict) -> bool:
                for row in details)
 
 
+TAMARAW_RETRY_POLICY = "bounded-fresh-tamaraw-strict-rejections-v1"
+TAMARAW_MAX_RETRIES = 2
+TAMARAW_RETRY_REASONS = (
+    "Tamaraw physical release proof lacks scheduled outgoing handoffs",
+    "terminal primary partial does not authorize another missed cell",
+)
+
+
+def tamaraw_retry_reason(mode: str, result: dict, error: Exception, *,
+                         origin: str, policy: dict) -> str | None:
+    """Permit a fresh attempt, never accept or reinterpret this rejection.
+
+    These two exact errors are distinct from clock disturbance and from other
+    binding/integrity failures. The adapter's explicit null resource_error
+    requires its unchanged-client/enrollment and complete 20-response check.
+    A seal error qualifies only before commit, with a successful collector.
+    """
+    if (mode != "tamaraw" or type(error) is not ValueError
+            or not isinstance(policy, dict) or not policy
+            or result.get("mode_policies") != policy
+            or "resource_error" not in result or result["resource_error"] is not None
+            or type(result.get("runner_returncode")) is not int or result["runner_returncode"] != 0
+            or any(result.get(key) is not True for key in (
+                "runner_complete", "endpoint_count_valid", "process_scheduler_valid",
+                "scheduler_runtime_evidence_valid", "operationally_valid"))
+            or result.get("runner_timed_out") is not False
+            or result.get("runner_completion_status") != "complete"
+            or any(key not in result or result[key] is not None for key in (
+                "runner_output_error", "runner_error", "runner_error_class", "runner_process_failure"))):
+        return None
+    for required, valid in (("observer_topology_required", "observer_topology_valid"),
+                            ("kernel_tx_evidence_required", "kernel_tx_evidence_valid")):
+        if type(result.get(required)) is not bool or result[required] and result.get(valid) is not True:
+            return None
+    views = result.get("views")
+    if (not isinstance(views, list) or len(views) != 1 or not isinstance(views[0], dict)
+            or views[0].get("primary") is not True or views[0].get("valid") is not True):
+        return None
+    for field, flag in (("capture_clock_integrity", "valid"),
+                        ("direct_runner_reconciliation", "evidence_eligible")):
+        if not isinstance(views[0].get(field), dict) or views[0][field].get(flag) is not True:
+            return None
+    if (origin == "seal" and result.get("success") is True
+            and result.get("runner_binding_valid") is True and result.get("failure") is None):
+        return str(error) if str(error) in TAMARAW_RETRY_REASONS else None
+    failure = result.get("failure")
+    if (origin != "collector" or result.get("success") is not False
+            or result.get("runner_binding_valid") is not False
+            or not isinstance(failure, dict) or set(failure) != {"stage", "details"}
+            or failure["stage"] != "runner-binding"
+            or not isinstance(failure["details"], list) or len(failure["details"]) != 1):
+        return None
+    detail = failure["details"][0]
+    if (not isinstance(detail, dict) or detail.get("incomplete_resources") != []
+            or detail.get("scheduler_runtime_evidence_valid") is not True
+            or detail.get("runner_timed_out") is not False
+            or type(detail.get("runner_returncode")) is not int or detail["runner_returncode"] != 0
+            or detail.get("completion_status") != "complete"
+            or any(key not in detail or detail[key] is not None for key in (
+                "operational_failure", "runner_output_error", "runner_error",
+                "runner_error_class", "runner_process_failure"))):
+        return None
+    reason = detail.get("runner_binding_error")
+    return reason if reason in TAMARAW_RETRY_REASONS else None
+
+
 def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             hostnames=None, stop=None, backend=None, chunk_sessions=CHUNK, pilot=False) -> dict:
     """Balanced chunks; a failing cell pauses for this invocation only.
@@ -456,6 +522,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     paused, busy, completed_pilots, attempts = set(pilot_blocked), set(), set(), 0
     allocation_errors = []
     clock_failures = {}
+    tamaraw_retries = {}
     if pilot:
         chunk_sessions = 1
     cell_order = [(e["hostname"], m) for m in modes for e in enrolled
@@ -478,17 +545,26 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 return {"cell": cell, "attempted": attempted, "accepted": credited,
                         "paused": True, "allocation_error": str(error)}
             attempted += 1
+            retry_state = tamaraw_retries.get(cell)
+            if retry_state is not None and retry_state["pending_retry"] is not None:
+                retry_state["pending_retry"]["fresh_attempt_id"] = attempt["attempt_id"]
+                retry_state["actual_retries"] += 1
+                retry_state["pending_retry"] = None
             attempt_started = time.monotonic()
             result = {}
+            failure_origin = "backend"
             try:
                 require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
                 result = backend.capture(worker, attempt, enrollment_by_host[host])
                 store.mark_captured(attempt["attempt_id"])
                 if result.get("success") is not True:
+                    failure_origin = "collector"
                     raise ValueError("collector rejected session: " + str(result.get("failure")))
                 result["attempt_elapsed_seconds"] = time.monotonic() - attempt_started
                 clock_failures[cell] = 0
+                failure_origin = "seal"
                 receipt_path = seal(root, attempt, enrollment_by_host[host], runtime, result, pilot=pilot)
+                failure_origin = "commit"
                 if pilot:
                     store.fail_attempt(attempt["attempt_id"], "focused pilot passed; no formal credit", kind="pilot",
                         wall_seconds=time.monotonic() - attempt_started)
@@ -531,6 +607,18 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 if temporary_clock_failure(result):
                     clock_failures[cell] = clock_failures.get(cell, 0) + 1
                     if clock_failures[cell] < 3:
+                        continue
+                reason = tamaraw_retry_reason(mode, result, error, origin=failure_origin,
+                    policy=enrollment_by_host[host].get("mode_policies", {}).get(mode))
+                if reason is not None:
+                    retry_state = tamaraw_retries.setdefault(cell, {
+                        "actual_retries": 0, "rejections": [], "pending_retry": None})
+                    row = {"rejected_attempt_id": attempt["attempt_id"], "reason": reason,
+                        "retry_permitted": len(retry_state["rejections"]) < TAMARAW_MAX_RETRIES,
+                        "fresh_attempt_id": None, "scientific_credit": False}
+                    retry_state["rejections"].append(row)
+                    if row["retry_permitted"]:
+                        retry_state["pending_retry"] = row
                         continue
                 return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
         return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": False}
@@ -576,6 +664,14 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     return {"progress": store.status(), "paused_cells": sorted(paused), "stop_requested": stop.is_set(),
             "pilot_cells_passed": sorted(completed_pilots), "missing_mode_pilots": missing_pilots,
             "allocation_errors": allocation_errors,
+            "tamaraw_strict_rejection_retries": {"policy": TAMARAW_RETRY_POLICY,
+                "max_retries_per_cell_per_invocation": TAMARAW_MAX_RETRIES,
+                "success_resets_budget": False, "attempt_budget": budget,
+                "dispatched_attempt_allowance": attempts, "chunk_sessions": chunk_sessions,
+                "pilot": pilot, "cells": [{"hostname": cell[0], "mode": cell[1],
+                    "actual_retry_count": state["actual_retries"], "rejections": state["rejections"],
+                    "retry_pending_without_allocation": state["pending_retry"] is not None}
+                    for cell, state in sorted(tamaraw_retries.items())]},
             "storage": storage_snapshot(root)}
 
 
