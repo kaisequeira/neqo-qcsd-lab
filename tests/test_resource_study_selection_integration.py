@@ -251,9 +251,13 @@ def test_ambiguous_selected_epoch_scope_refuses_before_target_creation(tmp_path,
 def test_selected_coordinator_provenance_adds_only_one_module():
     original = study.coordinator_provenance()
     selected = study.coordinator_provenance(resource_selection=True)
-    assert len(original["files"]) == 13 and len(selected["files"]) == 14
+    assert len(original["files"]) == 14 and len(selected["files"]) == 15
+    assert original["files"]["resource_study_integrity.py"] == inputs.sha256_file(
+        Path(study.__file__).with_name("resource_study_integrity.py"))
     assert "resource_study_selection.py" not in original["files"]
+    assert set(selected["files"]) - set(original["files"]) == {"resource_study_selection.py"}
     assert {k: v for k, v in selected["files"].items() if k != "resource_study_selection.py"} == original["files"]
+    assert selected["files"]["resource_study_selection.py"] == inputs.sha256_file(Path(selection.__file__))
 
 
 def test_default_preparation_and_receipt_do_not_import_unbound_selection_code(context, monkeypatch):

@@ -4,6 +4,7 @@ These are not live reserve qualification or scientific session evidence.
 """
 from contextlib import nullcontext
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -292,9 +293,15 @@ def test_new_receipt_joins_its_own_v3_plan_and_cannot_borrow_old_map(campaign):
 
 
 def test_default_provenance_unchanged_new_context_explicitly_bound():
-    assert len(study.coordinator_provenance()["files"]) == 13
-    assert "resource_study_lineage.py" not in study.coordinator_provenance()["files"]
-    assert "resource_study_lineage.py" in study.coordinator_provenance(class_selection=True)["files"]
+    original = study.coordinator_provenance()["files"]
+    contextual = study.coordinator_provenance(class_selection=True)["files"]
+    assert len(original) == 14 and len(contextual) == 15
+    assert original["resource_study_integrity.py"] == sha256_file(
+        Path(study.__file__).with_name("resource_study_integrity.py"))
+    assert "resource_study_lineage.py" not in original
+    assert set(contextual) - set(original) == {"resource_study_lineage.py"}
+    assert {k: v for k, v in contextual.items() if k != "resource_study_lineage.py"} == original
+    assert contextual["resource_study_lineage.py"] == sha256_file(Path(lineage.__file__))
 
 
 def test_raw_receipt_selection_reader_never_opens_store_or_sqlite(campaign, monkeypatch):
