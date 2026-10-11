@@ -319,7 +319,15 @@ def test_seal_inventories_selected_proof_only_and_records_actual_host_module(con
     expected = selection.selection_artifact_paths(enrollment)
     assert {k: v for k, v in receipt["artifact_paths"].items() if k.startswith("resource_selection_")} == expected
     assert all(receipt["files"][name] == enrollment["files"][name] for name in expected.values())
-    assert len(receipt["coordinator_provenance"]["files"]) == (14 if selected else 13)
+    provenance = receipt["coordinator_provenance"]["files"]
+    assert len(provenance) == (15 if selected else 14)
+    assert provenance["resource_study_integrity.py"] == inputs.sha256_file(
+        Path(study.__file__).with_name("resource_study_integrity.py"))
+    assert ("resource_study_selection.py" in provenance) is selected
+    baseline = study.coordinator_provenance()["files"]
+    assert {k: v for k, v in provenance.items() if k != "resource_study_selection.py"} == baseline
+    if selected:
+        assert provenance["resource_study_selection.py"] == inputs.sha256_file(Path(selection.__file__))
     assert len(checks) == 1 and (checks[0] is not None) is selected
     assert receipt["scientific_credit"] is False and StudyStore(root).status()["accepted_count"] == 0
 
