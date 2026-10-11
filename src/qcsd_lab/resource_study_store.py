@@ -552,6 +552,44 @@ class StudyStore:
     def _corpus_path(attempt):
         return f'corpus/{attempt["hostname"]}/{attempt["mode"]}/session-{attempt["slot"]:06d}'
 
+    def _withdrawals(self, connection):
+        # No schema migration on ordinary paths. Once explicitly installed,
+        # both the tombstones and their direct-SQL enforcement are mandatory.
+        from .resource_study_integrity import check_withdrawals
+        return check_withdrawals(self, connection)
+
+    def publication_path(self, attempt, *, connection=None):
+        """A withdrawn slot's replacement never reuses its original corpus."""
+        if connection is None:
+            with self._transaction() as held:
+                return self.publication_path(attempt, connection=held)
+        if self._withdrawals(connection) and connection.execute(
+                "SELECT 1 FROM integrity_withdrawals WHERE hostname=? AND mode=? AND slot=?",
+                (attempt["hostname"], attempt["mode"], attempt["slot"])).fetchone():
+            return attempt["path"] + "/verified"
+        return self._corpus_path(attempt)
+
+    def verification_paths(self):
+        """Preserve corpus discovery; omit only explicitly withdrawn owners."""
+        paths = set((self.root / "corpus").glob("*/*/session-*/session.json"))
+        with self._transaction() as connection:
+            if not self._withdrawals(connection):
+                return sorted(paths)
+            withdrawn = {row[0] for row in connection.execute(
+                "SELECT receipt_path FROM attempts WHERE state='withdrawn'")}
+            declared = {row[0] for row in connection.execute(
+                "SELECT a.receipt_path FROM attempts a JOIN integrity_withdrawals w USING(attempt_id)")}
+            if withdrawn != declared or None in withdrawn:
+                raise ValueError("withdrawn receipt/tombstone identity drift")
+            paths.difference_update(self._relative(name) for name in withdrawn)
+            paths.update(self._relative(row[0]) for row in connection.execute(
+                "SELECT receipt_path FROM accepted UNION SELECT receipt_path FROM attempts WHERE state IN ('captured','unverified') AND receipt_path IS NOT NULL"))
+            for attempt in connection.execute("SELECT * FROM attempts WHERE state IN ('reserved','captured','unverified')"):
+                published = self._relative(self.publication_path(attempt, connection=connection) + "/session.json")
+                if published.exists() or published.is_symlink():
+                    paths.add(published)
+        return sorted(paths)
+
     def _bound_inputs(self, connection, attempt, value, relative):
         if (attempt["hostname"], attempt["mode"], attempt["slot"], attempt["attempt_id"]) != (value["hostname"], value["mode"], value["slot"], value["attempt_id"]):
             raise ValueError("verification changed its original reservation")
@@ -590,6 +628,13 @@ class StudyStore:
 
     def _commit_verified(self, receipt_path, *, validator=None) -> dict:
         self.plan()
+        path = Path(receipt_path)
+        relative_path = path.relative_to(self.root).as_posix() if path.is_absolute() else path.as_posix()
+        with self._transaction() as connection:
+            if self._withdrawals(connection) and connection.execute(
+                    "SELECT 1 FROM attempts a JOIN integrity_withdrawals w USING(attempt_id) WHERE a.receipt_path=?",
+                    (relative_path,)).fetchone():
+                raise ValueError("withdrawn receipt cannot become a new active reservation")
         value, relative, digest, inventory, five_tuple = self._receipt(receipt_path)
         identifier = value["attempt_id"]
         wall_seconds = _wall(value.get("attempt_wall_seconds"))
@@ -629,9 +674,13 @@ class StudyStore:
             if attempt is None or attempt["state"] not in _ACTIVE:
                 raise ValueError("attempt changed while independent verification ran")
             self._bound_inputs(connection, attempt, value, relative)
-            if connection.execute("SELECT 1 FROM accepted WHERE hostname=? AND mode=? AND (slot=? OR five_tuple=?)",
+            withdrawn_tuple = self._withdrawals(connection) and connection.execute(
+                "SELECT 1 FROM integrity_withdrawals WHERE hostname=? AND mode=? AND five_tuple=?",
+                (value["hostname"], value["mode"], _json(five_tuple).decode())).fetchone()
+            if withdrawn_tuple or connection.execute("SELECT 1 FROM accepted WHERE hostname=? AND mode=? AND (slot=? OR five_tuple=?)",
                 (value["hostname"], value["mode"], value["slot"], _json(five_tuple).decode())).fetchone():
-                duplicate = "verified session repeats an accepted tuple or slot"
+                duplicate = ("verified session repeats a withdrawn tuple" if withdrawn_tuple
+                    else "verified session repeats an accepted tuple or slot")
                 connection.execute("UPDATE attempts SET state='duplicate',reason=?,kind='duplicate',updated_at=? WHERE attempt_id=?",
                     (duplicate, _now(), identifier))
                 self._measurement(connection, attempt, "duplicate", wall_seconds)
@@ -712,7 +761,8 @@ class StudyStore:
                 path = self._relative(row["path"])
                 if path.exists() or path.is_symlink():
                     _unlinked(path, directory=True)
-                published = self._relative(self._corpus_path(row) + "/session.json")
+                publication = self.publication_path(row, connection=connection)
+                published = self._relative(publication + "/session.json")
                 if row["receipt_path"] is None and (published.exists() or published.is_symlink()):
                     value, relative, digest, inventory, _ = self._receipt(published)
                     self._bound_inputs(connection, row, value, relative)
@@ -723,10 +773,10 @@ class StudyStore:
                     self._assert_inventory(_load(row["inventory"]))
                     connection.execute("UPDATE attempts SET state='unverified',updated_at=? WHERE attempt_id=?", (_now(), row["attempt_id"]))
                     pending.append({"attempt_id": row["attempt_id"], "receipt_path": row["receipt_path"], "receipt_sha256": row["receipt_sha256"]})
-                elif self._relative(self._corpus_path(row)).exists():
-                    _unlinked(self._relative(self._corpus_path(row)), directory=True)
+                elif self._relative(publication).exists():
+                    _unlinked(self._relative(publication), directory=True)
                     connection.execute("UPDATE attempts SET state='unverified',reason='corpus publication interrupted',kind='interrupted',updated_at=? WHERE attempt_id=?", (_now(), row["attempt_id"]))
-                    pending.append({"attempt_id": row["attempt_id"], "receipt_path": None, "corpus_path": self._corpus_path(row)})
+                    pending.append({"attempt_id": row["attempt_id"], "receipt_path": None, "corpus_path": publication})
                 else:
                     connection.execute("UPDATE attempts SET state='failed',reason='interrupted before verified receipt',kind='interrupted',updated_at=? WHERE attempt_id=?",
                         (_now(), row["attempt_id"]))

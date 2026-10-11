@@ -35,7 +35,7 @@ def coordinator_provenance(*, resource_selection=False, class_selection=False) -
              "resource_study_verify.py", "resource_study_inputs.py", "resource_study_storage.py",
              "resource_study_supplements.py", "resource_study_epochs.py",
              "resource_study_network.py", "resource_study_audit.py",
-             "fidelity.py", "capture.py", "process_scheduler.py")
+             "fidelity.py", "capture.py", "process_scheduler.py", "resource_study_integrity.py")
     if resource_selection:
         names += ("resource_study_selection.py",)
     if class_selection:
@@ -263,7 +263,7 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
     """Publish one receipt after independently checking the complete staged session."""
     sealing_started = time.monotonic()
     source = root / attempt["path"] / "capture"
-    destination = root / "corpus" / attempt["hostname"] / attempt["mode"] / f"session-{attempt['slot']:06d}"
+    destination = root / StudyStore(root).publication_path(attempt)
     if pilot:
         destination = root / "pilots" / attempt["hostname"] / attempt["mode"] / attempt["attempt_id"]
     if destination.exists():
@@ -584,8 +584,9 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             except DuplicateSession as error:
                 # The immutable recording is retained but cannot satisfy a
                 # distinct-five-tuple quota. Move it away from the slot path.
-                destination = root / "corpus" / host / mode / f"session-{attempt['slot']:06d}"
-                if destination.exists():
+                destination = root / store.publication_path(attempt)
+                owner = destination / "attempt-owner.json"
+                if destination.exists() and owner.is_file() and load(owner).get("attempt_id") == attempt["attempt_id"]:
                     target = root / "failures" / host / mode / attempt["attempt_id"]
                     target.parent.mkdir(parents=True, exist_ok=True)
                     destination.rename(target)
@@ -593,7 +594,7 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                     wall_seconds=time.monotonic() - attempt_started)
                 continue
             except (OSError, ValueError, RuntimeError) as error:
-                rejected = root / "corpus" / host / mode / f"session-{attempt['slot']:06d}"
+                rejected = root / store.publication_path(attempt)
                 owner = rejected / "attempt-owner.json"
                 if rejected.exists() and owner.is_file() and load(owner).get("attempt_id") == attempt["attempt_id"]:
                     target = root / "failures" / host / mode / attempt["attempt_id"]
@@ -682,7 +683,7 @@ def verify(root: Path, *, recover=False, all_receipts=False) -> dict:
         from .resource_study_runtime import docker_lock
         with docker_lock():
             recovered = store.recover()
-    paths = sorted((root / "corpus").glob("*/*/session-*/session.json"))
+    paths = store.verification_paths()
     accepted = 0
     errors = []
     # First-credit commits perform independent raw verification. Explicit full
