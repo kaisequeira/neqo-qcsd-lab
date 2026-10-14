@@ -162,7 +162,7 @@ def bind_enrollment(store, enrollment, *, plan=None):
     return value
 
 
-def validate_enrollment(store, enrollment, *, plan=None):
+def _legacy_validate_enrollment(store, enrollment, *, plan=None):
     plan = store.plan() if plan is None else plan
     if not present(plan):
         if "class_selection" in enrollment:
@@ -202,6 +202,14 @@ def validate_enrollment(store, enrollment, *, plan=None):
             or any(name.startswith("inputs/resource-selections/") for name in enrollment.get("files", {}))):
         from .resource_study_selection import validate_selection_proof
         validate_selection_proof(store.root, enrollment)
+
+
+def validate_enrollment(store, enrollment, *, plan=None):
+    """Keep V3 behavior whole; only explicit new cohort input authority dispatches."""
+    from .resource_study_cohorts import INPUT_AUTHORITY_KEY, INPUT_CONTEXT, validate_input_authority
+    if INPUT_AUTHORITY_KEY in enrollment or INPUT_CONTEXT in enrollment.get("files", {}):
+        return validate_input_authority(store, enrollment, plan=store.plan() if plan is None else plan)
+    return _legacy_validate_enrollment(store, enrollment, plan=plan)
 
 
 def validate_receipt_enrollment(root, plan, enrollment):

@@ -189,7 +189,7 @@ def _key(cell):
     return cell["hostname"], cell["mode"]
 
 
-def _records(parent):
+def _legacy_records(parent):
     parent.plan()
     head = _meta(parent, "epoch_head")
     if head is None:
@@ -259,6 +259,21 @@ def _records(parent):
         from .resource_study_lineage import enforce_selected
         enforce_selected(parent, records)
     return records
+
+
+def _records(parent):
+    """Dispatch new cohort authority explicitly; legacy V3 stays unchanged."""
+    head = _meta(parent, "epoch_head")
+    if head is not None:
+        authority = json.loads(head)
+        if (type(authority) is not dict or set(authority) != {"sequence", "sha256"}
+                or type(authority["sequence"]) is not int or authority["sequence"] < 0):
+            raise ValueError("epoch head ledger binding is malformed")
+        value = _read(parent.root / "epoch-admissions" / f"{authority['sequence']:06d}.json")
+        from .resource_study_cohorts import ADMISSION, records
+        if value.get("record_type") == ADMISSION:
+            return records(parent)
+    return _legacy_records(parent)
 
 
 def _publish(parent, records, cells, change, affected, exclusions=None, class_transition=None, write_fences=None):
@@ -494,6 +509,9 @@ def create_epoch(parent, epoch_root, *, change, affected_hostnames=(), affected_
         if parent_plan["source_sha256"] != new_plan["source_sha256"]:
             raise ValueError("epoch roots use different frozen candidate sources")
         records = _records(parent)
+        from .resource_study_cohorts import ADMISSION
+        if records and records[-1]["record_type"] == ADMISSION:
+            raise ValueError("legacy epoch retirement cannot follow runtime-cohort authority")
         if not records:
             enrolled = _enrollments(parent)
             if not enrolled:
@@ -589,6 +607,9 @@ def enroll_class(store, hostname, operation):
         return operation()
     with _lock(parent.root):
         records = _records(parent)
+        from .resource_study_cohorts import ADMISSION
+        if records and records[-1]["record_type"] == ADMISSION:
+            raise ValueError("cohort roots cannot add or replace enrollments after admission")
         transition = records[-1].get("class_transition") if records else None
         if transition is not None and hostname not in transition["class_network"]["assignments"]:
             raise ValueError("hostname is retired from committed selected50")
@@ -729,6 +750,9 @@ def reserve(store, hostname, mode, operation, *, purpose="formal"):
         return operation()
     with _lock(parent.root):
         records = _records(parent)
+        from .resource_study_cohorts import ADMISSION, reserve as cohort_reserve
+        if records and records[-1]["record_type"] == ADMISSION:
+            return cohort_reserve(store, parent, records, hostname, mode, operation, purpose=purpose)
         cell = _active(store, _hostname(hostname), _mode(mode), records)
         if purpose == "formal":
             _pilot(store, cell)
@@ -760,6 +784,9 @@ def credit(store, receipt_path, operation):
             _pilot(store, _cell(store, receipt["hostname"], receipt["mode"]))
         return operation()
     with _lock(parent.root):
+        from .resource_study_cohorts import has_authority, credit as cohort_credit
+        if has_authority(parent):
+            return cohort_credit(store, parent, _records(parent), receipt_path, operation)
         path = Path(receipt_path)
         relative = path.relative_to(store.root).as_posix() if path.is_absolute() else path.as_posix()
         receipt = _load(store._file(relative)[0])
@@ -793,6 +820,17 @@ def credit(store, receipt_path, operation):
 
 def status(parent, *, deep=False, verification_workers=1):
     """Select actual receipt rows; deep mode independently rechecks raw evidence."""
+    parent_store = StudyStore(_regular(Path(parent).absolute(), directory=True))
+    head = _meta(parent_store, "epoch_head")
+    if head is not None:
+        authority = json.loads(head)
+        if (type(authority) is not dict or set(authority) != {"sequence", "sha256"}
+                or type(authority["sequence"]) is not int or authority["sequence"] < 0):
+            raise ValueError("epoch head ledger binding is malformed")
+        leaf = _read(parent_store.root / "epoch-admissions" / f"{authority['sequence']:06d}.json")
+        from .resource_study_cohorts import ADMISSION, status as cohort_status
+        if leaf.get("record_type") == ADMISSION:
+            return cohort_status(parent, deep=deep, verification_workers=verification_workers)
     _verification_workers(verification_workers)
     if not deep and verification_workers != 1:
         raise ValueError("parallel receipt verification requires a deep parent audit")
@@ -802,6 +840,9 @@ def status(parent, *, deep=False, verification_workers=1):
         records = _records(parent)
         if not records:
             raise ValueError("parent has no committed epoch admissions")
+        from .resource_study_cohorts import ADMISSION
+        if records[-1]["record_type"] == ADMISSION:
+            raise RuntimeError("parent advanced to runtime-cohort authority during legacy status; retry")
         cells, refs, accepted_count = [], [], 0
         for cell in records[-1]["cells"]:
             store = StudyStore(cell["root"])

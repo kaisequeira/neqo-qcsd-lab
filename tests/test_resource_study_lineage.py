@@ -292,10 +292,13 @@ def test_new_receipt_joins_its_own_v3_plan_and_cannot_borrow_old_map(campaign):
     with pytest.raises(ValueError): network.validate_receipt_network(plan,digest,receipt)
 
 
-def test_default_provenance_unchanged_new_context_explicitly_bound():
+def test_provenance_binds_cohort_dependency_and_explicit_class_context():
     original = study.coordinator_provenance()["files"]
     contextual = study.coordinator_provenance(class_selection=True)["files"]
-    assert len(original) == 14 and len(contextual) == 15
+    assert len(original) == 15 and len(contextual) == 16
+    cohort_sha = sha256_file(Path(study.__file__).with_name("resource_study_cohorts.py"))
+    assert original["resource_study_cohorts.py"] == cohort_sha
+    assert contextual["resource_study_cohorts.py"] == cohort_sha
     assert original["resource_study_integrity.py"] == sha256_file(
         Path(study.__file__).with_name("resource_study_integrity.py"))
     assert "resource_study_lineage.py" not in original

@@ -459,6 +459,14 @@ class StudyStore:
                 (hostname, mode, *_ACTIVE)).fetchone() is not None:
                 raise ValueError("class/mode cell already has an active reservation")
             occupied = {row[0] for row in connection.execute("SELECT slot FROM accepted WHERE hostname=? AND mode=?", (hostname, mode))}
+            from .resource_study_cohorts import allocate_slots
+            cohort_occupied = allocate_slots(self, hostname, mode, connection)
+            if cohort_occupied is not None:
+                if (type(cohort_occupied) is not set
+                        or any(type(slot) is not int or not 1 <= slot <= SESSIONS for slot in cohort_occupied)
+                        or not occupied <= cohort_occupied):
+                    raise ValueError("runtime-cohort occupied slots lost local accepted authority")
+                occupied = cohort_occupied
             slot = next((value for value in range(1, SESSIONS + 1) if value not in occupied), None)
             if slot is None:
                 raise ValueError("class/mode cell already has four hundred sessions")
@@ -677,9 +685,14 @@ class StudyStore:
             withdrawn_tuple = self._withdrawals(connection) and connection.execute(
                 "SELECT 1 FROM integrity_withdrawals WHERE hostname=? AND mode=? AND five_tuple=?",
                 (value["hostname"], value["mode"], _json(five_tuple).decode())).fetchone()
-            if withdrawn_tuple or connection.execute("SELECT 1 FROM accepted WHERE hostname=? AND mode=? AND (slot=? OR five_tuple=?)",
+            from .resource_study_cohorts import credit_conflict
+            cohort_conflict = credit_conflict(self, connection, attempt, value, five_tuple)
+            if cohort_conflict is not None and (type(cohort_conflict) is not str or not cohort_conflict):
+                raise ValueError("runtime-cohort credit conflict must be an explicit refusal")
+            if cohort_conflict is not None or withdrawn_tuple or connection.execute("SELECT 1 FROM accepted WHERE hostname=? AND mode=? AND (slot=? OR five_tuple=?)",
                 (value["hostname"], value["mode"], value["slot"], _json(five_tuple).decode())).fetchone():
-                duplicate = ("verified session repeats a withdrawn tuple" if withdrawn_tuple
+                duplicate = cohort_conflict if cohort_conflict is not None else (
+                    "verified session repeats a withdrawn tuple" if withdrawn_tuple
                     else "verified session repeats an accepted tuple or slot")
                 connection.execute("UPDATE attempts SET state='duplicate',reason=?,kind='duplicate',updated_at=? WHERE attempt_id=?",
                     (duplicate, _now(), identifier))
@@ -698,7 +711,11 @@ class StudyStore:
         return {"accepted": True, "idempotent": False, "hostname": value["hostname"], "mode": value["mode"], "slot": value["slot"]}
 
     def status(self) -> dict:
-        """Indexed verified-at-commit counts; does not reread every raw capture."""
+        """Local-ledger verified-at-commit counts, never a runtime-cohort union.
+
+        The cohort scheduler and parent composition obtain their explicit union
+        separately. This method does not reread every raw capture.
+        """
         plan = self.plan()
         with self._transaction() as connection:
             hosts = [row[0] for row in connection.execute("SELECT hostname FROM classes ORDER BY hostname")]

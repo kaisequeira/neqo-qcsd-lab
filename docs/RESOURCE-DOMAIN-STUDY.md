@@ -517,6 +517,88 @@ sessions with repeated URLs and nearby collection times.
 Do not describe the historical 64-visit evaluation adapter as the new study's
 already validated evaluation procedure.
 
+## Prospective compatible-runtime cohorts (draft protocol)
+
+The draft `resource_study_cohorts.py` protocol keeps a logical hostname/mode
+cell's currently accepted rows in their original immutable roots when a new
+Native implementation fills its remaining global slots. It does not replace
+an enrollment, retire old credit, or treat a new client hash as compatibility
+evidence. An explicit immutable operator declaration must preserve the ordered
+twenty URLs, workload bytes, settings, policies, acceptance, network assignment,
+and selected fifty classes. Native identity is recorded as an analysis stratum.
+The new cohort needs fresh preparation and its own exact matching mode pilot.
+
+Initialization freezes the actual prior admission and complete immutable input
+pool in the fresh root. Public preparation requires an explicit selection of
+that hostname's exact prior twenty URLs, including a non-prefix selection.
+For retained hosts using supplemental inputs, a separately typed enrollment
+binds the local admission snapshot, primary source, full ordered supplemental
+prefix and actual preparation proof. Source occurrence identifiers describe the
+complete new pool, including duplicate provenance records; they are not rewritten
+to resemble primary-only provenance. Bing and Flashscore resources outside the
+primary pool remain eligible only through their authenticated supplemental
+files. The original V3 validator remains intact for historical/primary inputs,
+and MAL retains its original literal-inventory reader. Raw workers validate the
+new proof from local immutable files without querying SQL; live preparation and
+admission separately recheck the actual parent head. Neither branch grants
+credit without the original complete session predicates.
+
+The public sequence is `resource-study cohort-init --root PARENT --cohort-root
+NEW`, original `prepare --root NEW --runtime CANONICAL --enroll` with an exact
+frozen resource selection, then `cohort-template` with explicit
+`--affected-hostname` and `--affected-mode`. The template is not an approval:
+the operator must publish separate immutable canonical JSON with
+`compatible_treatment: true` and a nonempty rationale. `cohort-admit` consumes
+that file through `--declaration` and `--declaration-sha256`. Original
+`capture --pilot --chunk 1` precedes formal capture in the new root.
+
+For a selected hostname's never-admitted mode, use `cohort-first-template`
+and `cohort-first-admit` with the same explicit host/mode flags and declaration
+file arguments. That separate declaration requires `new_mode_authorized: true`,
+`zero_prior_accepted: 0` and a nonempty rationale. It binds the requested mode's
+original same-host enrollment templates and the approved mode profile; it does
+not borrow another mode's settings or carry any credit into the new cell.
+Fresh preparation and that cell's own pilot remain required. This branch can
+fill the missing cells in the same selected fifty-by-five roster.
+
+Full member definitions and their original map hashes remain intact. A logical
+comparison projects only the map hash after the original stable-lineage reader
+proves the allowed leaf/predecessor link, exact source/selected50 and identical
+physical hostname assignment. The declaration explicitly binds that transition.
+
+Only the latest admitted cohort may reserve new sessions for that cell. Its
+allocator selects unused slots across all retained cohorts, with a global
+400-session limit and one active reservation. Global slot/tuple collisions
+retain the original duplicate attempt and measurement with zero credit.
+Unchanged cells retain their own root/runtime and remain independently usable.
+Parent recovery preserves failed/interrupted evidence and never deletes files.
+
+This first protocol supports an existing stable V3 selected50 parent, Native
+changes for existing cells, explicit first-mode admissions, and one exact unchanged scientific verifier source
+contract. Unknown historical verifier versions, resource/policy changes,
+subsequent legacy epoch retirement, and automatic withdrawal/replacement of a
+frozen cohort are refused. Final deep verification dispatches by authenticated
+scientific source, replays every retained/new receipt with the original raw
+predicates, and requires the same 50-by-five-by-400 composition. Index status
+and compatibility admission issue no new raw qualification or scientific
+credit. This is source under review, not a deployed or tested study authority.
+
+Capture-producer provenance and an independent qualifying reader are distinct.
+An old producer's source hashes remain unchanged in its bound receipt; they
+need not equal a stricter reader that later requalifies the same raw evidence.
+The cohort registry authenticates the strict reader and its complete declared
+package-import source closure, including conservative dormant branches. It
+never chooses a weaker reader from producer hashes. Original Native identity,
+receipt bytes and dated baseline claims are preserved.
+
+Capture authenticates the complete qualifying source graph at operation entry
+and exit, with exact source metadata checks during the operation and explicit
+worker binding. Workers join before the operation guard closes. Each scheduling
+decision takes one parent-locked count snapshot for its candidate writer cells;
+these counts only guide balanced chunks. Every reservation and commit retains
+fresh parent-head, accepted-row, global-slot/tuple and source checks. No mutable
+study state or scientific result is cached across operations.
+
 ## Proposed cleanup and Mac transfer
 
 **Cleanup and migration have not been completed.** Finish implementation and

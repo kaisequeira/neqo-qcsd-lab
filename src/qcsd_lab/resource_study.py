@@ -34,7 +34,7 @@ def coordinator_provenance(*, resource_selection=False, class_selection=False) -
     names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
              "resource_study_verify.py", "resource_study_inputs.py", "resource_study_storage.py",
              "resource_study_supplements.py", "resource_study_epochs.py",
-             "resource_study_network.py", "resource_study_audit.py",
+             "resource_study_network.py", "resource_study_audit.py", "resource_study_cohorts.py",
              "fidelity.py", "capture.py", "process_scheduler.py", "resource_study_integrity.py")
     if resource_selection:
         names += ("resource_study_selection.py",)
@@ -221,6 +221,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
             raise ValueError("hostname is not an eligible frozen candidate")
         if "class_selection" in store.plan() and hostname not in store.plan()["class_network"]["assignments"]:
             raise ValueError("hostname is outside the prospective selected50")
+        from .resource_study_cohorts import require_input_selection
+        require_input_selection(store, hostname, selection)
         if selection is not None:
             candidate = deepcopy(candidate)
             candidate["urls"] = list(selection["manifest"]["urls"])
@@ -245,8 +247,10 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
                     _verify_preparation(store, hostname, enrollment=enrollment)
             if "class_selection" in store.plan():
                 from .resource_study_lineage import bind_enrollment, validate_enrollment
+                from .resource_study_cohorts import bind_input_authority
                 from .resource_study_epochs import _verify_preparation
                 enrollment = bind_enrollment(store, enrollment)
+                enrollment = bind_input_authority(store, enrollment)
                 validate_enrollment(store, enrollment)
                 _verify_preparation(store, hostname, enrollment=enrollment)
             store.enroll(enrollment)
@@ -300,6 +304,8 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         validate_enrollment(StudyStore(root), enrollment)
         paths.update(class_selection=MANIFEST, class_selection_inventory=INVENTORY,
                      class_selection_source=SOURCE)
+        from .resource_study_cohorts import input_authority_artifact_paths
+        paths.update(input_authority_artifact_paths(enrollment))
     from .capture import split_endpoint
     endpoint = load(destination / "neqo/run.json")["endpoints"][0]
     local_ip, local_port = split_endpoint(endpoint["local_address"])
@@ -446,6 +452,16 @@ def tamaraw_retry_reason(mode: str, result: dict, error: Exception, *,
 
 def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             hostnames=None, stop=None, backend=None, chunk_sessions=CHUNK, pilot=False) -> dict:
+    from .resource_study_cohorts import source_operation
+    with source_operation(root) as source_auth:
+        return _capture(root, runtime, workers=workers, budget=budget, modes=modes,
+            hostnames=hostnames, stop=stop, backend=backend, chunk_sessions=chunk_sessions,
+            pilot=pilot, _source_auth=source_auth)
+
+
+def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
+             hostnames=None, stop=None, backend=None, chunk_sessions=CHUNK, pilot=False,
+             _source_auth=None) -> dict:
     """Balanced chunks; a failing cell pauses for this invocation only.
 
     A subsequent invocation retries that cell without resetting others. Workers
@@ -528,14 +544,23 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     cell_order = [(e["hostname"], m) for m in modes for e in enrolled
                   if e.get("mode_readiness", {}).get(m, True) and active_cell(store, e["hostname"], m)]
     enrollment_by_host = {e["hostname"]: e for e in enrolled}
-    def accepted(cell):
-        return next((r["accepted"] for r in store.status()["cells"]
-                     if (r["hostname"], r["mode"]) == cell), 0)
+    def scheduling_counts(cells):
+        from .resource_study_cohorts import counts_snapshot
+        snapshot = counts_snapshot(store, cells)
+        if snapshot is None:
+            local = {(row["hostname"], row["mode"]): row["accepted"] for row in store.status()["cells"]}
+            snapshot = {cell: local.get(cell, 0) for cell in cells}
+        if (set(snapshot) != set(cells)
+                or any(type(value) is not int or not 0 <= value <= 400 for value in snapshot.values())):
+            raise ValueError("scheduling accepted counts exceed their scientific cells")
+        return snapshot
 
-    def capture_chunk(worker, cell, allowance):
+    def capture_chunk(worker, cell, allowance, initial_count):
         host, mode = cell
         attempted, credited = 0, 0
-        while attempted < allowance and not stop.is_set() and accepted(cell) < 400:
+        # This hint limits the chunk only. Every reservation and commit still
+        # checks fresh parent/global slot and tuple authority independently.
+        while attempted < allowance and not stop.is_set() and initial_count + credited < 400:
             try:
                 attempt = store.allocate_attempt(host, mode, purpose="pilot" if pilot else "formal")
             except (OSError, ValueError, RuntimeError) as error:
@@ -624,29 +649,34 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
         return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": False}
 
-    def chunk(worker, cell, allowance):
-        try:
-            return capture_chunk(worker, cell, allowance)
-        finally:
-            release = getattr(backend, "release", None)
-            if release is not None:
-                release(worker)
+    def chunk(worker, cell, allowance, initial_count):
+        from .resource_study_cohorts import bind_source
+        with bind_source(_source_auth):
+            try:
+                return capture_chunk(worker, cell, allowance, initial_count)
+            finally:
+                release = getattr(backend, "release", None)
+                if release is not None:
+                    release(worker)
 
     with backend, ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}
         available = list(range(workers))
         while futures or (available and not stop.is_set()):
+            eligible = [c for c in cell_order if c not in paused and c not in completed_pilots and c[0] not in busy]
+            counts = (scheduling_counts(eligible) if available and not stop.is_set()
+                      and (budget is None or attempts < budget) and eligible else {})
             while available and not stop.is_set() and (budget is None or attempts < budget):
                 choices = [c for c in cell_order if c not in paused and c not in completed_pilots
-                           and c[0] not in busy and accepted(c) < 400]
+                           and c[0] not in busy and counts.get(c, 400) < 400]
                 if not choices:
                     break
-                cell = min(choices, key=lambda c: (accepted(c), cell_order.index(c)))
-                allowance = min(chunk_sessions, 400 - accepted(cell), (budget - attempts) if budget else chunk_sessions)
+                cell = min(choices, key=lambda c: (counts[c], cell_order.index(c)))
+                allowance = min(chunk_sessions, 400 - counts[cell], (budget - attempts) if budget else chunk_sessions)
                 worker = available.pop(0)
                 attempts += allowance
                 busy.add(cell[0])
-                futures[executor.submit(chunk, worker, cell, allowance)] = worker
+                futures[executor.submit(chunk, worker, cell, allowance, counts[cell])] = worker
             if not futures:
                 break
             done, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
@@ -702,6 +732,16 @@ def verify(root: Path, *, recover=False, all_receipts=False) -> dict:
 def parser():
     result = argparse.ArgumentParser(prog="qcsd-lab resource-study", description=__doc__)
     actions = result.add_subparsers(dest="action", required=True)
+    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit"):
+        child = actions.add_parser(action, help="explicit compatible-runtime cohort protocol; no imported credit")
+        child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
+        child.add_argument("--cohort-root", type=Path, required=True, help="fresh separate immutable cohort ledger")
+        if action in {"cohort-template", "cohort-first-template"}:
+            child.add_argument("--affected-hostname", action="append", required=True)
+            child.add_argument("--affected-mode", choices=MODES, action="append", required=True)
+        elif action in {"cohort-admit", "cohort-first-admit"}:
+            child.add_argument("--declaration", type=Path, required=True)
+            child.add_argument("--declaration-sha256", required=True)
     for action in ("prepare", "capture", "status", "verify", "export"):
         child = actions.add_parser(action)
         child.add_argument("--root", type=Path, required=True)
@@ -745,7 +785,24 @@ def main(argv=None):
     args = parser().parse_args(argv)
     root = args.root.absolute()
     try:
-        if args.action == "prepare":
+        if args.action == "cohort-init":
+            from .resource_study_cohorts import initialize_cohort
+            output = initialize_cohort(root, args.cohort_root.absolute())
+        elif args.action == "cohort-template":
+            from .resource_study_cohorts import compatibility_template
+            output = compatibility_template(root, args.cohort_root.absolute(),
+                affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
+        elif args.action == "cohort-admit":
+            from .resource_study_cohorts import create_cohort
+            output = create_cohort(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-first-template":
+            from .resource_study_cohorts import first_mode_template
+            output = first_mode_template(root, args.cohort_root.absolute(),
+                affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
+        elif args.action == "cohort-first-admit":
+            from .resource_study_cohorts import create_first_modes
+            output = create_first_modes(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "prepare":
             stable_initialized = False
             if args.stable_map_parent is not None:
                 if (len(args.inventory) != 1 or args.class_network_pool is not None
