@@ -8,6 +8,7 @@ must be requested only after the operator has stopped the study's workers.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
@@ -32,6 +33,7 @@ CLASSES = 50
 RESOURCES = 20
 SESSIONS = 400
 TARGET = CLASSES * len(MODES) * SESSIONS
+_PLAN_READ_SCOPE = ContextVar("resource-study-records-plan-read", default=None)
 RECORD = "qcsd-resource-domain-session-verification-v1"
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
@@ -353,13 +355,25 @@ class StudyStore:
                     connection.execute("INSERT OR IGNORE INTO meta VALUES(?,?)", (key, expected))
         return self.plan()
 
-    def plan(self) -> dict:
+    def _plan_data(self):
+        """Immutable parsing only; plan() always retains its live SQL joins."""
         raw, observation = self._file("study.json")
         value = _load(raw)
         assignments = validate_network_plan(value)
         if "class_selection" in value:
             from .resource_study_lineage import validate_context
             validate_context(self, value)
+        return value, observation, assignments
+
+    def plan(self) -> dict:
+        scope = _PLAN_READ_SCOPE.get()
+        if scope is None:
+            value, observation, assignments = self._plan_data()
+        else:
+            from .resource_study_cohorts import _RecordsRead
+            if type(scope) is not _RecordsRead:
+                raise ValueError("foreign records plan-read scope")
+            value, observation, assignments = scope.plan_data(self)
         with self._transaction() as connection:
             row = connection.execute("SELECT value FROM meta WHERE key='study_sha256'").fetchone()
             if row is None or row[0] != observation["sha256"] or observation["mode"] != "0444":

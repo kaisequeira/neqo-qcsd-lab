@@ -15,13 +15,15 @@ import hashlib
 import json
 import os
 import stat
+import threading
 from pathlib import Path
 from types import FunctionType
 
 from .resource_study_inputs import MODES, canonical_json, sha256_file
-from .resource_study_store import StudyStore, _create, _load, _json, _tuple, _hostname, _mode, _digest
+from .resource_study_store import StudyStore, _PLAN_READ_SCOPE, _create, _load, _json, _tuple, _hostname, _mode, _digest
 from .resource_study_audit import ReceiptReplay, verification_workers as _verification_workers
 from .resource_study_verify import verify_receipt
+from . import resource_study_reader_compatibility as reader_compatibility
 
 ADMISSION = "qcsd-resource-domain-runtime-cohort-admission-v1"
 DECLARATION = "qcsd-resource-domain-compatible-runtime-declaration-v1"
@@ -185,6 +187,7 @@ RAW_DEPENDENCIES = (
     'resource_study_lineage.py',
     'resource_study_native.py',
     'resource_study_network.py',
+    'resource_study_reader_compatibility.py',
     'resource_study_runtime.py',
     'resource_study_selection.py',
     'resource_study_storage.py',
@@ -337,18 +340,163 @@ def source_operation(store_or_root):
 
 
 def verify_by_contract(member, root, receipt):
-    if not _same(member["verifier"], verifier_contract()):
-        raise ValueError("unsupported or changed cohort raw verifier contract")
+    execution = verifier_contract()
+    qualified = reader_compatibility.qualify_execution(execution)
+    reader_compatibility.require_supported(member["verifier"], qualified)
     _receipt_verifier_contract(member, receipt)
     result = verify_receipt(root, receipt)
-    if not _same(member["verifier"], verifier_contract()):
+    if not _same(execution, verifier_contract()):
         raise ValueError("cohort raw verifier source changed during replay")
     return result
+
+
+def _records_file(path, *, content=False):
+    """One immutable input, with the same canonical FD/path authority on hits."""
+    path = Path(path)
+    if (not path.is_absolute() or path.resolve(strict=True) != path
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ValueError("records input path is not canonical and unlinked")
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o444):
+            raise ValueError("records input is not one immutable regular authority")
+        digest, chunks = hashlib.sha256(), []
+        if content:
+            for block in iter(lambda: stream.read(1024**2), b""):
+                digest.update(block); chunks.append(block)
+        after = os.fstat(stream.fileno())
+    def stamp(info):
+        return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
+                info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    if (stamp(before) != stamp(after) or stamp(before) != stamp(path.lstat())
+            or path.resolve(strict=True) != path
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ValueError("records input FD/path changed")
+    raw = b"".join(chunks) if content else None
+    if content and len(raw) != before.st_size:
+        raise ValueError("records input size changed during hashing")
+    return stamp(before), digest.hexdigest() if content else None, raw
+
+
+class _RecordsRead:
+    """Immutable data reuse within exactly one synchronous records() call.
+
+    SQL connections, rows, head, counts, membership and raw proof are never
+    retained here. The original Store.plan SQL suffix runs on every hit.
+    """
+    def __init__(self):
+        self.pid, self.thread, self.active = os.getpid(), threading.get_ident(), True
+        self.files, self.plans, self.stores, self.sciences = {}, {}, {}, {}
+
+    def check(self):
+        if not self.active or self.pid != os.getpid() or self.thread != threading.get_ident():
+            raise ValueError("records read scope is closed or foreign")
+
+    def file(self, path, expected=None):
+        self.check(); path = Path(path); key = str(path)
+        old = self.files.get(key)
+        stamp, digest, raw = _records_file(path, content=old is None)
+        if old is None:
+            old = self.files[key] = (stamp, digest)
+        elif stamp != old[0]:
+            raise ValueError("immutable records input changed within its call")
+        if expected is not None and old[1] != expected:
+            raise ValueError("immutable records input SHA differs")
+        return raw
+
+    def plan_data(self, store):
+        self.check(); root = str(store.root); old = self.plans.get(root)
+        if old is None:
+            raw = self.file(store.root / "study.json")
+            # This file can already be fenced by another read in this call.
+            if raw is None:
+                _, _, raw = _records_file(store.root / "study.json", content=True)
+            plan = _load(raw)
+            if type(plan) is not dict: raise ValueError("records study plan must be an object")
+            names = ["study.json"]
+            if "class_selection" in plan:
+                names += ["inputs/class-selection/selection.json", "inputs/supplied-resources.json",
+                          "inputs/class-selection/reserve-inventory.json"]
+            for name in names: self.file(store.root / name)
+            data = store._plan_data()  # Whole original parsing/context checks.
+            if data[1]["sha256"] != self.files[str(store.root / "study.json")][1]:
+                raise ValueError("validated plan differs from its fenced study bytes")
+            for name in names: self.file(store.root / name)
+            old = self.plans[root] = (type(store)._plan_data, names, deepcopy(data))
+        if type(store)._plan_data is not old[0]:
+            raise ValueError("records plan parser changed within its call")
+        for name in old[1]: self.file(store.root / name)
+        return deepcopy(old[2])
+
+    def store(self, root):
+        self.check(); key = str(root)
+        if key not in self.stores: self.stores[key] = StudyStore(root)
+        return self.stores[key]
+
+    def science(self, cell):
+        self.check(); key = (cell["root"], _epochs()._sha(cell["definition"]))
+        if key not in self.sciences:
+            value = deepcopy(cell["definition"])
+            del value["native"]; del value["ready"]
+            value["network"].pop("mapping_sha256", None)
+            self.sciences[key] = value
+        return deepcopy(self.sciences[key])
+
+    def finish(self):
+        self.check()
+        for path, old in self.files.items():
+            stamp, digest, _ = _records_file(Path(path), content=True)
+            if (stamp, digest) != old:
+                raise ValueError("records input bytes changed before call closure")
+
+    def discard(self):
+        self.active = False
+        self.files.clear(); self.plans.clear(); self.stores.clear(); self.sciences.clear()
+
+
+@contextmanager
+def _records_read_scope():
+    if _PLAN_READ_SCOPE.get() is not None:
+        raise ValueError("records read scope must have one call owner")
+    scope = _RecordsRead(); token = _PLAN_READ_SCOPE.set(scope); body_error = None
+    try:
+        yield scope
+    except BaseException as error:
+        body_error = error
+        raise
+    finally:
+        try:
+            scope.finish()
+        except BaseException as failure:
+            if body_error is None: raise
+            body_error.add_note("Records input closure also refused: " + str(failure))
+        finally:
+            scope.discard(); _PLAN_READ_SCOPE.reset(token)
+
+
+def _records_cell(cell):
+    scope = _PLAN_READ_SCOPE.get()
+    if scope is not None and type(scope) is not _RecordsRead:
+        raise ValueError("foreign records cell-read scope")
+    store = StudyStore(cell["root"]) if scope is None else scope.store(cell["root"])
+    if scope is not None:
+        scope.file(store._relative(cell["enrollment_path"]), cell["enrollment_sha256"])
+    # The original class-row SELECT/path/SHA/stamp check runs on every call,
+    # including hits in the Store's existing immutable enrollment cache.
+    value = _epochs()._cell(store, cell["hostname"], cell["mode"])
+    if scope is not None:
+        scope.file(store._relative(cell["enrollment_path"]), cell["enrollment_sha256"])
+    return deepcopy(value)
 
 
 def _science(cell, transition):
     from .resource_study_lineage import validate_cells
     validate_cells([cell], transition)
+    scope = _PLAN_READ_SCOPE.get()
+    if scope is not None:
+        if type(scope) is not _RecordsRead: raise ValueError("foreign records science-read scope")
+        return scope.science(cell)
     value = deepcopy(cell["definition"])
     del value["native"]
     del value["ready"]
@@ -1053,6 +1201,8 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
 def _validate_record(parent, records, value, *, contract=None):
     e = _epochs()
     contract = verifier_contract() if contract is None else contract
+    qualified = reader_compatibility.qualify_execution(verifier_contract())
+    reader_compatibility.require_supported(contract, qualified)
     if type(value) is dict and value.get("change") == "first-mode":
         return _validate_first_record(parent, records, value, contract)
     fields = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells",
@@ -1182,6 +1332,7 @@ def _validate_first_record(parent, records, value, contract):
 
 def _validate_members(parent, value, new_cells, contract):
     e = _epochs()
+    qualified = reader_compatibility.qualify_execution(verifier_contract())
     from .resource_study_lineage import validate_cells
     for entry in value["cohorts"]:
         ids = [m["cohort_id"] for m in entry["members"]]
@@ -1189,10 +1340,11 @@ def _validate_members(parent, value, new_cells, contract):
             raise ValueError("runtime cohort member identity repeats or latest writer differs")
         for member in entry["members"]:
             cell = member["cell"]
+            reader_compatibility.require_supported(member["verifier"], qualified)
             if (set(member) != {"cohort_id", "cell", "verifier", "frozen_accepted"}
-                    or member["cohort_id"] != e._sha(cell) or not _same(member["verifier"], contract)
+                    or member["cohort_id"] != e._sha(cell)
                     or not _same(_science(cell, value["class_transition"]), entry["science"])
-                    or not _same(cell, e._cell(StudyStore(cell["root"]), cell["hostname"], cell["mode"]))):
+                    or not _same(cell, _records_cell(cell))):
                 raise ValueError("runtime cohort enrollment/source/verifier identity changed")
     validate_cells([m["cell"] for entry in value["cohorts"] for m in entry["members"]], value["class_transition"])
     _check_frozen(parent, value["cohorts"])
@@ -1200,6 +1352,12 @@ def _validate_members(parent, value, new_cells, contract):
 
 
 def records(parent):
+    """Authenticate one head with call-local immutable inputs and fresh SQL."""
+    with _records_read_scope():
+        return _records(parent)
+
+
+def _records(parent):
     """Read the V3 prefix with its original validator; new types stay explicit."""
     e = _epochs()
     head = e._meta(parent, "epoch_head")
@@ -1218,14 +1376,22 @@ def records(parent):
     namespace = dict(e._legacy_records.__globals__); namespace["_meta"] = historical_meta
     legacy = FunctionType(e._legacy_records.__code__, namespace, e._legacy_records.__name__, e._legacy_records.__defaults__)
     result = deepcopy(legacy(parent))
-    contract = verifier_contract()
+    execution = verifier_contract()
+    qualified = reader_compatibility.qualify_execution(execution)
     for value in values[first:]:
+        ref = value.get("compatibility_declaration")
+        if type(ref) is not dict or set(ref) != {"path", "sha256"}:
+            raise ValueError("runtime cohort declaration reference differs")
+        declaration = e._read(ref["path"])
+        if type(declaration) is not dict:
+            raise ValueError("runtime cohort declaration must be an object")
+        contract = reader_compatibility.admission_contract(declaration.get("verifier"), qualified)
         _validate_record(parent, result, value, contract=contract); result.append(value)
     if e._sha(result[-1]) != authority["sha256"] or e._meta(parent, "epoch_head") != head:
         raise ValueError("runtime cohort head changed during authenticated ancestry read")
     from .resource_study_lineage import enforce_selected
     enforce_selected(parent, result)
-    if not _same(contract, verifier_contract()):
+    if not _same(execution, verifier_contract()):
         raise ValueError("qualifying reader source changed during cohort ancestry read")
     return result
 
@@ -1447,12 +1613,17 @@ def status(parent, *, deep=False, verification_workers=1):
             current = e._records(parent)
             if current[-1]["record_type"] != ADMISSION: raise ValueError("parent has no runtime cohort admission")
             contract = verifier_contract(); cells, refs, count = [], [], 0
+            qualified = reader_compatibility.qualify_execution(contract)
+            admission_readers = {}
             for entry in current[-1]["cohorts"]:
+                for member in entry["members"]:
+                    reader_compatibility.require_supported(member["verifier"], qualified)
+                    admission_readers[e._sha(member["verifier"])] = deepcopy(member["verifier"])
                 key = entry["hostname"], entry["mode"]
                 rows = _accepted(entry); excluded = e._excluded(parent, current, key)
                 for member, store, row in rows:
                     if row["five_tuple"] in excluded: raise ValueError("runtime cohort resurrects an excluded ancestor tuple")
-                    if not _same(member["verifier"], contract): raise ValueError("unsupported historical raw verifier")
+                    reader_compatibility.require_supported(member["verifier"], qualified)
                     if deep:
                         store._assert_inventory(_load(row["inventory"]))
                         raw, observed = store._file(row["receipt_path"], row["receipt_sha256"])
@@ -1477,7 +1648,10 @@ def status(parent, *, deep=False, verification_workers=1):
             result = {"record_type": COMPOSITION, "schema_version": 1, "parent_study_sha256": parent._file("study.json")[1]["sha256"],
                     "admission_sha256": e._sha(current[-1]), "class_selection": current[-1]["class_transition"]["class_selection"],
                     "cells": cells, "accepted": refs, "accepted_count": count, "total_sessions": 100000,
-                    "qualifying_verifiers": {e._sha(contract): contract},
+                    "qualifying_verifiers": admission_readers,
+                    "execution_reader": contract,
+                    "reader_execution_bindings": {digest: reader_compatibility.execution_binding(value, qualified)
+                        for digest, value in sorted(admission_readers.items())},
                     "producer_provenance": "preserved verbatim in each bound source receipt; independent from qualifying reader identity",
                     "complete": complete, "raw_deep_verified": deep, "scientific_credit": deep and complete,
                     "scope": "explicit compatible Native strata; separate immutable cohort roots; global logical-cell slots",
