@@ -1,7 +1,7 @@
-"""Exact Source017 admission-reader compatibility for Source018 execution.
+"""Exact Source017/018 admission-reader compatibility for Source019 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source018 reader. This
+never returned as the source identity of the executing Source019 reader. This
 registry permits only the reviewed allocator/control implementation changes;
 all other scientific dependencies retain their exact Source017 bytes. Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
@@ -19,7 +19,7 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-BINDING_TYPE = "qcsd-resource-domain-017-018-reader-execution-binding-v1"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -196,11 +196,20 @@ LEGACY_FILES = {'__init__.py': 'a768d2af1e7b99c92b4cdfb6e74530c26d922ff79669df36
  'whole_graph_input.py': '53a988148197bac97578cc89b5ca528f2cda6ea818b53a772f6f1302ae5c5ba8',
  'whole_graph_supplement.py': 'dd7c5973f6876acdadb079b5b33bd719918cffd0a5ad9847e7b54493d157af98'}
 
-# Sealed only after the cache implementation and compatibility call sites stop.
-# An empty mapping refuses execution; no prospective hash is accepted.
-APPROVED_EXECUTION_FILES = {
+# The exact prior execution graph remains an immutable admission profile.
+PRIOR_EXECUTION_FILES = {
     "resource_study_cohorts.py": "3b5d3d7bf3e33c73723f5c5c70da5fc006dfe0c007a98cdc68503710926d69d7",
     "resource_study_store.py": "76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53",
+    "resource_study_reader_compatibility.py": "6922c4e3ca971459758f8b5e09f2c86d3c53999e7ff08a9411a411ca155ec87f",
+}
+
+# Sealed only after the shared-flight implementation stops.
+# An empty mapping refuses execution; no prospective hash is accepted.
+APPROVED_EXECUTION_FILES = {
+    'resource_study_cohorts.py': '3b5d3d7bf3e33c73723f5c5c70da5fc006dfe0c007a98cdc68503710926d69d7',
+    'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
+    'resource_study.py': 'dfba1a39876472c1e5e35e2cbabd0e4eb6f32fc33728d707eea3c96f1f3dd7f6',
+    'resource_study_runtime.py': '03c2c7c2dc875d81610f53a8c0f28fccb3e69756b4c9a2af3cba9ef645c6ad4b',
 }
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -229,6 +238,13 @@ def legacy_contract():
     return _profile(LEGACY_FILES)
 
 
+def prior_execution_contract():
+    """Exact Source018 qualifier; its receipt/epoch identity is never retagged."""
+    files = dict(LEGACY_FILES)
+    files.update(PRIOR_EXECUTION_FILES)
+    return _profile(files)
+
+
 def _self_sha256():
     path = Path(__file__)
     if (not path.is_absolute() or path.resolve(strict=True) != path
@@ -253,10 +269,11 @@ def execution_files():
     The helper itself is included in that actual execution graph. ROOT's fixed
     execution/consumer Source manifest binds its exact bytes before launch.
     """
-    if (set(APPROVED_EXECUTION_FILES) != {"resource_study_cohorts.py", "resource_study_store.py"}
+    if (set(APPROVED_EXECUTION_FILES) != {"resource_study_cohorts.py", "resource_study_store.py",
+                                         "resource_study.py", "resource_study_runtime.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source018 reader compatibility registry is not sealed")
+        raise ValueError("Source019 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -274,22 +291,22 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source018 profile, never a legacy alias.
+    """Authenticate the exact approved Source019 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source018 execution reader")
+        raise ValueError("unsupported or changed Source019 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source018 execution reader required")
-    if _encoded(admission) not in (_encoded(legacy_contract()), qualified._profile):
+        raise ValueError("qualified Source019 execution reader required")
+    if _encoded(admission) not in (_encoded(legacy_contract()), _encoded(prior_execution_contract()), qualified._profile):
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
 
@@ -307,9 +324,10 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017 admission profile or reviewed Source018 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018 admission profiles or reviewed Source019 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
+        "shared_two_root_capture_launcher_changed": True,
         "scientific_truth_conditions_changed": False,
         "historical_receipts_requalified_by_compatibility": False,
         "authority_issued": False, "scientific_credit_added": 0}

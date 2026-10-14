@@ -27,6 +27,36 @@ from .resource_study_network import (ATTACHMENT_RECORD, check_collisions, mappin
 
 SCHEDULER = "qcsd-client-rr1-portable-etf-helper-v4"
 
+# Initial shared-flight scope. A new launcher does not establish new runtime
+# eligibility: every owning cell still needs its admitted definition and pilot.
+SHARED_NATIVE = {
+    "canonical_sha256": "b2d9f614dd6925b3b67a5c15708ff4d216d42e16f148df2bd1328756a633efb1",
+    "client_sha256": "93b3440a9662da0cf5037a74080b4e04ec7a03231b9117b093e14ff3c5f57b9d",
+    "platform": "linux/arm64",
+    "native_commit": "ce1e8ef35283cf21ae72035e5d914cdf16587344",
+    "collection_image_digest": "sha256:fee72a905cf2ba1661bc9bd2473443a6744e9a47e47b85f5c4c2d6c58506fe4a",
+    "prepare_image_digest": "sha256:b8a6bc760399f43f8b59d5748c689723dcdd204243063dd11f380356e6930217",
+}
+
+
+def require_shared_runtime(runtime):
+    if (type(runtime) is not dict or any(runtime.get(key) != value for key, value in SHARED_NATIVE.items())
+            or type(runtime.get("source")) is not dict
+            or runtime["source"].get("neqo_commit") != SHARED_NATIVE["native_commit"]):
+        raise ValueError("two-root capture requires the exact Native93 runtime")
+
+
+def shared_roots(values):
+    """Two distinct canonical directories, neither nested within the other."""
+    if type(values) not in (list, tuple) or len(values) != 2:
+        raise ValueError("two-root capture requires exactly two writer roots")
+    roots = [Path(value) for value in values]
+    if (any(not root.is_absolute() or root.resolve(strict=True) != root
+            or any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir() for root in roots)
+            or len(set(roots)) != 2 or any(a in b.parents for a in roots for b in roots if a != b)):
+        raise ValueError("shared writer roots must be distinct canonical nonnested directories")
+    return roots
+
 
 def _docker(*args: str, timeout=120) -> str:
     try:
@@ -438,5 +468,289 @@ class CaptureRuntime:
             _put(self.flight / "closed.json", {"containers_removed": self.containers,
                 "networks_removed": self.networks, "cleanup_errors": failures, "scientific_credit": False})
         self.lock.__exit__(None, None, None)
+        if failures:
+            raise RuntimeError("capture topology cleanup needs recovery")
+
+
+class MultiRootCaptureRuntime(CaptureRuntime):
+    """One original protected lane topology, with two owning artifact roots.
+
+    Router, worker, capability, partition and raw job construction follow the
+    original runtime. Only the root mounts, per-attempt root binding and the
+    duplicated launch/closure metadata differ. This class grants no ledger or
+    pilot authority; the public scheduler authenticates both writer contexts.
+    """
+
+    def __init__(self, contexts, runtime, workers, *, cell_roots):
+        require_shared_runtime(runtime)
+        if type(workers) is not int or not 2 <= workers <= 11:
+            raise ValueError("shared capture requires between two and eleven workers")
+        if type(contexts) is not dict or any(not isinstance(root, Path) for root in contexts):
+            raise ValueError("shared capture requires authenticated root contexts")
+        roots = shared_roots(list(contexts))
+        if (type(cell_roots) is not dict or not cell_roots or len(cell_roots) > 50
+                or set(cell_roots.values()) != set(roots)):
+            raise ValueError("shared capture needs an explicit hostname-to-root map")
+        self.contexts = {}
+        for root in roots:
+            context = contexts[root]
+            plan = load(root / "study.json")
+            if (type(context) is not dict or set(context) != {"plan", "study_sha256"}
+                    or context["plan"] != plan or context["study_sha256"] != sha256_file(root / "study.json")):
+                raise ValueError("shared capture study context changed")
+            validate_network_plan(plan, require=True)
+            self.contexts[root] = {"plan": plan, "study_sha256": context["study_sha256"]}
+        first = self.contexts[roots[0]]["plan"]
+        if any(self.contexts[root]["plan"].get(key) != first.get(key)
+               for root in roots for key in ("class_network", "class_selection", "source_sha256", "acceptance", "tuple_uniqueness_scope")):
+            raise ValueError("shared capture roots have different frozen class plans")
+        assignments = validate_network_plan(first, require=True)
+        if any(type(host) is not str or host not in assignments for host in cell_roots):
+            raise ValueError("shared capture host has no frozen class assignment")
+        self.cell_roots = dict(cell_roots)
+        self.flights = {}
+        super().__init__(roots[0], runtime, workers, hostnames=sorted(cell_roots))
+
+    def flight_binding(self):
+        return {"record_type": "qcsd-resource-domain-shared-flight-v1",
+            "anchor_root": str(next(iter(self.contexts))),
+            "roots": [{"root": str(root), "study_sha256": context["study_sha256"]}
+                      for root, context in self.contexts.items()],
+            "cell_roots": {host: str(root) for host, root in sorted(self.cell_roots.items())},
+            "workers": self.count, "scientific_credit": False}
+
+    def __enter__(self):
+        self.lock = docker_lock()
+        self.lock.__enter__()
+        try:
+            for root, context in self.contexts.items():
+                if (sha256_file(root / "study.json") != context["study_sha256"]
+                        or load(root / "study.json") != context["plan"]):
+                    raise ValueError("shared capture study context changed before launch")
+            self.plan = load(self.root / "study.json")
+            assignments = validate_network_plan(self.plan, require=True)
+            self.study_sha256 = sha256_file(self.root / "study.json")
+            info = _runtime_check(self.runtime)
+            ncpu = int(info["NCPU"])
+            available = json.loads(_docker("run", "--rm", "--network", "none", "--cap-drop", "ALL",
+                "--entrypoint", "/opt/qcsd-venv/bin/python3", self.runtime["collection_image_digest"],
+                "-I", "-c", "import json,os;print(json.dumps(sorted(os.sched_getaffinity(0))))"))
+            if (not isinstance(available, list) or any(type(cpu) is not int or cpu < 0 for cpu in available)
+                    or available != sorted(set(available)) or not available or max(available) >= ncpu):
+                raise ValueError("Docker affinity probe did not report the actual CPU set")
+            if len(available) < 2 * self.count + 1:
+                raise ValueError(f"{self.count} protected workers need {2*self.count+1} available logical CPUs")
+            if _docker("ps", "-q"):
+                raise ValueError("capacity launch requires no unaccounted running containers")
+            existing_ids = _docker("network", "ls", "-q").splitlines()
+            existing = json.loads(_docker("network", "inspect", *existing_ids)) if existing_ids else []
+            collision = check_collisions(self.plan, existing, _host_routes())
+            nonce = secrets.token_hex(12)
+            for root in self.contexts:
+                flight = root / "flights" / nonce
+                flight.mkdir(parents=True)
+                self.flights[root] = flight
+            self.flight = self.flights[self.root]
+            _put(self.flight / "collision-check.json", collision)
+            image = self.runtime["collection_image_digest"]
+            positive = [cpu for cpu in available if cpu >= 1]
+            pairs = [(positive[2*i], positive[2*i+1]) for i in range(self.count)]
+            sidecars = sorted(set(available) - {cpu for pair in pairs for cpu in pair})
+            sidecar_cpuset = ",".join(map(str, sidecars))
+            bridge = json.loads(_docker("network", "inspect", "bridge"))[0]
+            domains = sorted(self.cell_roots)
+            if not domains:
+                raise ValueError("capture topology requires selected enrolled classes")
+            if any(host not in assignments for host in domains):
+                raise ValueError("enrolled class has no frozen network identity")
+            pins = [public_ipv4(host) for host in domains]
+            _put(self.flight / "dns.json", {"hosts": pins})
+            declared, sidecar_ids = [], {}
+            observers = self.flight / "observers"
+            observers.mkdir()
+            for index, hostname in enumerate(sorted(domains)):
+                assignment = assignments[hostname]
+                prefix = "qcsd-resource-" + self.flight.name + "-class-" + str(index)
+                class_directory = self.flight / "classes" / hostname
+                class_directory.mkdir(parents=True)
+                capture_root = observers / hostname
+                capture_root.mkdir(mode=0o2770)
+                capture_root.chmod(0o2770)
+                network_id = _docker("network", "create", "--driver", "bridge",
+                    "--subnet", assignment["subnet"], "--gateway", assignment["gateway_ipv4"],
+                    "--label", "org.qcsd.owner=qcsd-lab", "--label", "org.qcsd.class=" + hostname, prefix)
+                self.networks.append(network_id)
+                network = json.loads(_docker("network", "inspect", network_id))[0]
+                subnet = network["IPAM"]["Config"][0]["Subnet"]
+                if subnet != assignment["subnet"] or network["IPAM"]["Config"][0].get("Gateway") != assignment["gateway_ipv4"]:
+                    raise ValueError("Docker changed a frozen class subnet or bridge gateway")
+                secret = secrets.token_hex(32)
+                router_env = {"QCSD_KERNEL_TX_ROUTER_CAPTURE_ROOT": "/kernel-tx", "QCSD_KERNEL_TX_ROUTER_CAPTURE_SECRET": secret,
+                    "QCSD_KERNEL_TX_ROUTER_CAPTURE_INTERFACE": "eth0", "QCSD_KERNEL_TX_ROUTER_CAPTURE_PORT": "19090",
+                    "QCSD_KERNEL_TX_ROUTER_CAPTURE_MAX_SECONDS": "740",
+                    "QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND": "routed-public-egress", "QCSD_KERNEL_TX_ROUTER_UPLINK_INTERFACE": "eth1",
+                    "QCSD_KERNEL_TX_ROUTER_CLIENT_SUBNET": subnet, "QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE": "1"}
+                router_args = ["create", "--name", prefix + "-router", "--network", network_id,
+                    "--ip", assignment["router_ipv4"], "--cpuset-cpus", sidecar_cpuset,
+                    "--group-add", str(os.getgid()), "--label", "org.qcsd.owner=qcsd-lab", "--label", "org.qcsd.role=network-router",
+                    "--label", "org.qcsd.study=resource-study",
+                    "--cap-drop", "ALL", "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--security-opt", "no-new-privileges",
+                    "--sysctl", "net.ipv4.ip_forward=1", "--mount", f"type=bind,src={capture_root},dst=/kernel-tx",
+                    "--entrypoint", "/opt/qcsd-venv/bin/python3"]
+                for key, value in router_env.items():
+                    router_args += ["--env", key + "=" + value]
+                router_id = _docker(*router_args, image, "-I", "-m", "qcsd_lab.kernel_capture_router")
+                self.containers.append(router_id)
+                sidecar_ids[prefix + "-router"] = router_id
+                _docker("start", router_id)
+                _docker("network", "connect", "--gw-priority", "1", "bridge", router_id)
+                _docker("exec", router_id, "/bin/sh", "-eu", "-c",
+                    'ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off; '
+                    'ethtool -K eth1 gro off gso off tso off tx-udp-segmentation off; '
+                    'iptables -t nat -A POSTROUTING -s "$1" -o eth1 -j MASQUERADE', "sh", subnet)
+                router = json.loads(_docker("container", "inspect", router_id))[0]
+                router_ip, net_receipt, binding = topology_receipts(image, prefix, network, subnet, prefix + "-router", router, bridge)
+                if router_ip != assignment["router_ipv4"]:
+                    raise ValueError("Docker changed the persistent class router address")
+                _put(class_directory / "network.json", net_receipt)
+                _put(class_directory / "observer.json", binding)
+                _put(class_directory / "assignment.json", receipt_binding(self.plan, self.study_sha256, hostname))
+                environment = {"QCSD_CONTROLLED_ROUTER_CLIENT_IP": router_ip, "QCSD_KERNEL_TX_PUBLIC_ROUTER_IP": router_ip,
+                    "QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET": subnet,
+                    "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ENDPOINT": router_ip + ":19090",
+                    "QCSD_KERNEL_TX_POST_VETH_CAPTURE_SECRET": secret,
+                    "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ROOT": "/kernel-tx/" + hostname,
+                    "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64": _encoded(net_receipt),
+                    "QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64": _encoded(binding)}
+                self.class_routes[hostname] = {"network_id": network_id, "name": prefix,
+                    "router_id": router_id, "assignment": assignment, "environment": environment,
+                    "network": net_receipt, "observer": binding}
+            for index, (client_cpu, helper_cpu) in enumerate(pairs):
+                prefix = "qcsd-resource-" + self.flight.name + "-lane-" + str(index)
+                lane = self.flight / str(index)
+                lane.mkdir()
+                wireshark_config = lane / "wireshark-config"
+                wireshark_config.mkdir(mode=0o700)
+                env = {"QCSD_CAPTURE_SCHEDULER_CONTRACT": SCHEDULER, "QCSD_CAPTURE_CLIENT_CPU": str(client_cpu),
+                    "QCSD_CAPTURE_ORCHESTRATOR_CPU": str(helper_cpu), "QCSD_CAPTURE_ETF_INTERFACE": "eth0",
+                    "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE": str(lane / "partition.json"),
+                    "QCSD_LAB_IMAGE_DIGEST": image, "QCSD_LAB_SOURCE_METADATA": "/usr/share/qcsd-lab/source.json",
+                    "QCSD_LAB_ROOT": "/runtime-src",
+                    "WIRESHARK_CONFIG_DIR": str(wireshark_config),
+                    "XDG_CONFIG_HOME": str(wireshark_config)}
+                args = ["create", "--name", prefix + "-worker", "--network", "bridge",
+                    "--cpuset-cpus", f"{client_cpu},{helper_cpu}", "--ulimit", "rtprio=1:1",
+                    "--label", "org.qcsd.owner=qcsd-lab", "--label", "org.qcsd.role=resource-study-worker",
+                    "--label", "org.qcsd.study=resource-study",
+                    "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--group-add", str(os.getgid()),
+                    "--entrypoint", "/usr/bin/tini"]
+                for root in self.contexts:
+                    args += ["--mount", f"type=bind,src={root},dst={root}"]
+                for hostname in sorted(domains):
+                    args += ["--mount", f"type=bind,src={observers / hostname},dst=/kernel-tx/{hostname},readonly"]
+                for capability in ("NET_ADMIN", "NET_RAW", "SETUID", "SETGID", "SETPCAP"):
+                    args += ["--cap-add", capability]
+                for key, value in env.items():
+                    args += ["--env", key + "=" + value]
+                for pin in pins:
+                    args += ["--add-host", pin["hostname"] + ":" + pin["selected_ipv4"]]
+                args += [image, "--", "/bin/sh", "-eu", "-c",
+                    '/usr/bin/taskset --pid --cpu-list "${QCSD_CAPTURE_ORCHESTRATOR_CPU}" 1 >/dev/null; '
+                    'exec /usr/bin/taskset --cpu-list "${QCSD_CAPTURE_ORCHESTRATOR_CPU}" /bin/sleep infinity']
+                worker_id = _docker(*args)
+                self.containers.append(worker_id)
+                self.workers.append({"id": worker_id, "helper": helper_cpu, "lane": lane,
+                    "initial_bridge": True, "hostname": None, "attachment_number": 0})
+                declared.append({"id": worker_id, "name": prefix + "-worker", "image_id": image,
+                                 "client_cpu": client_cpu, "orchestrator_cpu": helper_cpu})
+            running = _docker("ps", "-q").splitlines()
+            inventory_ids = list(dict.fromkeys([*running, *(w["id"] for w in self.workers)]))
+            inspected = json.loads(_docker("container", "inspect", *inventory_ids))
+            from .process_scheduler import build_peer_host_partition
+            for worker in self.workers:
+                partition = build_peer_host_partition(inspected, available, declared, sidecar_ids, worker["id"],
+                    docker_ncpu=ncpu, resource_study=True)
+                _put(worker["lane"] / "partition.json", partition)
+                worker["partition_sha256"] = sha256_file(worker["lane"] / "partition.json")
+                _docker("start", worker["id"])
+            for root, flight in self.flights.items():
+                _put(flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
+                    "runtime": self.runtime, "available_cpus": available,
+                    "study_sha256": self.contexts[root]["study_sha256"],
+                    "class_mapping_sha256": mapping_sha256(self.contexts[root]["plan"]),
+                    "shared_flight": self.flight_binding(), "scientific_credit": False})
+            return self
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+
+    def _activate(self, index, hostname):
+        if hostname not in self.cell_roots:
+            raise ValueError("hostname is outside this shared flight")
+        root = self.cell_roots[hostname]
+        with self.switch_lock:
+            original = self.root, self.plan, self.study_sha256
+            context = self.contexts[root]
+            self.root, self.plan, self.study_sha256 = root, context["plan"], context["study_sha256"]
+            try:
+                return super()._activate(index, hostname)
+            finally:
+                self.root, self.plan, self.study_sha256 = original
+
+    def capture(self, index: int, attempt: dict, enrollment: dict) -> dict:
+        worker = self.workers[index]
+        attachment = self._activate(index, attempt["hostname"])
+        root = self.cell_roots[attempt["hostname"]]
+        directory = root / attempt["path"]
+        job = {"hostname": attempt["hostname"], "mode": attempt["mode"],
+               "enrollment_dir": str(root / enrollment["preparation_dir"]),
+               "attempt_dir": str(directory / "capture"), "seed": int(attempt["attempt_id"][:16], 16),
+               "runtime": self.runtime}
+        _put(directory / "job.json", job)
+        arguments = ["exec", "--env", "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256=" + worker["partition_sha256"]]
+        for key, value in self.class_routes[attempt["hostname"]]["environment"].items():
+            arguments += ["--env", key + "=" + value]
+        output = _docker(*arguments, worker["id"], "/usr/bin/taskset", "--cpu-list", str(worker["helper"]),
+            "/usr/bin/setpriv", "--reuid", str(os.getuid()), "--regid", str(os.getgid()), "--clear-groups",
+            "--bounding-set=-all,+net_raw,+net_admin,+setpcap", "--inh-caps=+net_raw,+net_admin,+setpcap",
+            "--ambient-caps=+net_raw,+net_admin,+setpcap", "--no-new-privs",
+            "/opt/qcsd-venv/bin/python3", "-I", "-B", "-m", "qcsd_lab.resource_study_native", "_capture",
+            "--job", str(directory / "job.json"), timeout=850)
+        result = json.loads(output.splitlines()[-1])
+        _put(directory / "native-adapter.json", result)
+        if (directory / "capture").is_dir():
+            _put(directory / "capture/class-network.json", attachment)
+        return {**result.get("result", result), "success": result.get("success") is True,
+                "mode_policies": result.get("mode_policies", {}), "resource_error": result.get("resource_error")}
+
+    def __exit__(self, *_):
+        if self.closed:
+            return
+        self.closed = True
+        failures = []
+        for identifier in reversed(self.containers):
+            try:
+                _docker("rm", "--force", identifier)
+            except RuntimeError as error:
+                failures.append(str(error))
+        for identifier in reversed(self.networks):
+            try:
+                _docker("network", "rm", identifier)
+            except RuntimeError as error:
+                failures.append(str(error))
+        publication_errors = []
+        try:
+            for root, flight in self.flights.items():
+                try:
+                    _put(flight / "closed.json", {"containers_removed": self.containers,
+                        "networks_removed": self.networks, "cleanup_errors": failures,
+                        "study_sha256": self.contexts[root]["study_sha256"],
+                        "shared_flight": self.flight_binding(), "scientific_credit": False})
+                except (OSError, ValueError, RuntimeError) as error:
+                    publication_errors.append(str(error))
+        finally:
+            self.lock.__exit__(None, None, None)
+        if publication_errors:
+            raise RuntimeError("shared flight closure metadata needs recovery")
         if failures:
             raise RuntimeError("capture topology cleanup needs recovery")

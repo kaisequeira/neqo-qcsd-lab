@@ -732,6 +732,15 @@ def verify(root: Path, *, recover=False, all_receipts=False) -> dict:
 def parser():
     result = argparse.ArgumentParser(prog="qcsd-lab resource-study", description=__doc__)
     actions = result.add_subparsers(dest="action", required=True)
+    shared = actions.add_parser("capture-roots", help="one protected flight for two current Native93 CS writer roots")
+    shared.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
+    shared.add_argument("--runtime", type=Path, required=True)
+    shared.add_argument("--cells", type=Path, required=True, help="immutable explicit root/hostname/CS plan")
+    shared.add_argument("--cells-sha256", required=True)
+    shared.add_argument("--workers", type=int, default=11)
+    shared.add_argument("--attempts", type=int, required=True)
+    shared.add_argument("--chunk", type=int, default=CHUNK)
+    shared.add_argument("--pilot", action="store_true")
     for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit"):
         child = actions.add_parser(action, help="explicit compatible-runtime cohort protocol; no imported credit")
         child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
@@ -861,6 +870,19 @@ def main(argv=None):
                     affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
             elif args.epoch_change is not None or args.affected_hostname or args.affected_mode:
                 raise ValueError("epoch scope needs --epoch-of")
+        elif args.action == "capture-roots":
+            cells = load_shared_capture_plan(args.cells.absolute(), args.cells_sha256, root)
+            stop = threading.Event()
+            previous = {}
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                previous[sig] = signal.signal(sig, lambda *_: stop.set())
+            try:
+                output = capture_roots(root, runtime_identity(args.runtime.absolute()), cells,
+                    workers=args.workers, budget=args.attempts, stop=stop,
+                    chunk_sessions=args.chunk, pilot=args.pilot)
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
         elif args.action == "capture":
             if args.runtime is None:
                 raise ValueError("capture requires --runtime")
@@ -901,6 +923,331 @@ def main(argv=None):
     except (OSError, ValueError, RuntimeError) as error:
         print(json.dumps({"status": "refused", "reason": str(error), "error": type(error).__name__}))
         return 1
+
+
+SHARED_CAPTURE_PLAN = "qcsd-resource-domain-two-root-CS-capture-plan-v1"
+
+
+def _shared_cells(cells):
+    from .resource_study_epochs import _hostname
+    from .resource_study_runtime import shared_roots
+    if type(cells) is not list or not 2 <= len(cells) <= 50:
+        raise ValueError("shared capture needs between two and fifty explicit cells")
+    normalized = []
+    for row in cells:
+        if (type(row) is not dict or set(row) != {"root", "hostname", "mode"}
+                or type(row["root"]) is not str or row["mode"] != "cs-buflo"
+                or _hostname(row["hostname"]) != row["hostname"]):
+            raise ValueError("shared capture cells must be exact root/hostname/CS bindings")
+        normalized.append((Path(row["root"]), row["hostname"], row["mode"]))
+    roots = shared_roots(list(dict.fromkeys(root for root, _, _ in normalized)))
+    if len({(host, mode) for _, host, mode in normalized}) != len(normalized):
+        raise ValueError("shared capture repeats a logical hostname/mode cell")
+    return roots, normalized
+
+
+def _multiroot_context(parent, runtime, cells):
+    """Authenticate both current writers; reservation/credit repeat live guards."""
+    from . import resource_study_epochs as epochs
+    from . import resource_study_cohorts as cohorts
+    from .resource_study_runtime import require_shared_runtime
+    require_shared_runtime(runtime)
+    roots, normalized = _shared_cells(cells)
+    parent = epochs._regular(parent, directory=True)
+    if parent in roots or any(parent in root.parents or root in parent.parents for root in roots):
+        raise ValueError("shared capture parent and writer roots must be separate")
+    stores = {root: StudyStore(root) for root in roots}
+    parent_store = StudyStore(parent)
+    contexts, jobs = {}, {}
+    with epochs._lock(parent):
+        records = epochs._records(parent_store)
+        if not records or records[-1]["record_type"] != cohorts.ADMISSION:
+            raise ValueError("shared capture requires the committed runtime-cohort protocol")
+        current = records[-1]
+        for root, store in stores.items():
+            member_parent = epochs._membership(store)
+            if member_parent is None or member_parent.root != parent:
+                raise ValueError("shared capture writer has another or missing parent")
+            plan = store.plan()
+            if ("class_selection" not in plan or validate_network_plan(plan, require=True) is None):
+                raise ValueError("shared capture needs the unchanged stable selected50 plan")
+            contexts[root] = {"plan": plan, "study_sha256": store._file("study.json")[1]["sha256"]}
+        first = contexts[roots[0]]["plan"]
+        if any(contexts[root]["plan"].get(key) != first.get(key)
+               for root in roots for key in ("class_selection", "class_network", "source_sha256", "acceptance", "tuple_uniqueness_scope")):
+            raise ValueError("shared capture roots have different frozen class plans")
+        enrolled = {root: {value["hostname"]: value for value in store.enrolled()}
+                    for root, store in stores.items()}
+        for root, host, mode in normalized:
+            store = stores[root]
+            cell = epochs._active(store, host, mode, records)
+            entry = cohorts._entry(current["cohorts"], (host, mode))
+            if cohorts._writer(entry)["cell"] != cell:
+                raise ValueError("shared capture cell is not the exact current cohort writer")
+            enrollment = enrolled[root].get(host)
+            if (enrollment is None or enrollment["runtime"] != runtime
+                    or cell["definition"]["ready"] is not True
+                    or cell["definition"]["native"] != [runtime["client_sha256"], runtime["platform"], runtime["native_commit"]]):
+                raise ValueError("shared capture enrollment/runtime/readiness differs")
+            jobs[(host, mode)] = {"root": root, "store": store, "enrollment": enrollment}
+        authority = {"sequence": current["sequence"], "sha256": epochs._sha(current)}
+    return contexts, jobs, authority
+
+
+def _shared_pilot(root, enrollment, runtime, mode):
+    """The same fixed-network own-host/enrollment/full-runtime public pilot gate."""
+    for path in sorted((root / "pilots").glob(f"*/{mode}/*/session.json")):
+        candidate = load(path)
+        if (candidate.get("purpose") != "pilot" or candidate.get("mode") != mode
+                or candidate.get("hostname") != enrollment["hostname"] or candidate.get("runtime") != runtime):
+            continue
+        verify_receipt(root, candidate)
+        proven = load(root / candidate["artifact_paths"]["enrollment"])
+        if (proven == enrollment and candidate.get("mode_settings") == enrollment.get("mode_settings", {}).get(mode)
+                and candidate.get("mode_policies") == enrollment.get("mode_policies", {}).get(mode)):
+            return True
+    return False
+
+
+def capture_roots(parent: Path, runtime: dict, cells: list, *, workers=11, budget=None,
+                  stop=None, backend=None, chunk_sessions=CHUNK, pilot=False):
+    """Two current CS writer roots, one bounded global queue and Docker flight.
+
+    Counts only choose work. Each owning Store still performs its original
+    fresh global quota/tuple/head/fence and matching-pilot checks at mutation.
+    No historical raw proof is reused or asserted by this launcher.
+    """
+    if type(workers) is not int or not 2 <= workers <= 11:
+        raise ValueError("shared capture requires between two and eleven workers")
+    if type(budget) is not int or not 1 <= budget <= 1900:
+        raise ValueError("shared capture needs a finite attempt budget between one and 1900")
+    if type(chunk_sessions) is not int or not 1 <= chunk_sessions <= CHUNK:
+        raise ValueError("chunk size must be between one and twenty")
+    if type(pilot) is not bool:
+        raise ValueError("shared pilot flag must be boolean")
+    roots, _ = _shared_cells(cells)
+    from .resource_study_cohorts import source_operation
+    with source_operation(roots[0]) as source_auth:
+        if source_auth is None:
+            raise ValueError("shared capture requires committed cohort Source authority")
+        return _capture_roots(parent, runtime, cells, workers=workers, budget=budget,
+            stop=stop, backend=backend, chunk_sessions=chunk_sessions, pilot=pilot,
+            _source_auth=source_auth)
+
+
+def load_shared_capture_plan(path, digest, parent):
+    from .resource_study_selection import _read, _json
+    value = _json(_read(path, digest))
+    if (set(value) != {"record_type", "schema_version", "parent", "cells"}
+            or value["record_type"] != SHARED_CAPTURE_PLAN or type(value["schema_version"]) is not int
+            or value["schema_version"] != 1 or value["parent"] != str(parent)):
+        raise ValueError("shared capture plan differs from its explicit parent/schema")
+    _shared_cells(value["cells"])
+    return value["cells"]
+
+
+def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
+                   chunk_sessions, pilot, _source_auth):
+    """Balanced chunks; a failing cell pauses for this invocation only.
+
+    A subsequent invocation retries that cell without resetting others. Workers
+    never capture the same hostname concurrently. Every attempted reservation
+    is durable before any packet is sent.
+    """
+    contexts, jobs, authority = _multiroot_context(parent, runtime, cells)
+    roots = list(contexts)
+    storage = {str(root): require_storage(root,
+        reserve_bytes=context["plan"].get("storage_reserve_bytes", 2 * 1024 ** 3))
+        for root, context in contexts.items()}
+    pilot_blocked, missing_pilots = set(), []
+    if not pilot:
+        for cell, job in jobs.items():
+            if not _shared_pilot(job["root"], job["enrollment"], runtime, cell[1]):
+                pilot_blocked.add(cell)
+                missing_pilots.append({"root": str(job["root"]), "hostname": cell[0], "mode": cell[1]})
+        if set(jobs) == pilot_blocked:
+            raise ValueError("requested cells need their own matching focused pilots")
+    if backend is None:
+        from .resource_study_runtime import MultiRootCaptureRuntime
+        backend = MultiRootCaptureRuntime(contexts, runtime, workers,
+            cell_roots={host: job["root"] for (host, mode), job in jobs.items()})
+    stop = stop or threading.Event()
+    paused, busy, completed_pilots, attempts = set(pilot_blocked), set(), set(), 0
+    allocation_errors = []
+    clock_failures = {}
+    tamaraw_retries = {}
+    if pilot:
+        chunk_sessions = 1
+    cell_order = list(jobs)
+    def scheduling_counts(cells):
+        from .resource_study_cohorts import counts_snapshot
+        snapshot = {}
+        for root in roots:
+            selected = [cell for cell in cells if jobs[cell]["root"] == root]
+            if selected:
+                values = counts_snapshot(next(jobs[cell]["store"] for cell in selected), selected)
+                if values is None:
+                    raise ValueError("shared capture requires committed runtime-cohort count authority")
+                snapshot.update(values)
+        if (set(snapshot) != set(cells)
+                or any(type(value) is not int or not 0 <= value <= 400 for value in snapshot.values())):
+            raise ValueError("scheduling accepted counts exceed their scientific cells")
+        return snapshot
+
+    def capture_chunk(worker, cell, allowance, initial_count):
+        host, mode = cell
+        job = jobs[cell]
+        root, store = job["root"], job["store"]
+        enrollment_by_host = {host: job["enrollment"]}
+        attempted, credited = 0, 0
+        # This hint limits the chunk only. Every reservation and commit still
+        # checks fresh parent/global slot and tuple authority independently.
+        while attempted < allowance and not stop.is_set() and initial_count + credited < 400:
+            try:
+                attempt = store.allocate_attempt(host, mode, purpose="pilot" if pilot else "formal")
+            except (OSError, ValueError, RuntimeError) as error:
+                # A changed epoch can require its own pilot even when another
+                # cell has a mode pilot. No reservation or packet is invented;
+                # healthy cells continue and the refused cell stays uncredited.
+                return {"cell": cell, "attempted": attempted, "accepted": credited,
+                        "paused": True, "allocation_error": str(error)}
+            attempted += 1
+            retry_state = tamaraw_retries.get(cell)
+            if retry_state is not None and retry_state["pending_retry"] is not None:
+                retry_state["pending_retry"]["fresh_attempt_id"] = attempt["attempt_id"]
+                retry_state["actual_retries"] += 1
+                retry_state["pending_retry"] = None
+            attempt_started = time.monotonic()
+            result = {}
+            failure_origin = "backend"
+            try:
+                require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
+                result = backend.capture(worker, attempt, enrollment_by_host[host])
+                store.mark_captured(attempt["attempt_id"])
+                if result.get("success") is not True:
+                    failure_origin = "collector"
+                    raise ValueError("collector rejected session: " + str(result.get("failure")))
+                result["attempt_elapsed_seconds"] = time.monotonic() - attempt_started
+                clock_failures[cell] = 0
+                failure_origin = "seal"
+                receipt_path = seal(root, attempt, enrollment_by_host[host], runtime, result, pilot=pilot)
+                failure_origin = "commit"
+                if pilot:
+                    store.fail_attempt(attempt["attempt_id"], "focused pilot passed; no formal credit", kind="pilot",
+                        wall_seconds=time.monotonic() - attempt_started)
+                    return {"cell": cell, "attempted": attempted, "accepted": 0, "paused": False, "pilot_passed": True}
+                else:
+                    # seal independently checks raw evidence before publishing.
+                    # The ledger rechecks the full immutable inventory around
+                    # this callback. Reuse only this in-memory proof of these
+                    # exact receipt fields; recovery always reruns the reader.
+                    bound = load(receipt_path)
+                    def checked_this_attempt(actual_root, value):
+                        if actual_root != root or value != bound:
+                            raise ValueError("receipt changed after independent verification")
+                        return bound["facts"]
+                    store.commit_verified(receipt_path, validator=checked_this_attempt)
+                    credited += 1
+            except DuplicateSession as error:
+                # The immutable recording is retained but cannot satisfy a
+                # distinct-five-tuple quota. Move it away from the slot path.
+                destination = root / store.publication_path(attempt)
+                owner = destination / "attempt-owner.json"
+                if destination.exists() and owner.is_file() and load(owner).get("attempt_id") == attempt["attempt_id"]:
+                    target = root / "failures" / host / mode / attempt["attempt_id"]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    destination.rename(target)
+                store.fail_attempt(attempt["attempt_id"], str(error), kind="duplicate",
+                    wall_seconds=time.monotonic() - attempt_started)
+                continue
+            except (OSError, ValueError, RuntimeError) as error:
+                rejected = root / store.publication_path(attempt)
+                owner = rejected / "attempt-owner.json"
+                if rejected.exists() and owner.is_file() and load(owner).get("attempt_id") == attempt["attempt_id"]:
+                    target = root / "failures" / host / mode / attempt["attempt_id"]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    rejected.rename(target)
+                store.fail_attempt(attempt["attempt_id"], str(error), kind="pilot-failed" if pilot else "failed",
+                    wall_seconds=time.monotonic() - attempt_started)
+                create_json(root / attempt["path"] / "failure.json", {
+                    "attempt_id": attempt["attempt_id"], "mode": mode, "hostname": host,
+                    "reason": str(error), "exception": type(error).__name__, "scientific_credit": False})
+                if temporary_clock_failure(result):
+                    clock_failures[cell] = clock_failures.get(cell, 0) + 1
+                    if clock_failures[cell] < 3:
+                        continue
+                reason = tamaraw_retry_reason(mode, result, error, origin=failure_origin,
+                    policy=enrollment_by_host[host].get("mode_policies", {}).get(mode))
+                if reason is not None:
+                    retry_state = tamaraw_retries.setdefault(cell, {
+                        "actual_retries": 0, "rejections": [], "pending_retry": None})
+                    row = {"rejected_attempt_id": attempt["attempt_id"], "reason": reason,
+                        "retry_permitted": len(retry_state["rejections"]) < TAMARAW_MAX_RETRIES,
+                        "fresh_attempt_id": None, "scientific_credit": False}
+                    retry_state["rejections"].append(row)
+                    if row["retry_permitted"]:
+                        retry_state["pending_retry"] = row
+                        continue
+                return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
+        return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": False}
+
+    def chunk(worker, cell, allowance, initial_count):
+        from .resource_study_cohorts import bind_source
+        with bind_source(_source_auth):
+            try:
+                return capture_chunk(worker, cell, allowance, initial_count)
+            finally:
+                release = getattr(backend, "release", None)
+                if release is not None:
+                    release(worker)
+
+    with backend, ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {}
+        available = list(range(workers))
+        while futures or (available and not stop.is_set()):
+            eligible = [c for c in cell_order if c not in paused and c not in completed_pilots and c[0] not in busy]
+            counts = (scheduling_counts(eligible) if available and not stop.is_set()
+                      and (budget is None or attempts < budget) and eligible else {})
+            while available and not stop.is_set() and (budget is None or attempts < budget):
+                choices = [c for c in cell_order if c not in paused and c not in completed_pilots
+                           and c[0] not in busy and counts.get(c, 400) < 400]
+                if not choices:
+                    break
+                cell = min(choices, key=lambda c: (counts[c], cell_order.index(c)))
+                allowance = min(chunk_sessions, 400 - counts[cell], (budget - attempts) if budget else chunk_sessions)
+                worker = available.pop(0)
+                attempts += allowance
+                busy.add(cell[0])
+                futures[executor.submit(chunk, worker, cell, allowance, counts[cell])] = worker
+            if not futures:
+                break
+            done, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
+            for future in done:
+                worker = futures.pop(future)
+                available.append(worker)
+                result = future.result()
+                busy.remove(result["cell"][0])
+                if result["paused"]:
+                    paused.add(result["cell"])
+                if result.get("allocation_error"):
+                    allocation_errors.append({"hostname": result["cell"][0], "mode": result["cell"][1],
+                                              "reason": result["allocation_error"]})
+                if result.get("pilot_passed"):
+                    completed_pilots.add(result["cell"])
+    return {"record_type": "qcsd-resource-domain-two-root-CS-capture-result-v1",
+        "schema_version": 1, "parent": str(parent), "admission_at_start": authority,
+        "roots": [{"root": str(root), "study_sha256": context["study_sha256"],
+                   "progress": StudyStore(root).status()} for root, context in contexts.items()],
+        "paused_cells": [{"root": str(jobs[cell]["root"]), "hostname": cell[0], "mode": cell[1]}
+                         for cell in sorted(paused)],
+        "pilot_cells_passed": [{"root": str(jobs[cell]["root"]), "hostname": cell[0], "mode": cell[1]}
+                               for cell in sorted(completed_pilots)],
+        "missing_mode_pilots": missing_pilots, "allocation_errors": allocation_errors,
+        "stop_requested": stop.is_set(), "workers": workers,
+        "dispatched_attempt_allowance": attempts, "attempt_budget": budget,
+        "chunk_sessions": chunk_sessions, "pilot": pilot,
+        "storage": storage, "wrapper_issues_credit": False,
+        "receipt_raw_and_ledger_gates": "original owning-root seal/reserve/commit/pilot predicates"}
 
 
 if __name__ == "__main__":
