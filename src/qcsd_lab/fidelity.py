@@ -4454,6 +4454,37 @@ def _cs_buflo_rate_transition_vector_valid(value: Any) -> bool:
     return True
 
 
+def _validate_buflo_partial_advertisement_extension(row: Mapping[str, str], *, label: str) -> None:
+    """Read physical partial advertisements without claiming whole-slot credit.
+
+    Native preserves schema 2 for an explicit scheduled owner before its
+    complete fan-out has a scalar advertisement timestamp. This event's exact
+    production DTO is separate from the unchanged full-slot/kernel predicates.
+    Only the summary-5 reader opts into this representation.
+    """
+    if (row.get("event") == "observation" and row.get("outcome") == "recorded"
+            and all(field in row for field in SCHEDULE_QCSD_FIELDS)
+            and row["qcsd_outcome_schema_version"] == "2"
+            and all(row[field] == "" for field in SCHEDULE_QCSD_FIELDS
+                if field != "qcsd_outcome_schema_version")):
+        from .resource_study_inputs import _pairs
+        try:
+            details = json.loads(row["details"], object_pairs_hook=_pairs)
+        except (ValueError, TypeError, KeyError) as error:
+            raise ValueError(f"{label} has invalid partial-advertisement JSON") from error
+        keys = {"type", "endpoint", "stream", "absolute_limit", "slot",
+            "production_monotonic_ns", "production_sequence"}
+        if (type(details) is not dict or set(details) != keys
+                or details["type"] != "receive_limit_advertised"
+                or any(type(details[key]) is not int or not 0 <= details[key] <= 2**64 - 1
+                    for key in keys - {"type"})
+                or row.get("connection") != str(details["endpoint"])
+                or row.get("monotonic_us") != str(details["production_monotonic_ns"] // 1_000)):
+            raise ValueError(f"{label} has an unbound partial-advertisement observation")
+        return
+    _validate_qcsd_trace_extension(row, label=label)
+
+
 def new_defense_terminal_receipts_valid(
     run: Mapping[str, Any], defense_kind: str, *, require_application_complete: bool = False,
     require_current_schema: bool = False, runner_directory: Path | None = None,
@@ -4496,7 +4527,7 @@ def new_defense_terminal_receipts_valid(
         if set(paths) != {"events", "packets"}:
             return False
         events = _read_extended_runner_csv(Path(paths["events"]), _EVENT_PREFIX_FIELDS,
-            label="local-abandonment events.csv")
+            label="local-abandonment events.csv", allow_buflo_partial_advertisement=True)
         packets = _read_extended_runner_csv(Path(paths["packets"]), _PACKET_PREFIX_FIELDS,
             label="local-abandonment packets.csv")
         buflo_local_abandonment_evidence(run, events, packets)

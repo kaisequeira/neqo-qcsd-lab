@@ -1536,9 +1536,13 @@ def _read_extended_runner_csv(
     *,
     label: str,
     require_current_schema: bool = True,
+    allow_buflo_partial_advertisement: bool = False,
 ) -> list[dict[str, str]]:
     """Read one exact source-stable runner CSV and validate its typed suffix."""
 
+    if allow_buflo_partial_advertisement is not False and (
+            allow_buflo_partial_advertisement is not True or prefix != _EVENT_PREFIX_FIELDS):
+        raise ValueError("partial-advertisement extension requires the explicit BuFLO event reader")
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"study handoff {label} is not a regular file")
     with path.open(newline="", encoding="utf-8") as source:
@@ -1561,7 +1565,11 @@ def _read_extended_runner_csv(
         for field in SCHEDULE_QCSD_FIELDS:
             row.setdefault(field, "")
     for index, row in enumerate(rows, 1):
-        _validate_runner_extension(row, label=f"{label} row {index}")
+        if allow_buflo_partial_advertisement:
+            from .fidelity import _validate_buflo_partial_advertisement_extension
+            _validate_buflo_partial_advertisement_extension(row, label=f"{label} row {index}")
+        else:
+            _validate_runner_extension(row, label=f"{label} row {index}")
     return rows
 
 
@@ -2304,6 +2312,10 @@ def _algorithm_diagnostics(
         _EVENT_PREFIX_FIELDS,
         label="events.csv",
         require_current_schema=require_current_trace,
+        allow_buflo_partial_advertisement=(runtime_kind == "buflo"
+            and isinstance(run.get("buflo_summary"), Mapping)
+            and type(run["buflo_summary"].get("schema_version")) is int
+            and run["buflo_summary"]["schema_version"] == 5),
     )
     packets_rows = _read_extended_runner_csv(
         packets_path,
