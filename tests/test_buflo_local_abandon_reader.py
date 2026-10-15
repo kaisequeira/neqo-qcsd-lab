@@ -183,20 +183,23 @@ def test_missing_trace_paths_and_legacy_or_wrong_algorithm_labels_refuse(local):
         with pytest.raises(ValueError): evaluation._load_algorithm_diagnostics(changed, defense="buflo")
 
 
-def test_source036_reader_is_honest_and_preserves_dated_admission_profiles():
+def test_source038_reader_is_honest_and_preserves_dated_admission_profiles():
     actual = cohorts.verifier_contract(); qualified = compatibility.qualify_execution(actual)
-    assert compatibility.EXECUTION_KIND == "036" and actual["transitive_source_files"] == 170
+    assert compatibility.EXECUTION_KIND == "038" and actual["transitive_source_files"] == 170
     old = compatibility.legacy_contract()
     assert compatibility.require_supported(old, qualified)
     binding = compatibility.execution_binding(old, qualified)
-    assert binding["record_type"] == "qcsd-resource-domain-017-018-019-036-reader-execution-binding-v1"
+    assert binding["record_type"] == "qcsd-resource-domain-017-018-019-038-reader-execution-binding-v1"
     assert binding["buflo_local_abandonment_reader_changed"] is True
     assert binding["buflo_typed_partial_advertisement_observations_changed"] is True
+    assert binding["buflo_ack_start_retained_directory_binding_changed"] is True
+    assert binding["buflo_ack_start_retained_stop_schedule_changed"] is True
+    assert binding["buflo_ack_start_retained_evaluation_join_changed"] is True
     assert binding["prospective_buflo_terminal_protocol_changed"] is True
     assert binding["scientific_truth_conditions_changed"] is True
     assert binding["historical_receipts_requalified_by_compatibility"] is False
     assert binding["scientific_credit_added"] == 0 and binding["authority_issued"] is False
-    with pytest.raises(ValueError, match="Source036 execution"):
+    with pytest.raises(ValueError, match="Source038 execution"):
         compatibility.qualify_execution(old)
 
 

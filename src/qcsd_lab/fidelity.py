@@ -343,6 +343,82 @@ def _buflo_schedule_stop_state_valid(value: Any, *, terminal_latched_at_us: int)
     )
 
 
+def _buflo_ack_start_schedule_stop_state_valid(value: Any, *, terminal_latched_at_us: int) -> bool:
+    """Validate typed ACK64 stop chronology without changing the legacy pair."""
+
+    if (type(value) is not dict or set(value) != BUFLO_SCHEDULE_STOP_STATE_KEYS | {
+            "schema_version", "incoming_startup"}
+            or type(value["schema_version"]) is not int or value["schema_version"] != 2):
+        return False
+    from .capture_acceptance_policy import validate_buflo_startup_receipt
+    try:
+        startup = validate_buflo_startup_receipt(value["incoming_startup"], period_us=64_000)
+    except (ValueError, TypeError, KeyError):
+        return False
+    stop_us = value.get("latched_at_us")
+    available = value.get("available_bytes")
+    required = value.get("required_bytes")
+    directions = value.get("directions")
+    if (
+        value.get("policy") != BUFLO_SCHEDULE_STOP_POLICY
+        or value.get("terminal_time_semantics") != BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+        or value.get("latched") is not True
+        or type(stop_us) is not int
+        or stop_us < 10_000_000
+        or stop_us > terminal_latched_at_us
+        or type(available) is not int
+        or type(required) is not int
+        or required != 1_200
+        or not 0 <= available < required
+        or not isinstance(directions, Mapping)
+        or set(directions) != {"outgoing", "incoming"}
+    ):
+        return False
+    for direction in ("outgoing", "incoming"):
+        state = directions[direction]
+        if (
+            not isinstance(state, Mapping)
+            or set(state) != BUFLO_SCHEDULE_STOP_DIRECTION_KEYS
+            or any(type(state[key]) is not int or state[key] < 0 for key in state)
+        ):
+            return False
+        scheduled = state["scheduled_cells_at_stop"]
+        terminal = state["terminal_cells_at_stop"]
+        drained = state["drained_cells_after_stop"]
+        strictly_before = state["terminal_cells_strictly_before_stop"]
+        at_or_before = state["terminal_cells_at_or_before_stop"]
+        at_timestamp = state["terminal_cells_at_stop_timestamp"]
+        if (
+            scheduled == 0
+            or not 0 <= terminal <= scheduled
+            or drained != scheduled - terminal
+            or not 0 <= strictly_before <= terminal <= at_or_before <= scheduled
+            or at_timestamp != at_or_before - strictly_before
+            or state["last_scheduled_target_us"] > stop_us
+            or state["last_terminal_at_us"] > terminal_latched_at_us
+            or (direction == "outgoing" and drained != 0)
+        ):
+            return False
+    outgoing = directions["outgoing"]
+    incoming = directions["incoming"]
+    last_target = outgoing["last_scheduled_target_us"]
+    return bool(
+        last_target % 64_000 == 0 and last_target >= startup["armed_at_us"]
+        and outgoing["scheduled_cells_at_stop"] == last_target // 64_000 + 1
+        and outgoing["scheduled_cells_at_stop"] == incoming["scheduled_cells_at_stop"]
+            + startup["startup_suppressed_opportunities"]
+        and last_target == incoming["last_scheduled_target_us"]
+    )
+
+
+def _buflo_local_abandon_schedule_stop_valid(value: Any, *, terminal_latched_at_us: int) -> bool:
+    """Only local-abandonment state4 can carry the explicit ACK64 stop type."""
+    if isinstance(value, Mapping) and "schema_version" in value:
+        return _buflo_ack_start_schedule_stop_state_valid(value,
+            terminal_latched_at_us=terminal_latched_at_us)
+    return _buflo_schedule_stop_state_valid(value, terminal_latched_at_us=terminal_latched_at_us)
+
+
 def _legacy_buflo_terminal_state_valid(value: Any) -> bool:
     """Validate implicit-v1 or explicit schema-2/3 BuFLO tail evidence."""
 
@@ -581,7 +657,7 @@ def _buflo_local_abandon_state_valid(value):
             or value["paper_equivalent"] is not False or value["implementation_scope"] != "client_only_quic"
             or not value["last_exact_outgoing_cell_monotonic_us"] <= value["last_scheduled_terminal_monotonic_us"]
                 <= value["terminal_latched_at_us"]
-            or not _buflo_schedule_stop_state_valid(value["schedule_stop"],
+            or not _buflo_local_abandon_schedule_stop_valid(value["schedule_stop"],
                 terminal_latched_at_us=value["terminal_latched_at_us"])
             or any(value[key] != 0 for key in ("post_cancellation_unscheduled_defense_control_packets",
                 "post_cancellation_unscheduled_defense_control_bytes"))

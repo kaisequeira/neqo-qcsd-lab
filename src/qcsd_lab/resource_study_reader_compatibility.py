@@ -1,13 +1,16 @@
-"""Exact Source017/018/019 admission-reader compatibility for Source036 execution.
+"""Exact Source017/018/019 admission-reader compatibility for Source038 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source036 reader. This
+never returned as the source identity of the executing Source038 reader. This
 registry permits the reviewed allocator/control changes and call-local pure
 network validation reuse, with bounded owned kernel-thread teardown after the
 original Python pool join. The new guarded local-only BuFLO terminal protocol
 has explicit summary5/state4 readers; all legacy terminal readers remain whole.
 Its explicit event reader also accepts typed physical partial advertisements
 without inventing a whole-slot advertisement timestamp or realization.
+The retained summary5 reader binds ACK-start reopening to those exact traces.
+Its typed stop receipt binds suppressed incoming ticks to the original ACK64 schedule.
+The evaluation reader joins that receipt to both final direction metrics.
 The original network, primary-resource, cadence and kernel predicates remain.
 Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
@@ -28,8 +31,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = "036"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-036-reader-execution-binding-v1"
+EXECUTION_KIND = "038"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-038-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -239,9 +242,9 @@ APPROVED_EXECUTION_FILES = {
     'resource_study.py': '3b8d2171b5b7a0d44a927e215fa6f553d6a2a3300c7311ec80ce3e2c8a3ea644',
     'resource_study_runtime.py': '27946e752e90231dd6f73f982ef5d3758a9716685fba28c900e56f94f28eb27b',
     'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
-    'fidelity.py': 'c9d1d038326c8f36c73886a125e06900a5faef13af730d78c6eef4fb822b5277',
-    'buflo_handoff.py': '11818a8669c00a33d233cb3fbd57480a93f4040b9ce9194ec8c7b2a64163baa9',
-    'buflo_evaluation.py': 'a74af8602691f99c397c7b4f0ec127de85e79f100e59928abe70093a204ddb0d',
+    'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
+    'buflo_handoff.py': 'd9cd39b85ac8c5a0e52065c162918a5b7f7c67ab66af6596ac45ef4979dfdcb2',
+    'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
     'resource_study_verify.py': '80711b1ab52f11457ef5fe6269cef9a0f00531544782cd7cd60a4b488ad5dcac',
 }
 
@@ -314,7 +317,7 @@ def execution_files():
                                          "fidelity.py", "buflo_handoff.py", "buflo_evaluation.py", "resource_study_verify.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source036 reader compatibility registry is not sealed")
+        raise ValueError("Source038 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -340,21 +343,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source036 profile, never a legacy alias.
+    """Authenticate the exact approved Source038 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source036 execution reader")
+        raise ValueError("unsupported or changed Source038 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source036 execution reader required")
+        raise ValueError("qualified Source038 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -373,7 +376,7 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source036 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source038 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,
@@ -383,6 +386,9 @@ def execution_binding(admission, qualified):
         "coordinator_kernel_thread_teardown_changed": True,
         "buflo_local_abandonment_reader_changed": True,
         "buflo_typed_partial_advertisement_observations_changed": True,
+        "buflo_ack_start_retained_directory_binding_changed": True,
+        "buflo_ack_start_retained_stop_schedule_changed": True,
+        "buflo_ack_start_retained_evaluation_join_changed": True,
         "prospective_buflo_terminal_protocol_changed": True,
         "scientific_truth_conditions_changed": True,
         "historical_receipts_requalified_by_compatibility": False,

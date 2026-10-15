@@ -2258,6 +2258,75 @@ def _buflo_stop_drain_ledger(
     return evidence
 
 
+def _buflo_ack_start_stop_drain_ledger(
+    diagnostics: Mapping[str, Any],
+    schedule_rows: Sequence[Mapping[str, str]],
+    terminal_times_by_direction: Mapping[str, Sequence[int]],
+    *, incoming_startup: Mapping[str, Any],
+) -> dict[str, dict[str, int]]:
+    """Bind ACK64 suppression to actual target grids and unchanged drain checks."""
+
+    from .capture_acceptance_policy import validate_buflo_startup_receipt, validate_buflo_startup_schedule
+    validate_buflo_startup_receipt(incoming_startup, period_us=64_000)
+    validate_buflo_startup_receipt(diagnostics.get("buflo_incoming_startup"), period_us=64_000)
+    if diagnostics["buflo_incoming_startup"] != incoming_startup:
+        raise ValueError("BuFLO retained stop startup differs from its Native diagnostics")
+    validate_buflo_startup_schedule(incoming_startup, list(schedule_rows), period_us=64_000)
+
+    stop_us = diagnostics["buflo_schedule_stop_latched_at_us"]
+    terminal_latch_us = diagnostics["buflo_terminal_subcell_latched_at_us"]
+    if (
+        type(stop_us) is not int
+        or type(terminal_latch_us) is not int
+        or stop_us < 10_000_000
+        or stop_us > terminal_latch_us
+    ):
+        raise ValueError("study handoff BuFLO stop/drain latch chronology is invalid")
+    evidence: dict[str, dict[str, int]] = {}
+    for direction in ("outgoing", "incoming"):
+        selected = [row for row in schedule_rows if row["direction"] == direction]
+        scheduled_at_stop = diagnostics[f"buflo_schedule_stop_scheduled_{direction}_cells"]
+        terminal_at_stop = diagnostics[f"buflo_schedule_stop_terminal_{direction}_cells"]
+        target_times = [
+            _csv_unsigned(row["target_time_us"], label="schedule target time") for row in selected
+        ]
+        terminal_times = list(terminal_times_by_direction.get(direction, ()))
+        terminal_before_stop = sum(terminal < stop_us for terminal in terminal_times)
+        terminal_at_or_before_stop = sum(terminal <= stop_us for terminal in terminal_times)
+        drained_after_stop = scheduled_at_stop - terminal_at_stop
+        if (
+            type(scheduled_at_stop) is not int
+            or type(terminal_at_stop) is not int
+            or scheduled_at_stop != len(selected)
+            or scheduled_at_stop != len(terminal_times)
+            or not 0 <= terminal_at_stop <= scheduled_at_stop
+            or any(target > stop_us for target in target_times)
+            or not (terminal_before_stop <= terminal_at_stop <= terminal_at_or_before_stop)
+            or any(terminal > terminal_latch_us for terminal in terminal_times)
+            or (direction == "outgoing" and drained_after_stop != 0)
+        ):
+            raise ValueError("study handoff BuFLO stop/drain schedule chronology is invalid")
+        evidence[direction] = {
+            "scheduled_cells_at_stop": scheduled_at_stop,
+            "terminal_cells_at_stop": terminal_at_stop,
+            "drained_cells_after_stop": drained_after_stop,
+            "last_scheduled_target_us": max(target_times, default=0),
+            "last_terminal_at_us": max(terminal_times, default=0),
+            "terminal_cells_strictly_before_stop": terminal_before_stop,
+            "terminal_cells_at_or_before_stop": terminal_at_or_before_stop,
+            "terminal_cells_at_stop_timestamp": (terminal_at_or_before_stop - terminal_before_stop),
+        }
+    outgoing = evidence["outgoing"]
+    incoming = evidence["incoming"]
+    if (
+        outgoing["scheduled_cells_at_stop"] != incoming["scheduled_cells_at_stop"]
+            + incoming_startup["startup_suppressed_opportunities"]
+        or outgoing["last_scheduled_target_us"] != incoming["last_scheduled_target_us"]
+    ):
+        raise ValueError("study handoff BuFLO paired stop schedule is inconsistent")
+    return evidence
+
+
 def _buflo_diagnostic_period_us(run: Mapping[str, Any], *, runtime_kind: str) -> int:
     from .buflo_duration_budget import CADENCE64_RECEIPT, CADENCE64_PARAMETER_SHA256, RUN_FIELD
     from .capture_acceptance_policy import CADENCE64_ACK_START_POLICY, FIELD
@@ -2492,6 +2561,10 @@ def _algorithm_diagnostics(
         required_diagnostics = required | (
             BUFLO_SCHEDULE_STOP_V4_KEYS if stop_drain_current else set()
         )
+        if local_abandon and any(path != events_path.parent / name for path, name in (
+                (events_path, "events.csv"), (packets_path, "packets.csv"),
+                (schedule_path, "schedule.csv"))):
+            raise ValueError("BuFLO local-abandonment traces require one exact Native evidence directory")
         if (
             not isinstance(summary, Mapping)
             or summary_schema not in {2, 3, 4, 5}
@@ -2502,6 +2575,7 @@ def _algorithm_diagnostics(
                 "buflo",
                 require_application_complete=True,
                 require_current_schema=require_current,
+                runner_directory=(events_path.parent if local_abandon else None),
                 terminal_trace_paths={"events": events_path, "packets": packets_path},
             )
         ):
@@ -2749,7 +2823,10 @@ def _algorithm_diagnostics(
             }
         if stop_drain_current:
             assert terminal_times is not None
-            stop_drain_ledger = _buflo_stop_drain_ledger(diagnostics, schedule_rows, terminal_times)
+            ack_start_retained = local_abandon and buflo_period_us == 64_000
+            stop_drain_ledger = (_buflo_ack_start_stop_drain_ledger(diagnostics, schedule_rows, terminal_times,
+                incoming_startup=summary["incoming_startup"]) if ack_start_retained
+                else _buflo_stop_drain_ledger(diagnostics, schedule_rows, terminal_times))
             buflo_state = {
                 **buflo_state,
                 "schema_version": 3,
@@ -2763,6 +2840,9 @@ def _algorithm_diagnostics(
                     "directions": stop_drain_ledger,
                 },
             }
+            if ack_start_retained:
+                buflo_state["schedule_stop"] = {**buflo_state["schedule_stop"], "schema_version": 2,
+                    "incoming_startup": dict(summary["incoming_startup"])}
         if local_abandon:
             assert local_events is not None and type(defense_start_ns) is int
             buflo_state = {**buflo_state, "schema_version": 4,

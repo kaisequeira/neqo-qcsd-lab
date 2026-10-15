@@ -1182,8 +1182,8 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
                 or not buflo_terminal_state_valid(buflo_state)
                 or (
                     value["schema_version"] in {4, 5}
-                    and not _current_buflo_schedule_stop_state_valid(
-                        buflo_state, value["directions"]
+                    and not _algorithm_buflo_schedule_stop_state_valid(
+                        buflo_state, value["directions"], algorithm_schema=value["schema_version"]
                     )
                 )
                 or cs_state is not None
@@ -1305,6 +1305,43 @@ def _current_buflo_schedule_stop_state_valid(
         outgoing["scheduled_cells_at_stop"] == incoming["scheduled_cells_at_stop"]
         and outgoing["last_scheduled_target_us"] == incoming["last_scheduled_target_us"]
     )
+
+
+def _ack_start_buflo_schedule_stop_state_valid(value: Mapping[str, Any], algorithm_directions: Any) -> bool:
+    """Join typed ACK64 stop chronology to unchanged final metric counts."""
+    from .fidelity import _buflo_ack_start_schedule_stop_state_valid
+    if (not isinstance(value, Mapping) or type(value.get("schema_version")) is not int
+            or value["schema_version"] != 4
+            or type(value.get("terminal_latched_at_us")) is not int
+            or not _buflo_ack_start_schedule_stop_state_valid(value.get("schedule_stop"),
+                terminal_latched_at_us=value["terminal_latched_at_us"])
+            or not isinstance(algorithm_directions, Mapping)
+            or set(algorithm_directions) != {"outgoing", "incoming"}):
+        return False
+    for direction in ("outgoing", "incoming"):
+        state = value["schedule_stop"]["directions"][direction]
+        metrics = algorithm_directions[direction]
+        if not isinstance(metrics, Mapping):
+            return False
+        satisfaction = metrics.get("satisfaction_counts")
+        if (type(metrics.get("scheduled_cells")) is not int
+                or metrics["scheduled_cells"] != state["scheduled_cells_at_stop"]
+                or not isinstance(satisfaction, Mapping)
+                or any(type(item) is not int or item < 0 for item in satisfaction.values())
+                or sum(satisfaction.values()) != state["scheduled_cells_at_stop"]):
+            return False
+    return True
+
+
+def _algorithm_buflo_schedule_stop_state_valid(value: Mapping[str, Any], algorithm_directions: Any,
+                                             *, algorithm_schema: int) -> bool:
+    """The new nested stop receipt belongs only to algorithm5/local state4."""
+    stop = value.get("schedule_stop") if isinstance(value, Mapping) else None
+    if (type(algorithm_schema) is int and algorithm_schema == 5
+            and isinstance(stop, Mapping) and type(stop.get("schema_version")) is int
+            and stop["schema_version"] == 2):
+        return _ack_start_buflo_schedule_stop_state_valid(value, algorithm_directions)
+    return _current_buflo_schedule_stop_state_valid(value, algorithm_directions)
 
 
 _CS_BUFLO_STATE_V3_KEYS = frozenset(
