@@ -853,11 +853,13 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
             continue
         if observation.get("type") != "stream_data_acknowledged":
             continue
-        if (set(observation) != {"type", "endpoint", "stream", "role", "offset", "bytes", "fin"}
+        # The typed Native ACK serializer omits its default false FIN field.
+        if (set(observation) not in ({"type", "endpoint", "stream", "role", "offset", "bytes"},
+                                    {"type", "endpoint", "stream", "role", "offset", "bytes", "fin"})
             or not _uint(observation["offset"]) or not _uint(observation["bytes"])
-            or type(observation["fin"]) is not bool
+            or type(observation.get("fin", False)) is not bool
             or observation["offset"] + observation["bytes"] > startup["request_stream_final_size"]
-            or observation["fin"] and observation["offset"] + observation["bytes"] != startup["request_stream_final_size"]
+            or observation.get("fin", False) and observation["offset"] + observation["bytes"] != startup["request_stream_final_size"]
             or not _uint(details.get("production_sequence")) or not _uint(details.get("production_monotonic_ns"))
             or _csv_uint(row.get("connection")) != identity[0]
             or _csv_uint(row.get("monotonic_us")) != details["production_monotonic_ns"] // 1_000):
@@ -889,7 +891,7 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
         previous_clock = at
         previous_production = key[2]
         ranges.append((observation["offset"], observation["offset"] + observation["bytes"]))
-        fin |= observation["fin"]
+        fin |= observation.get("fin", False)
         covered = 0
         for lower, upper in sorted(ranges):
             if lower > covered:
