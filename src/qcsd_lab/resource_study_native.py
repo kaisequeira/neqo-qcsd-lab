@@ -966,8 +966,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("_prepare", "_capture", "_probe"))
     parser.add_argument("--job", type=Path, required=True)
+    parser.add_argument("--buflo-chaff-cap-bytes", type=int)
     args = parser.parse_args(argv)
+    if args.buflo_chaff_cap_bytes is not None and args.action != "_prepare":
+        parser.error("--buflo-chaff-cap-bytes is only valid for _prepare")
+    cap = _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
     job = _object(args.job)
+    if args.action == "_prepare":
+        if "buflo_chaff_cap_bytes" in job:
+            raise ValueError("the immutable preparation job has no cap field; use the explicit CLI option")
+        if cap is not None:
+            job = {**job, "buflo_chaff_cap_bytes": cap}
     function = {"_prepare": prepare_domain, "_capture": capture_session, "_probe": probe_urls}[args.action]
     result = function(**job)
     sys.stdout.buffer.write(canonical_json(result))

@@ -247,9 +247,13 @@ class PreparationRuntime:
         _put(output / "dns.json", dns)
         job = {"hostname": candidate["hostname"], "urls": candidate["urls"],
                "output": str(output / "prepared"), "runtime": self.runtime}
+        native_prepare_options = ()
         if buflo_chaff_cap_bytes is not None:
-            from .resource_study_native import _buflo_chaff_cap
-            job["buflo_chaff_cap_bytes"] = _buflo_chaff_cap(buflo_chaff_cap_bytes)
+            from .resource_study_native import (
+                _buflo_chaff_cap, BUFLO_CAPPED_SELECTION_POLICY, BUFLO_CAPPED_SELECTION_TYPE,
+            )
+            cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
+            native_prepare_options = ("--buflo-chaff-cap-bytes", str(cap))
         _put(output / "job.json", job)
         with docker_lock():
             _runtime_check(self.runtime)
@@ -258,10 +262,18 @@ class PreparationRuntime:
                 "--security-opt", "no-new-privileges", "--add-host", candidate["hostname"] + ":" + dns["selected_ipv4"],
                 "--mount", f"type=bind,src={self.root},dst={self.root}",
                 "--entrypoint", "/opt/qcsd-venv/bin/python3", self.runtime["collection_image_digest"],
-                "-I", "-B", "-m", "qcsd_lab.resource_study_native", "_prepare", "--job", str(output / "job.json"),
+                "-I", "-B", "-m", "qcsd_lab.resource_study_native", "_prepare", "--job", str(output / "job.json"), *native_prepare_options,
                 timeout=max(600, len(candidate["urls"]) * 125 + 600))
         _put(output / "result.json", json.loads(result.splitlines()[-1]))
         enrollment = load(output / "result.json")
+        if buflo_chaff_cap_bytes is not None:
+            selection = enrollment.get("buflo_chaff_selection")
+            if (type(selection) is not dict
+                    or type(selection.get("schema_version")) is not int
+                    or type(selection.get("cap_bytes")) is not int
+                    or selection != {"schema_version": 1, "record_type": BUFLO_CAPPED_SELECTION_TYPE,
+                                     "selection_policy": BUFLO_CAPPED_SELECTION_POLICY, "cap_bytes": cap}):
+                raise ValueError("prepared BuFLO cap declaration differs from the explicit Native CLI option")
         enrollment["workload_path"] = Path(enrollment["workload_path"]).relative_to(self.root).as_posix()
         enrollment["paths"] = {key: Path(value).relative_to(self.root).as_posix() if value else None
                                for key, value in enrollment["paths"].items()}

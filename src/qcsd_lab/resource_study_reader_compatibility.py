@@ -15,6 +15,9 @@ Typed startup ACKs preserve the Native serializer's omitted false FIN default.
 The prospective resource-domain BuFLO branch binds an explicit prepared and
 sustained identity-body cap to a distinct enrollment sidecar and Native
 schema-four manifest; all twenty application resources and other modes remain.
+The preparation adapter retains the original four-field acquisition job and
+passes the cap through a separate prepare-only Native CLI option. Its returned
+typed declaration must match that requested cap.
 The original network, primary-resource, cadence and kernel predicates remain.
 Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
@@ -240,18 +243,18 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
 # Source022 startup eligibility and the immutable profile-byte cache remain.
 # Actual helper bytes enter execution_files() below.
 # An empty mapping refuses execution; no prospective hash is accepted.
-# Source040 binds the explicit BuFLO-only capped selection and sustained proof.
+# Source040002 preserves the acquisition-job schema and binds the explicit cap CLI.
 APPROVED_EXECUTION_FILES = {
     'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
     'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
     'resource_study.py': '49058ed6a5ba1f7fc5fe73ece77ee8b2e2e99fdb2079de5fee9b06fa7d150d03',
-    'resource_study_runtime.py': 'e829dd6cf5a51bc0b218a39224bee8ac6491c816ba242f371e4a11d3446a0fb9',
+    'resource_study_runtime.py': 'd5c299a273c264c0b8e4c65cc86e43e22707ce23a3399a1f2a26d19623d8c923',
     'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
     'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
     'buflo_handoff.py': 'd9cd39b85ac8c5a0e52065c162918a5b7f7c67ab66af6596ac45ef4979dfdcb2',
     'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
     'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235',
-    'resource_study_native.py': '9b549288b7a6a50960c29f32bdd87443a462ead581cc1817ba48791544db4b3c',
+    'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
     'resource_study_epochs.py': '2a1b64cd23e45912b577f6fbb00bdcdc5587e824992b20696614b38d92e1f9e7',
     'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
 }

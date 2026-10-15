@@ -319,6 +319,9 @@ The enrollment binds a distinct resource-role sidecar and selection receipt to
 the unchanged Native sustained-identity manifest. The capture reader checks
 that manifest's hash against the actual run. Omitting the flag preserves the
 existing largest-first policy; other modes retain their existing selection.
+The preparation adapter passes the cap as an explicit command-line option;
+the persisted acquisition job retains its original four fields. This keeps
+the existing selection and C019 preparation readers strict and compatible.
 A cap does not relax application completeness, response identity, timing or
 packet evidence. A changed BuFLO enrollment still requires its own exact-class
 pilot before formal acquisition. Host tests establish behavior only; a public

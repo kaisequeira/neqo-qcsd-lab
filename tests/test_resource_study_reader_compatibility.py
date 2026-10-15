@@ -159,16 +159,16 @@ def test_source040_profile_binds_the_exact_five_changed_modules_and_old039_is_no
     current = cohorts.verifier_contract()
     expected = {
         "resource_study.py": "49058ed6a5ba1f7fc5fe73ece77ee8b2e2e99fdb2079de5fee9b06fa7d150d03",
-        "resource_study_runtime.py": "e829dd6cf5a51bc0b218a39224bee8ac6491c816ba242f371e4a11d3446a0fb9",
-        "resource_study_native.py": "9b549288b7a6a50960c29f32bdd87443a462ead581cc1817ba48791544db4b3c",
+        "resource_study_runtime.py": "d5c299a273c264c0b8e4c65cc86e43e22707ce23a3399a1f2a26d19623d8c923",
+        "resource_study_native.py": "fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41",
         "resource_study_epochs.py": "2a1b64cd23e45912b577f6fbb00bdcdc5587e824992b20696614b38d92e1f9e7",
         "resource_study_verify.py": "82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235",
     }
     files = compatibility.execution_files()
     assert {name: files[name] for name in expected} == expected
     assert current["transitive_source_files"] == 170
-    assert current["transitive_source_sha256"] == "85e253f934c13a9375700527a9b4bb324c4d09cfaa5dbf1a0317a885938088f5"
-    assert hashlib.sha256(canonical_json(current)).hexdigest() == "95aaf6ef0fc84c499b896859c3dcc61e00f98486bce120040aa7c39fc49659d9"
+    assert current["transitive_source_sha256"] == "ed04b9ea7bbf02ac5f910b941d5a62697b8bbeff70454b01fe8950a3833b44d0"
+    assert hashlib.sha256(canonical_json(current)).hexdigest() == "e4b7925f6ec718b939ee2d5d3de722d53b5f2a2b821d570a4a8523303c4f9771"
     files.update({
         "resource_study.py": "3b8d2171b5b7a0d44a927e215fa6f553d6a2a3300c7311ec80ce3e2c8a3ea644",
         "resource_study_runtime.py": "27946e752e90231dd6f73f982ef5d3758a9716685fba28c900e56f94f28eb27b",
@@ -190,6 +190,28 @@ def test_source040_profile_binds_the_exact_five_changed_modules_and_old039_is_no
     for admission in (compatibility.legacy_contract(), compatibility.prior_execution_contract(),
                       compatibility.prior_capture_execution_contract()):
         assert compatibility.require_supported(admission, pair) is True
+
+
+def test_original_source040_profile_is_distinct_from_four_field_job_cli_revision():
+    files = compatibility.execution_files()
+    files.update({
+        "resource_study_runtime.py": "e829dd6cf5a51bc0b218a39224bee8ac6491c816ba242f371e4a11d3446a0fb9",
+        "resource_study_native.py": "9b549288b7a6a50960c29f32bdd87443a462ead581cc1817ba48791544db4b3c",
+        compatibility.HELPER_NAME: "2e3a601d0334bb98d59d8883351da43e6b936b57da5cbb45d29a4922b2d37fb0",
+    })
+    dated = profile_from_files(files)
+    assert dated["transitive_source_files"] == 170
+    assert dated["transitive_source_sha256"] == "85e253f934c13a9375700527a9b4bb324c4d09cfaa5dbf1a0317a885938088f5"
+    assert hashlib.sha256(canonical_json(dated)).hexdigest() == "95aaf6ef0fc84c499b896859c3dcc61e00f98486bce120040aa7c39fc49659d9"
+    current = cohorts.verifier_contract()
+    assert {name for name in current["files"] if current["files"][name] != dated["files"][name]} == {"resource_study_native.py"}
+    original = canonical_json(dated)
+    with pytest.raises(ValueError, match="Source040 execution"):
+        compatibility.qualify_execution(dated)
+    pair = compatibility.qualify_execution(current)
+    with pytest.raises(ValueError, match="admission reader"):
+        compatibility.require_supported(dated, pair)
+    assert canonical_json(dated) == original and pair.contract() == current
 
 
 @pytest.mark.parametrize("unknown", [False, True])
