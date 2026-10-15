@@ -1,12 +1,15 @@
-"""Exact Source017/018 admission-reader compatibility for Source019 execution.
+"""Exact Source017/018/019 admission-reader compatibility for Source020 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source019 reader. This
+never returned as the source identity of the executing Source020 reader. This
 registry permits only the reviewed allocator/control implementation changes;
 all other scientific dependencies retain their exact Source017 bytes. Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
 The caller still executes every original raw predicate and authenticates its
 actual complete execution graph before and after the operation.
+
+Only immutable supported-profile bytes are retained in each qualified reader.
+No head, SQL row, reservation, receipt, raw result or scientific proof is cached.
 """
 from __future__ import annotations
 
@@ -19,7 +22,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-reader-execution-binding-v1"
+EXECUTION_KIND = "020"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-020-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -203,7 +207,19 @@ PRIOR_EXECUTION_FILES = {
     "resource_study_reader_compatibility.py": "6922c4e3ca971459758f8b5e09f2c86d3c53999e7ff08a9411a411ca155ec87f",
 }
 
-# Sealed only after the shared-flight implementation stops.
+# Exact frozen Source019 execution, reconstructed as a complete 170-file map.
+# Its admission/receipt identity remains distinct from the executing reader.
+PRIOR_CAPTURE_HEAD = "7c474b65caa44cb07c4a67f9b647a4fb8d44e355"
+PRIOR_CAPTURE_EXECUTION_FILES = {
+    "resource_study_cohorts.py": "3b5d3d7bf3e33c73723f5c5c70da5fc006dfe0c007a98cdc68503710926d69d7",
+    "resource_study_store.py": "76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53",
+    "resource_study.py": "dfba1a39876472c1e5e35e2cbabd0e4eb6f32fc33728d707eea3c96f1f3dd7f6",
+    "resource_study_runtime.py": "03c2c7c2dc875d81610f53a8c0f28fccb3e69756b4c9a2af3cba9ef645c6ad4b",
+    "resource_study_reader_compatibility.py": "e30d340542260c0f372582d95f063b61d984cd4f7bf55e1b68eb3f1e7499714c",
+}
+
+# The implementation files remain the reviewed Source019 bytes. Source020
+# changes only this helper, whose actual bytes enter execution_files() below.
 # An empty mapping refuses execution; no prospective hash is accepted.
 APPROVED_EXECUTION_FILES = {
     'resource_study_cohorts.py': '3b5d3d7bf3e33c73723f5c5c70da5fc006dfe0c007a98cdc68503710926d69d7',
@@ -245,6 +261,13 @@ def prior_execution_contract():
     return _profile(files)
 
 
+def prior_capture_execution_contract():
+    """Exact Source019 170-file qualifier, never an alias for Source020."""
+    files = dict(LEGACY_FILES)
+    files.update(PRIOR_CAPTURE_EXECUTION_FILES)
+    return _profile(files)
+
+
 def _self_sha256():
     path = Path(__file__)
     if (not path.is_absolute() or path.resolve(strict=True) != path
@@ -273,7 +296,7 @@ def execution_files():
                                          "resource_study.py", "resource_study_runtime.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source019 reader compatibility registry is not sealed")
+        raise ValueError("Source020 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -281,32 +304,40 @@ def execution_files():
 
 
 class _QualifiedExecution:
-    __slots__ = ("_profile",)
+    __slots__ = ("_profile", "_supported_profiles")
 
     def __init__(self, profile):
         self._profile = _encoded(profile)
+        # Serialize each exact immutable profile once per qualified reader,
+        # rather than rebuilding/hashing whole Source maps for every member.
+        self._supported_profiles = (
+            _encoded(legacy_contract()),
+            _encoded(prior_execution_contract()),
+            _encoded(prior_capture_execution_contract()),
+            self._profile,
+        )
 
     def contract(self):
         return json.loads(self._profile)
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source019 profile, never a legacy alias.
+    """Authenticate the exact approved Source020 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source019 execution reader")
+        raise ValueError("unsupported or changed Source020 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source019 execution reader required")
-    if _encoded(admission) not in (_encoded(legacy_contract()), _encoded(prior_execution_contract()), qualified._profile):
+        raise ValueError("qualified Source020 execution reader required")
+    if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
 
@@ -324,7 +355,7 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018 admission profiles or reviewed Source019 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source020 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,

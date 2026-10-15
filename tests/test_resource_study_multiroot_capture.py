@@ -429,7 +429,7 @@ def test_017_018_019_reader_profiles_remain_distinct_and_exact():
         assert binding["historical_receipts_requalified_by_compatibility"] is False
         assert binding["authority_issued"] is False and binding["scientific_credit_added"] == 0
     for profile in (old, prior):
-        with pytest.raises(ValueError, match="Source019 execution"):
+        with pytest.raises(ValueError, match="Source020 execution"):
             compatibility.qualify_execution(profile)
     changed = deepcopy(prior); changed["files"]["fidelity.py"] = "0" * 64
     with pytest.raises(ValueError, match="admission reader"):
