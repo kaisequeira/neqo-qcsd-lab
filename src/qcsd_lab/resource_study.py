@@ -477,19 +477,21 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     if not modes or any(m not in MODES for m in modes) or len(set(modes)) != len(modes):
         raise ValueError("unregistered or duplicate traffic setting")
     store = StudyStore(root)
-    from .resource_study_epochs import active_cell
+    from .resource_study_cohorts import eligible_cells
     plan = store.plan()
     fixed_network = validate_network_plan(plan) is not None
     storage = require_storage(root, reserve_bytes=plan.get("storage_reserve_bytes", 2 * 1024 ** 3))
     enrolled = [e for e in store.enrolled() if hostnames is None or e["hostname"] in hostnames]
     if not enrolled:
         raise ValueError("live enrollment is required before capture")
+    startup_cells = eligible_cells(store, [(e["hostname"], mode) for mode in modes for e in enrolled
+        if e.get("mode_readiness", {}).get(mode, True)])
     pilot_blocked = set()
     missing_pilots = []
     if not pilot:
         for mode in modes:
             selected = [e for e in enrolled if e.get("mode_readiness", {}).get(mode, True)
-                        and active_cell(store, e["hostname"], mode)]
+                        and (e["hostname"], mode) in startup_cells]
             if not selected:
                 continue
             ready = False
@@ -527,7 +529,7 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 pilot_blocked.update((e["hostname"], mode) for e in selected)
         ready_cells = [(e["hostname"], mode) for mode in modes for e in enrolled
                        if e.get("mode_readiness", {}).get(mode, True)
-                       and active_cell(store, e["hostname"], mode)
+                       and (e["hostname"], mode) in startup_cells
                        and (e["hostname"], mode) not in pilot_blocked]
         if not ready_cells:
             raise ValueError("requested modes need a focused pilot or live admission: capture --pilot --chunk 1")
@@ -542,7 +544,7 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     if pilot:
         chunk_sessions = 1
     cell_order = [(e["hostname"], m) for m in modes for e in enrolled
-                  if e.get("mode_readiness", {}).get(m, True) and active_cell(store, e["hostname"], m)]
+                  if e.get("mode_readiness", {}).get(m, True) and (e["hostname"], m) in startup_cells]
     enrollment_by_host = {e["hostname"]: e for e in enrolled}
     def scheduling_counts(cells):
         from .resource_study_cohorts import counts_snapshot

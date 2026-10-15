@@ -1493,6 +1493,36 @@ def accepted_count(store, hostname, mode):
         return len(_accepted(entry))
 
 
+def eligible_cells(store, cells):
+    """One parent-locked startup hint using the original active-cell guards.
+
+    No authority or mutable ledger state escapes the call. Reservations,
+    counts, pilots and credit continue to authenticate their own fresh state.
+    """
+    if (type(cells) not in (list, tuple) or len(cells) > 250
+            or any(type(cell) not in (list, tuple) or len(cell) != 2 for cell in cells)):
+        raise ValueError("bounded explicit eligibility cells required")
+    keys = [(_hostname(cell[0]), _mode(cell[1])) for cell in cells]
+    if len(keys) != len(set(keys)):
+        raise ValueError("eligibility cell scope repeats")
+    if not keys:
+        return frozenset()
+    e = _epochs()
+    parent = e._membership(store)
+    if parent is None:
+        return frozenset(key for key in keys if e.active_cell(store, *key))
+    with e._lock(parent.root):
+        current = e._records(parent)
+        selected = {e._key(cell): cell for cell in current[-1]["cells"]}
+        result = set()
+        for key in keys:
+            cell = selected.get(key)
+            if cell is not None and cell["root"] == str(store.root):
+                e._active(store, *key, current)
+                result.add(key)
+        return frozenset(result)
+
+
 def counts_snapshot(store, cells):
     """One parent-locked scheduling hint; reservations/credit recheck authority.
 
