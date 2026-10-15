@@ -458,9 +458,10 @@ def _capture_executor(backend, workers):
         scope = getattr(backend, "coordinator_affinity_scope", None)
         # Existing injected test backends have no physical topology. The
         # public CLI always constructs CaptureRuntime and its strict scope.
-        with (nullcontext() if scope is None else scope()):
+        with (nullcontext() if scope is None else scope()) as observe_executor:
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                yield executor
+                with (nullcontext() if observe_executor is None else observe_executor(executor)):
+                    yield executor
 
 
 def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,

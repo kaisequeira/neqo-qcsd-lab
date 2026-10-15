@@ -1,7 +1,7 @@
-"""Exact Source017/018/019 admission-reader compatibility for Source024 execution.
+"""Exact Source017/018/019 admission-reader compatibility for Source027 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source024 reader. This
+never returned as the source identity of the executing Source027 reader. This
 registry permits only the reviewed allocator/control implementation changes;
 all other scientific dependencies retain their exact Source017 bytes. Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
@@ -22,8 +22,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = "024"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-024-reader-execution-binding-v1"
+EXECUTION_KIND = "027"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-027-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -218,8 +218,9 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
     "resource_study_reader_compatibility.py": "e30d340542260c0f372582d95f063b61d984cd4f7bf55e1b68eb3f1e7499714c",
 }
 
-# Source024 confines the outer coordinator and newly created pool threads to
-# residual auxiliary CPUs, after constructing the unchanged worker partition.
+# Source027 checks the actual executor's owned threads after joining and keeps
+# surviving foreign threads confined to the same residual auxiliary CPUs.
+# Source024's worker partition and main-thread restoration are retained.
 # Source023 immutable frozen manifests within one records() call are retained.
 # Source022 startup eligibility and the immutable profile-byte cache remain.
 # Actual helper bytes enter execution_files() below.
@@ -227,8 +228,8 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
 APPROVED_EXECUTION_FILES = {
     'resource_study_cohorts.py': '877384786ca6ae3e90f2d8ce4011fc2c018f48d00cf3ab726e0b7d1332114d9b',
     'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
-    'resource_study.py': 'af071540149ebffb055baf0e043bb8dc5831cdd36d2b8569de6b8ee9cbdb0562',
-    'resource_study_runtime.py': '82f1b92a3ff76a508a0d7e5304622a11391830c20c5e439189eeaf6acc22042d',
+    'resource_study.py': '3b8d2171b5b7a0d44a927e215fa6f553d6a2a3300c7311ec80ce3e2c8a3ea644',
+    'resource_study_runtime.py': '90ea05084b7686e04da9f7a673dfa7d06ebc34c6cd0beee69e46fb8a4f1852e2',
 }
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -299,7 +300,7 @@ def execution_files():
                                          "resource_study.py", "resource_study_runtime.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source024 reader compatibility registry is not sealed")
+        raise ValueError("Source027 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -325,21 +326,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source024 profile, never a legacy alias.
+    """Authenticate the exact approved Source027 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source024 execution reader")
+        raise ValueError("unsupported or changed Source027 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source024 execution reader required")
+        raise ValueError("qualified Source027 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -358,11 +359,12 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source024 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source027 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,
         "outer_coordinator_auxiliary_affinity_scope_changed": True,
+        "coordinator_pool_thread_closure_changed": True,
         "scientific_truth_conditions_changed": False,
         "historical_receipts_requalified_by_compatibility": False,
         "authority_issued": False, "scientific_credit_added": 0}

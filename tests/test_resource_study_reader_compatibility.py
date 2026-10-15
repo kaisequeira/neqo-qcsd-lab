@@ -1,9 +1,9 @@
-"""Source017 admission / Source018 execution regression controls.
+"""Source017/018/019 admission and Source027 execution regression controls.
 
 These HOST fixtures qualify source identities and the real metadata dispatch.
 The one raw leaf is explicitly synthetic; no capture, Native qualification,
 historical data replay, admission, ledger credit or durability is claimed.
-ROOT alone executes these tests after the complete Source018 pins are sealed.
+ROOT alone executes these tests after the complete Source027 pins are sealed.
 """
 from copy import deepcopy
 import hashlib
@@ -62,6 +62,7 @@ def test_old_admission_and_actual_execution_remain_distinct_and_unaliased():
     assert binding["execution_reader"] == current
     assert binding["admission_reader_preserved"] is True
     assert binding["execution_reader_is_admission_reader"] is False
+    assert binding["coordinator_pool_thread_closure_changed"] is True
     assert binding["scientific_truth_conditions_changed"] is False
     assert binding["historical_receipts_requalified_by_compatibility"] is False
     assert binding["authority_issued"] is False and binding["scientific_credit_added"] == 0
@@ -82,7 +83,8 @@ def test_unknown_admission_reader_never_falls_through(change):
         compatibility.require_supported(value, qualified())
 
 
-@pytest.mark.parametrize("name", ["fidelity.py", "capture_session.py", "resource_study_cohorts.py", "resource_study_store.py"])
+@pytest.mark.parametrize("name", ["fidelity.py", "capture_session.py", "resource_study_cohorts.py", "resource_study_store.py",
+    "resource_study.py", "resource_study_runtime.py"])
 def test_execution_source_change_outside_the_exact_approved_pair_refuses(name):
     files = compatibility.execution_files()
     files[name] = "0" * 64
@@ -93,8 +95,33 @@ def test_execution_source_change_outside_the_exact_approved_pair_refuses(name):
 def test_legacy_profile_cannot_be_presented_as_the_current_execution():
     with pytest.raises(ValueError, match="execution reader"):
         compatibility.qualify_execution(compatibility.legacy_contract())
-    with pytest.raises(ValueError, match="qualified Source024"):
+    with pytest.raises(ValueError, match="qualified Source027"):
         compatibility.require_supported(compatibility.legacy_contract(), object())
+
+
+def test_exact_source024_producer_profile_cannot_alias_source027_execution():
+    # Immutable Source024 SOURCE metadata, independent of any live receipt.
+    # Keeping this dated producer identity never grants a new admission.
+    files = dict(compatibility.LEGACY_FILES)
+    files.update({
+        "resource_study_cohorts.py": "877384786ca6ae3e90f2d8ce4011fc2c018f48d00cf3ab726e0b7d1332114d9b",
+        "resource_study_store.py": "76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53",
+        "resource_study.py": "af071540149ebffb055baf0e043bb8dc5831cdd36d2b8569de6b8ee9cbdb0562",
+        "resource_study_runtime.py": "82f1b92a3ff76a508a0d7e5304622a11391830c20c5e439189eeaf6acc22042d",
+        compatibility.HELPER_NAME: "e554ebd4749ad6510d2c55f066a8859a80a1d0e8a18070fe694e6332bf25132c",
+    })
+    dated = profile_from_files(files)
+    assert dated["transitive_source_files"] == 170
+    assert dated["transitive_source_sha256"] == "e6fc499a07e846675a15a7c8f0481a5d203ff446ec2b3ceb7dcb8017578fa2bb"
+    assert hashlib.sha256(canonical_json(dated)).hexdigest() == "9487b3b2a8643e8f280185732b57d94f14d856d043aa085008e9405ef37595d3"
+    original = canonical_json(dated)
+    current = cohorts.verifier_contract()
+    assert dated != current and dated["files"] == current["files"]
+    with pytest.raises(ValueError, match="Source027 execution"):
+        compatibility.qualify_execution(dated)
+    pair = compatibility.qualify_execution(current)
+    assert pair.contract() == current and canonical_json(dated) == original
+    assert compatibility.require_supported(compatibility.prior_capture_execution_contract(), pair) is True
 
 
 @pytest.mark.parametrize("unknown", [False, True])

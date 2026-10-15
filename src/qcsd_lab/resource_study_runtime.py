@@ -84,6 +84,38 @@ def _coordinator_tasks():
                   if path.name.isascii() and path.name.isdecimal())
 
 
+def _coordinator_thread(tid):
+    """Bind one live Linux task's name and mask to its stable start time."""
+    if type(tid) is not int or tid <= 0:
+        raise ValueError("coordinator task identity must be a positive native TID")
+    path = Path("/proc/self/task") / str(tid) / "stat"
+
+    def identity():
+        value = path.read_text()
+        left, right = value.find("("), value.rfind(")")
+        fields = value[right + 1:].split()
+        if left < 1 or right <= left or int(value[:left].strip()) != tid or len(fields) < 20:
+            raise ValueError("coordinator task stat identity is malformed")
+        start = int(fields[19])
+        if start <= 0:
+            raise ValueError("coordinator task start time is invalid")
+        return value[left + 1:right], start
+
+    before = identity()
+    affinity = sorted(os.sched_getaffinity(tid))
+    if not affinity or identity() != before:
+        raise ValueError("coordinator task identity changed during affinity observation")
+    return {"tid": tid, "name": before[0], "start_ticks": before[1], "affinity": affinity}
+
+
+def _coordinator_thread_snapshot():
+    tids = _coordinator_tasks()
+    values = [_coordinator_thread(tid) for tid in tids]
+    if _coordinator_tasks() != tids:
+        raise ValueError("coordinator task census changed during affinity observation")
+    return values
+
+
 def public_ipv4(hostname: str) -> dict:
     answers = socket.getaddrinfo(hostname, 443, type=socket.SOCK_DGRAM)
     addresses = list(dict.fromkeys(answer[4][0] for answer in answers))
@@ -214,7 +246,9 @@ class CaptureRuntime:
 
         Enter only after the full-affinity Docker partition is constructed and
         before creating pool threads. Existing unknown siblings refuse entry;
-        new pool threads inherit this mask. No client/container mask changes.
+        new pool threads inherit this mask. The actual executor owns the join;
+        foreign threads may remain only on auxiliary CPUs. No client/container
+        mask changes.
         """
         pid = os.getpid()
         available, pairs, auxiliary = self.coordinator_partition
@@ -233,12 +267,50 @@ class CaptureRuntime:
         if original != list(available):
             raise ValueError("coordinator must enter with the complete measured available CPU set")
         flights = list(self.flights.values()) if hasattr(self, "flights") else [self.flight]
-        fixed = {"record_type": "qcsd-Source024-outer-coordinator-affinity-v1", "schema_version": 1,
+        baseline_threads = _coordinator_thread_snapshot()
+        if [value["tid"] for value in baseline_threads] != [pid]:
+            raise ValueError("coordinator baseline thread census differs")
+        fixed = {"record_type": "qcsd-Source027-outer-coordinator-affinity-v2", "schema_version": 2,
             "pid": pid, "available_cpus": list(available), "worker_cpu_pairs": [list(p) for p in pairs],
             "auxiliary_cpus": list(auxiliary), "affinity_before": original,
             "existing_thread_ids": [pid], "new_pool_threads_inherit_auxiliary_mask": True,
+            "baseline_threads": baseline_threads, "pool_ownership_source": "ThreadPoolExecutor._threads",
             "container_and_Native_affinity_changed": False, "scientific_credit": False}
         body_error = None
+        pool = None
+        owned = []
+        ownership_observed = False
+
+        @contextmanager
+        def observe_executor(executor):
+            nonlocal pool, owned, ownership_observed
+            if pool is not None:
+                raise ValueError("coordinator scope can own only one executor")
+            pool = executor
+            executor_error = None
+            try:
+                yield
+            except BaseException as error:
+                executor_error = error
+                raise
+            finally:
+                try:
+                    threads = list(executor._threads)
+                    if any(not isinstance(thread, threading.Thread) for thread in threads):
+                        raise ValueError("coordinator executor contains an unknown thread owner")
+                    owned = [(thread, {**_coordinator_thread(thread.native_id), "python_name": thread.name})
+                             for thread in threads]
+                    owned.sort(key=lambda item: item[1]["tid"])
+                    tids = [value["tid"] for _, value in owned]
+                    if (len(tids) != len(set(tids)) or pid in tids
+                            or any(not set(value["affinity"]) <= set(auxiliary) for _, value in owned)):
+                        raise ValueError("coordinator owned pool identity or auxiliary affinity differs")
+                    ownership_observed = True
+                except BaseException as failure:
+                    if executor_error is None:
+                        raise
+                    executor_error.add_note("Coordinator pool ownership observation also refused: " + str(failure))
+
         try:
             os.sched_setaffinity(0, set(auxiliary))
             during = sorted(os.sched_getaffinity(0))
@@ -247,26 +319,50 @@ class CaptureRuntime:
             self.coordinator_affinity = {**fixed, "affinity_during": during}
             for flight in flights:
                 _put(flight / "coordinator-affinity-started.json", self.coordinator_affinity)
-            yield
+            yield observe_executor
         except BaseException as error:
             body_error = error
             raise
         finally:
             try:
                 try:
-                    remaining_before = _coordinator_tasks()
+                    remaining_before = _coordinator_thread_snapshot()
+                    threads_after = [] if pool is None else list(pool._threads)
+                    joined = (pool is None or (ownership_observed
+                        and len(threads_after) == len(owned)
+                        and all(any(thread is old for old, _ in owned) for thread in threads_after)
+                        and all(not thread.is_alive() for thread in threads_after)))
+                    owned_records = [{**value, "alive_after_join": thread.is_alive()} for thread, value in owned]
+                    owned_identities = {(value["tid"], value["start_ticks"]) for _, value in owned}
+                    joined = joined and not any((value["tid"], value["start_ticks"]) in owned_identities
+                                                 for value in remaining_before)
                 finally:
                     os.sched_setaffinity(0, set(original))
                 restored = sorted(os.sched_getaffinity(0))
-                remaining_after = _coordinator_tasks()
+                remaining_after = _coordinator_thread_snapshot()
+                joined = joined and not any((value["tid"], value["start_ticks"]) in owned_identities
+                                             for value in remaining_after)
+                foreign = [value for value in remaining_before + remaining_after if value["tid"] != pid
+                           and (value["tid"], value["start_ticks"]) not in owned_identities]
+                foreign_confined = all(set(value["affinity"]) <= set(auxiliary) for value in foreign)
+                main_before = [value for value in remaining_before if value["tid"] == pid]
+                main_after = [value for value in remaining_after if value["tid"] == pid]
+                main_valid = (len(main_before) == len(main_after) == 1
+                    and main_before[0]["start_ticks"] == main_after[0]["start_ticks"] == baseline_threads[0]["start_ticks"]
+                    and main_before[0]["affinity"] == list(auxiliary) and main_after[0]["affinity"] == original)
                 closed = {**fixed, "affinity_restored": restored,
-                    "remaining_thread_ids_before_restoration": remaining_before,
-                    "remaining_thread_ids_after_restoration": remaining_after,
+                    "remaining_thread_ids_before_restoration": [value["tid"] for value in remaining_before],
+                    "remaining_thread_ids_after_restoration": [value["tid"] for value in remaining_after],
+                    "remaining_threads_before_restoration": remaining_before,
+                    "remaining_threads_after_restoration": remaining_after,
+                    "executor_registered": pool is not None, "owned_pool_threads": owned_records,
+                    "foreign_threads_confined_to_auxiliary": foreign_confined,
+                    "main_thread_identity_and_affinity_valid": main_valid,
                     "restored": restored == original, "body_failed": body_error is not None,
-                    "pool_joined_before_restoration": remaining_before == [pid]}
+                    "pool_joined_before_restoration": joined}
                 for flight in flights:
                     _put(flight / "coordinator-affinity-closed.json", closed)
-                if restored != original or remaining_before != [pid] or remaining_after != [pid]:
+                if restored != original or not main_valid or not joined or not foreign_confined:
                     raise ValueError("coordinator affinity restoration or pool-thread closure differs")
             except BaseException as failure:
                 if body_error is None:
@@ -424,7 +520,7 @@ class CaptureRuntime:
             _put(self.flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
                 "runtime": self.runtime, "available_cpus": available, "study_sha256": self.study_sha256,
                 "coordinator_auxiliary_cpus": sidecars,
-                "coordinator_affinity_policy": "qcsd-Source024-outer-coordinator-affinity-v1",
+                "coordinator_affinity_policy": "qcsd-Source027-outer-coordinator-affinity-v2",
                 "class_mapping_sha256": mapping_sha256(self.plan), "scientific_credit": False})
             return self
         except BaseException:
@@ -752,7 +848,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                 _put(flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
                     "runtime": self.runtime, "available_cpus": available,
                     "coordinator_auxiliary_cpus": sidecars,
-                    "coordinator_affinity_policy": "qcsd-Source024-outer-coordinator-affinity-v1",
+                    "coordinator_affinity_policy": "qcsd-Source027-outer-coordinator-affinity-v2",
                     "study_sha256": self.contexts[root]["study_sha256"],
                     "class_mapping_sha256": mapping_sha256(self.contexts[root]["plan"]),
                     "shared_flight": self.flight_binding(), "scientific_credit": False})
