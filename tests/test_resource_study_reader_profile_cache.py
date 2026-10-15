@@ -1,4 +1,4 @@
-"""Source027 controls retaining the Source020 immutable profile-byte cache.
+"""Source028 controls retaining the Source020 immutable profile-byte cache.
 
 These fixtures exercise reader identities and real SourceOperation boundaries.
 They create no SQL database, admission, receipt or scientific credit. The
@@ -37,18 +37,20 @@ def test_exact_source019_profile_is_preserved_as_a_distinct_supported_reader():
     old = compatibility.prior_capture_execution_contract()
     files = dict(compatibility.LEGACY_FILES)
     files.update(compatibility.PRIOR_CAPTURE_EXECUTION_FILES)
-    assert compatibility.EXECUTION_KIND == "027"
+    assert compatibility.EXECUTION_KIND == "028"
     assert compatibility.PRIOR_CAPTURE_HEAD == "7c474b65caa44cb07c4a67f9b647a4fb8d44e355"
     assert len(files) == old["transitive_source_files"] == 170
     assert hashlib.sha256(canonical_json(files)).hexdigest() == old["transitive_source_sha256"]
     assert old["transitive_source_sha256"] == "335fc8497535ad3ea04dcbe8c66503265890b87dc9726d73f91d3f35dbea7d1c"
     assert hashlib.sha256(canonical_json(old)).hexdigest() == "0903a79cd1c64e09c81d912a872fb37a6301f98c564da9216db9a0d36ab0b9f8"
     current = cohorts.verifier_contract()
-    assert current != old and current["files"] == old["files"]
+    assert current != old
+    assert {name for name in current["files"] if current["files"][name] != old["files"][name]} == {"resource_study_network.py"}
     pair = compatibility.qualify_execution(current)
     assert compatibility.require_supported(old, pair) is True
     binding = compatibility.execution_binding(old, pair)
-    assert binding["record_type"] == "qcsd-resource-domain-017-018-019-027-reader-execution-binding-v1"
+    assert binding["record_type"] == "qcsd-resource-domain-017-018-019-028-reader-execution-binding-v1"
+    assert binding["records_network_validation_cache_changed"] is True
     assert binding["admission_reader"] == old and binding["execution_reader"] == current
     assert binding["execution_reader_is_admission_reader"] is False
     old["files"].clear()
@@ -74,8 +76,8 @@ def test_supported_profiles_match_the_uncached_reference_without_aliases(index):
 
 
 @pytest.mark.parametrize("index", range(3))
-def test_supported_historical_reader_cannot_alias_actual_source027_execution(index):
-    with pytest.raises(ValueError, match="Source027 execution"):
+def test_supported_historical_reader_cannot_alias_actual_source028_execution(index):
+    with pytest.raises(ValueError, match="Source028 execution"):
         compatibility.qualify_execution(profiles()[index])
 
 
@@ -230,7 +232,7 @@ def test_profile_cache_benchmark_reports_equivalent_decisions_without_timing_gat
         observations[label] = {"accepted": accepted,
             "cpu_ns": process_time_ns() - cpu, "wall_ns": perf_counter_ns() - wall}
     assert observations["uncached"]["accepted"] == observations["cached"]["accepted"] == iterations * 4
-    print(json.dumps({"record_type": "qcsd-Source027-reader-profile-cache-benchmark-v1",
+    print(json.dumps({"record_type": "qcsd-Source028-reader-profile-cache-benchmark-v1",
         "schema_version": 1, "calls_per_path": iterations * len(candidates),
         "observations": observations, "timing_threshold_enforced": False,
         "scientific_credit_added": 0}, sort_keys=True, allow_nan=False))

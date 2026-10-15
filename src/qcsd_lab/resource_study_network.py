@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import math
 
 from .resource_study_inputs import CLASS_COUNT, _hostname, canonical_json
 
@@ -34,7 +35,46 @@ def build_network_plan(hostnames, *, pool=DEFAULT_POOL):
     return {"record_type": NETWORK_RECORD, "pool": pool, "assignments": assignments}
 
 
+def _network_plan_cache_bytes(plan):
+    """Only exact JSON-native plans can share a canonical validation key."""
+    def native(value, parents):
+        kind = type(value)
+        if kind in (str, int, bool) or value is None:
+            return True
+        if kind is float:
+            return math.isfinite(value)
+        if kind not in (dict, list) or id(value) in parents:
+            return False
+        parents.add(id(value))
+        try:
+            if kind is dict:
+                return all(type(key) is str and native(item, parents) for key, item in value.items())
+            return all(native(item, parents) for item in value)
+        finally:
+            parents.remove(id(value))
+    try:
+        if type(plan) is dict and native(plan, set()):
+            return canonical_json(plan)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        pass
+    return None
+
+
 def validate_network_plan(plan, *, require=False):
+    """Reuse pure validation only inside the existing one-call records owner."""
+    # Store imports this module. Resolve the scope only when validation runs,
+    # after module initialization, rather than introducing an import cycle.
+    from .resource_study_store import _PLAN_READ_SCOPE
+    scope = _PLAN_READ_SCOPE.get()
+    if scope is None:
+        return _uncached_validate_network_plan(plan, require=require)
+    from .resource_study_cohorts import _RecordsRead
+    if type(scope) is not _RecordsRead:
+        raise ValueError("foreign records network validation scope")
+    return scope.network_plan(plan, require=require)
+
+
+def _uncached_validate_network_plan(plan, *, require=False):
     """Return validated assignments, or None for an unchanged historical plan."""
     present = {key for key in ("class_network", "tuple_uniqueness_scope") if key in plan}
     if "class_selection" in plan and present != {"class_network", "tuple_uniqueness_scope"}:

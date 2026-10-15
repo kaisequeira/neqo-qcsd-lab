@@ -419,9 +419,12 @@ class _RecordsRead:
     retained here. The original Store.plan SQL suffix runs on every hit.
     """
     def __init__(self):
+        from . import resource_study_network as network
         self.pid, self.thread, self.active = os.getpid(), threading.get_ident(), True
         self.files, self.plans, self.stores, self.sciences = {}, {}, {}, {}
         self.roots, self.frozen_values = {}, {}
+        self.network_plans = {}
+        self.network_validator = network._uncached_validate_network_plan
 
     def check(self):
         if not self.active or self.pid != os.getpid() or self.thread != threading.get_ident():
@@ -462,6 +465,26 @@ class _RecordsRead:
             raise ValueError("records plan parser changed within its call")
         for name in old[1]: self.file(store.root / name)
         return deepcopy(old[2])
+
+    def network_plan(self, plan, *, require=False):
+        """Memoize successful pure decisions, never assignments or SQL state."""
+        self.check()
+        from . import resource_study_network as network
+        if network._uncached_validate_network_plan is not self.network_validator:
+            raise ValueError("records network validator changed within its call")
+        raw = network._network_plan_cache_bytes(plan) if type(require) is bool else None
+        if raw is None:
+            return self.network_validator(plan, require=require)
+        key = (require, raw)
+        if key not in self.network_plans:
+            value = self.network_validator(plan, require=require)
+            if (network._uncached_validate_network_plan is not self.network_validator
+                    or network._network_plan_cache_bytes(plan) != raw):
+                raise ValueError("records network plan or validator changed during validation")
+            if value is not None and value is not plan["class_network"]["assignments"]:
+                return value  # Preserve an unsupported validator's return semantics.
+            self.network_plans[key] = value is not None
+        return plan["class_network"]["assignments"] if self.network_plans[key] else None
 
     def store(self, root):
         self.check(); key = str(root)
@@ -511,6 +534,7 @@ class _RecordsRead:
         self.active = False
         self.files.clear(); self.plans.clear(); self.stores.clear(); self.sciences.clear()
         self.roots.clear(); self.frozen_values.clear()
+        self.network_plans.clear()
 
 
 @contextmanager
