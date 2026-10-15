@@ -411,6 +411,9 @@ def _verify_preparation(store, host, *, enrollment=None):
     expected = [{key: row[key] for key in ("resource_id", "status", "bytes", "body_sha256")} for row in responses]
     if expected != preparation["expected_responses"]:
         raise ValueError("epoch preparation expected responses differ from the actual twenty GETs")
+    if "buflo_chaff_selection" in enrollment:
+        from .resource_study_native import validate_buflo_capped_enrollment
+        validate_buflo_capped_enrollment(store.root, enrollment)
 
 
 def _scope(cells, hostnames, modes, change):

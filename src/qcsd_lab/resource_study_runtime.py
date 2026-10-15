@@ -241,12 +241,15 @@ class PreparationRuntime:
     def __init__(self, root: Path, runtime: dict):
         self.root, self.runtime = root.absolute(), runtime
 
-    def prepare(self, candidate: dict, output: Path) -> dict:
+    def prepare(self, candidate: dict, output: Path, *, buflo_chaff_cap_bytes: int | None = None) -> dict:
         output.mkdir(parents=True, exist_ok=False)
         dns = public_ipv4(candidate["hostname"])
         _put(output / "dns.json", dns)
         job = {"hostname": candidate["hostname"], "urls": candidate["urls"],
                "output": str(output / "prepared"), "runtime": self.runtime}
+        if buflo_chaff_cap_bytes is not None:
+            from .resource_study_native import _buflo_chaff_cap
+            job["buflo_chaff_cap_bytes"] = _buflo_chaff_cap(buflo_chaff_cap_bytes)
         _put(output / "job.json", job)
         with docker_lock():
             _runtime_check(self.runtime)

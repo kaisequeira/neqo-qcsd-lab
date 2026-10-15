@@ -1,7 +1,7 @@
-"""Exact Source017/018/019 admission-reader compatibility for Source039 execution.
+"""Exact Source017/018/019 admission-reader compatibility for Source040 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source039 reader. This
+never returned as the source identity of the executing Source040 reader. This
 registry permits the reviewed allocator/control changes and call-local pure
 network validation reuse, with bounded owned kernel-thread teardown after the
 original Python pool join. The new guarded local-only BuFLO terminal protocol
@@ -12,6 +12,9 @@ The retained summary5 reader binds ACK-start reopening to those exact traces.
 Its typed stop receipt binds suppressed incoming ticks to the original ACK64 schedule.
 The evaluation reader joins that receipt to both final direction metrics.
 Typed startup ACKs preserve the Native serializer's omitted false FIN default.
+The prospective resource-domain BuFLO branch binds an explicit prepared and
+sustained identity-body cap to a distinct enrollment sidecar and Native
+schema-four manifest; all twenty application resources and other modes remain.
 The original network, primary-resource, cadence and kernel predicates remain.
 Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
@@ -32,8 +35,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = "039"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-039-reader-execution-binding-v1"
+EXECUTION_KIND = "040"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-040-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -237,16 +240,19 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
 # Source022 startup eligibility and the immutable profile-byte cache remain.
 # Actual helper bytes enter execution_files() below.
 # An empty mapping refuses execution; no prospective hash is accepted.
+# Source040 binds the explicit BuFLO-only capped selection and sustained proof.
 APPROVED_EXECUTION_FILES = {
     'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
     'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
-    'resource_study.py': '3b8d2171b5b7a0d44a927e215fa6f553d6a2a3300c7311ec80ce3e2c8a3ea644',
-    'resource_study_runtime.py': '27946e752e90231dd6f73f982ef5d3758a9716685fba28c900e56f94f28eb27b',
+    'resource_study.py': '49058ed6a5ba1f7fc5fe73ece77ee8b2e2e99fdb2079de5fee9b06fa7d150d03',
+    'resource_study_runtime.py': 'e829dd6cf5a51bc0b218a39224bee8ac6491c816ba242f371e4a11d3446a0fb9',
     'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
     'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
     'buflo_handoff.py': 'd9cd39b85ac8c5a0e52065c162918a5b7f7c67ab66af6596ac45ef4979dfdcb2',
     'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
-    'resource_study_verify.py': '80711b1ab52f11457ef5fe6269cef9a0f00531544782cd7cd60a4b488ad5dcac',
+    'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235',
+    'resource_study_native.py': '9b549288b7a6a50960c29f32bdd87443a462ead581cc1817ba48791544db4b3c',
+    'resource_study_epochs.py': '2a1b64cd23e45912b577f6fbb00bdcdc5587e824992b20696614b38d92e1f9e7',
     'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
 }
 
@@ -317,10 +323,11 @@ def execution_files():
     if (set(APPROVED_EXECUTION_FILES) != {"resource_study_cohorts.py", "resource_study_store.py",
                                          "resource_study.py", "resource_study_runtime.py", "resource_study_network.py",
                                          "fidelity.py", "buflo_handoff.py", "buflo_evaluation.py", "resource_study_verify.py",
-                                         "capture_acceptance_policy.py"}
+                                         "capture_acceptance_policy.py", "resource_study_native.py",
+                                         "resource_study_epochs.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source039 reader compatibility registry is not sealed")
+        raise ValueError("Source040 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -346,21 +353,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source039 profile, never a legacy alias.
+    """Authenticate the exact approved Source040 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source039 execution reader")
+        raise ValueError("unsupported or changed Source040 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source039 execution reader required")
+        raise ValueError("qualified Source040 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -379,7 +386,7 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source039 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source040 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,
@@ -393,6 +400,7 @@ def execution_binding(admission, qualified):
         "buflo_ack_start_retained_stop_schedule_changed": True,
         "buflo_ack_start_retained_evaluation_join_changed": True,
         "buflo_startup_ack_sparse_false_fin_changed": True,
+        "buflo_capped_chaff_selection_changed": True,
         "prospective_buflo_terminal_protocol_changed": True,
         "scientific_truth_conditions_changed": True,
         "historical_receipts_requalified_by_compatibility": False,

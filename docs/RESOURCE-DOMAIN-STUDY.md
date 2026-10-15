@@ -303,6 +303,27 @@ in `study.json`; repeating `prepare` with different values refuses the change.
 The default live storage reserve is 60 GiB. Use the supported preparation flags
 instead of editing the frozen plan.
 
+### Prospective BuFLO padding response cap
+
+For a fresh live enrollment, `prepare --enroll --hostname RESOURCE_HOSTNAME`
+can also take `--buflo-chaff-cap-bytes 131072`. The cap must be an integer
+between 1,200 and 1,048,576 bytes. This optional policy keeps all twenty
+application resources unchanged and selects BuFLO padding from auxiliary
+resources whose prepared and qualified response lengths fit the cap. Candidates
+are tried in descending prepared size, with resource ID and URL breaking ties.
+Each attempted candidate retains its sustained identity qualification: three
+epochs of forty requests, five concurrent requests, with at least thirty seconds
+between epochs. An actual response outside the cap cannot qualify.
+
+The enrollment binds a distinct resource-role sidecar and selection receipt to
+the unchanged Native sustained-identity manifest. The capture reader checks
+that manifest's hash against the actual run. Omitting the flag preserves the
+existing largest-first policy; other modes retain their existing selection.
+A cap does not relax application completeness, response identity, timing or
+packet evidence. A changed BuFLO enrollment still requires its own exact-class
+pilot before formal acquisition. Host tests establish behavior only; a public
+runtime build, live pilot and independent verification remain separate evidence.
+
 ### Explicit prospective twenty-resource selection
 
 The default preparation path still probes the authenticated candidate pool in

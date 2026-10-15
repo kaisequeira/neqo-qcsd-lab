@@ -196,7 +196,12 @@ def _selection_unused(store, hostname):
 
 
 def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
-           resource_selection: Path | None = None, resource_selection_sha256: str | None = None) -> dict:
+           resource_selection: Path | None = None, resource_selection_sha256: str | None = None,
+           buflo_chaff_cap_bytes: int | None = None) -> dict:
+    cap = None
+    if buflo_chaff_cap_bytes is not None:
+        from .resource_study_native import _buflo_chaff_cap
+        cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
     selection_requested = _selection_request(resource_selection, resource_selection_sha256, hostnames)
     store = StudyStore(root)
     from .resource_study_epochs import check_enrollment_selection
@@ -212,6 +217,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         backend = PreparationRuntime(root, runtime)
     candidates = candidate_pool(root)
     completed = {r["hostname"] for r in store.enrolled()}
+    if cap is not None and completed.intersection(hostnames):
+        raise ValueError("capped BuFLO selection requires a fresh enrollment; existing inputs cannot change")
     results = []
     for hostname in hostnames:
         if hostname in completed:
@@ -231,7 +238,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         attempt = root / "enrollment-attempts" / hostname / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         try:
             require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
-            enrollment = backend.prepare(candidate, attempt)
+            enrollment = (backend.prepare(candidate, attempt, buflo_chaff_cap_bytes=cap)
+                          if cap is not None else backend.prepare(candidate, attempt))
             selected = enrollment.get("urls", [])
             if (enrollment.get("hostname") != hostname or len(selected) != 20
                     or len(set(selected)) != 20 or any(url not in candidate["urls"] for url in selected)
@@ -296,6 +304,15 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
     for key, path in optional.items():
         if (destination / path).is_file():
             paths[key] = relative(destination / path)
+    capped_binding = None
+    if attempt["mode"] == "buflo" and "buflo_chaff_selection" in enrollment:
+        from .resource_study_native import validate_buflo_capped_enrollment
+        capped_binding = validate_buflo_capped_enrollment(root, enrollment)
+        if capped_binding is None:
+            raise ValueError("capped BuFLO receipt requires actual sustained qualification")
+        paths.update(buflo_chaff_sidecar=enrollment["paths"]["buflo_chaff_sidecar"],
+                     buflo_chaff_manifest=enrollment["paths"]["buflo_chaff_manifest"],
+                     buflo_chaff_prepared_workload=enrollment["paths"]["prepared_workload"])
     if "resource_selection" in enrollment:
         from .resource_study_selection import selection_artifact_paths, validate_selection_proof
         validate_selection_proof(root, enrollment)
@@ -332,6 +349,8 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         "mode_settings": enrollment.get("mode_settings", {}).get(attempt["mode"], {}),
         "artifact_paths": paths, "files": files,
         "completed_at": datetime.now(timezone.utc).isoformat()}
+    if capped_binding is not None:
+        receipt["buflo_chaff_selection"] = capped_binding
     plan = StudyStore(root).plan()
     from .resource_study_epochs import stable_lineage_active
     if "class_selection" in plan or stable_lineage_active(StudyStore(root)):
@@ -785,6 +804,8 @@ def parser():
             child.add_argument("--resource-selection", type=Path,
                                help="immutable exact twenty-URL selection from the authenticated class pool")
             child.add_argument("--resource-selection-sha256", help="SHA-256 of the exact selection manifest bytes")
+            child.add_argument("--buflo-chaff-cap-bytes", type=int,
+                               help="prospective BuFLO-only prepared and sustained identity-body cap (1200..1048576); other mode inputs remain unchanged")
             child.add_argument("--epoch-of", type=Path)
             child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host", "network", "replace-unused-class"))
             child.add_argument("--affected-hostname", action="append", default=[])
@@ -828,6 +849,11 @@ def main(argv=None):
             from .resource_study_cohorts import create_first_modes
             output = create_first_modes(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
+            if args.buflo_chaff_cap_bytes is not None:
+                from .resource_study_native import _buflo_chaff_cap
+                _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
+                if not args.enroll or args.runtime is None or not args.hostname:
+                    raise ValueError("capped BuFLO selection requires live --enroll, --runtime and --hostname")
             stable_initialized = False
             if args.stable_map_parent is not None:
                 if (len(args.inventory) != 1 or args.class_network_pool is not None
@@ -874,8 +900,10 @@ def main(argv=None):
                 runtime = runtime_identity(args.runtime.absolute())
                 output = (enroll(root, runtime, args.hostname,
                     resource_selection=args.resource_selection,
-                    resource_selection_sha256=args.resource_selection_sha256)
-                    if selection_requested else enroll(root, runtime, args.hostname))
+                    resource_selection_sha256=args.resource_selection_sha256,
+                    **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}))
+                    if selection_requested else enroll(root, runtime, args.hostname,
+                    **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {})))
             else:
                 output = StudyStore(root).status()
             if args.epoch_of is not None:

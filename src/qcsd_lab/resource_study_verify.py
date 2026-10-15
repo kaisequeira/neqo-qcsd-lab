@@ -465,6 +465,21 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             or type(run.get("seed")) is not int
             or "attempt_id" in receipt and run["seed"] != int(receipt["attempt_id"].replace("-", "")[:16], 16)):
         raise ValueError("Native run source or attempt seed differs from its receipt")
+    if mode == "buflo" and "buflo_chaff_selection" in enrollment:
+        from .resource_study_native import validate_buflo_capped_enrollment
+        capped = validate_buflo_capped_enrollment(root, enrollment)
+        expected_paths = {"buflo_chaff_sidecar": enrollment["paths"]["buflo_chaff_sidecar"],
+            "buflo_chaff_manifest": enrollment["paths"]["buflo_chaff_manifest"],
+            "buflo_chaff_prepared_workload": enrollment["paths"]["prepared_workload"]}
+        if (capped is None or canonical_json(receipt.get("buflo_chaff_selection")) != canonical_json(capped)
+                or any(paths.get(key) != value for key, value in expected_paths.items())
+                or run.get("chaff_manifest_hash_sha256") != capped["native_manifest_sha256"]
+                or run.get("application_workload_source_hash_sha256") != capped["application_workload_sha256"]):
+            raise ValueError("capped BuFLO sidecar, Native manifest or actual run binding differs")
+        from .capture_session import _validate_chaff_response_receipts
+        _validate_chaff_response_receipts(run, artifact["buflo_chaff_manifest"], "buflo")
+    elif "buflo_chaff_selection" in receipt:
+        raise ValueError("uncapped or non-BuFLO receipt cannot claim capped selection")
     if mode != "undefended":
         if "schedule" not in artifact:
             raise ValueError("defended session lacks the realized schedule")

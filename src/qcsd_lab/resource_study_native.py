@@ -35,6 +35,199 @@ _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 REQUEST_HEADERS = [["accept", "*/*"], ["accept-encoding", "identity"],
                    ["accept-language", "en-US,en;q=0.9"]]
+BUFLO_CAPPED_SELECTION_POLICY = "resource-domain-buflo-prepared-and-identity-body-cap-descending-prefix-v1"
+BUFLO_CAPPED_SELECTION_TYPE = "qcsd-resource-domain-buflo-capped-chaff-selection-v1"
+BUFLO_CAPPED_SIDECAR_TYPE = "qcsd-resource-domain-buflo-capped-identity-chaff-qualification-v1"
+
+
+def _buflo_chaff_cap(value: Any) -> int | None:
+    if value is not None and (type(value) is not int or not 1200 <= value <= 1_048_576):
+        raise ValueError("BuFLO chaff cap must be an integer from1200 through1048576 bytes")
+    return value
+
+
+def _buflo_capped_candidates(prepared: Mapping[str, Any], cap: int) -> list[tuple[dict, dict]]:
+    """Filter the original twenty; never change application resources or order."""
+    if _buflo_chaff_cap(cap) is None:
+        raise ValueError("capped selection requires an explicit cap")
+    resources = prepared["resources"]
+    responses = prepared["preparation"]["expected_responses"]
+    if (type(resources) is not list or type(responses) is not list
+            or len(resources) != 20 or len(responses) != 20
+            or [row.get("id") for row in resources] != list(range(20))
+            or any(type(row.get("id")) is not int for row in resources)
+            or any(type(row.get("resource_id")) is not int for row in responses)
+            or {row["resource_id"] for row in responses} != set(range(20))):
+        raise ValueError("capped qualification requires all twenty original prepared identities")
+    expected = {row["resource_id"]: row for row in responses}
+    hosts = {urlsplit(row["url"]).hostname for row in resources}
+    if len(hosts) != 1 or None in hosts:
+        raise ValueError("capped qualification must stay on the original resource hostname")
+    if (prepared["preparation"].get("qualified_chaff_origin_policy") != "prepared-approved-origins-v1"
+            or prepared["preparation"].get("approved_origins") != ["https://" + next(iter(hosts))]):
+        raise ValueError("capped qualification changed the original approved origin")
+    candidates = []
+    for resource in resources:
+        row = expected[resource["id"]]
+        if (resource.get("known_valid") is not True or resource.get("depends_on") != []
+                or resource.get("headers") != REQUEST_HEADERS
+                or urlsplit(resource["url"]).scheme != "https"
+                or type(row.get("status")) is not int or not 200 <= row["status"] < 300
+                or type(row.get("bytes")) is not int or not 0 < row["bytes"] <= MAX_RESPONSE_BYTES
+                or type(row.get("body_sha256")) is not str
+                or _SHA256.fullmatch(row["body_sha256"]) is None):
+            raise ValueError("capped qualification changed an original complete prepared GET")
+        # The unchanged approved-origin Native schema-four contract selects
+        # an auxiliary response; resource0 remains the application anchor.
+        if resource["id"] != 0 and 1200 <= row["bytes"] <= cap:
+            candidates.append((resource, row))
+    return sorted(candidates, key=lambda pair: (-pair[1]["bytes"], pair[0]["id"], pair[0]["url"]))
+
+
+def _validate_buflo_capped_sidecar(prepared: Mapping[str, Any], prepared_sha256: str,
+                                  sidecar: Mapping[str, Any], manifest: Mapping[str, Any],
+                                  runtime: Mapping[str, Any], cap: int) -> None:
+    """Independently replay the scoped policy and all sustained receipt guards."""
+    from . import chaff_qualification as chaff
+    fields = {"schema_version", "record_type", "selection_policy", "cap_bytes",
+        "application_workload_sha256", "application_resource_id", "selected_chaff_resource_id",
+        "qualified_parallel_chaff_streams", "qualification_policy", "runtime", "neqo_provenance",
+        "candidate_attempts", "selection_outcomes", "resource", "native_manifest_sha256", "scientific_credit"}
+    candidates = _buflo_capped_candidates(prepared, cap)
+    if (type(sidecar) is not dict or set(sidecar) != fields
+            or type(sidecar["schema_version"]) is not int or sidecar["schema_version"] != 1
+            or sidecar["record_type"] != BUFLO_CAPPED_SIDECAR_TYPE
+            or sidecar["selection_policy"] != BUFLO_CAPPED_SELECTION_POLICY
+            or type(sidecar["cap_bytes"]) is not int or sidecar["cap_bytes"] != cap
+            or sidecar["application_workload_sha256"] != prepared_sha256
+            or type(sidecar["application_resource_id"]) is not int or sidecar["application_resource_id"] != 0
+            or type(sidecar["selected_chaff_resource_id"]) is not int
+            or type(sidecar["qualified_parallel_chaff_streams"]) is not int
+            or sidecar["qualified_parallel_chaff_streams"] != 5
+            or sidecar["qualification_policy"] != chaff.response_only_v2_qualification_policy()
+            or canonical_json(sidecar["runtime"]) != canonical_json(dict(runtime))
+            or sidecar["scientific_credit"] is not False
+            or type(sidecar["neqo_provenance"]) is not dict
+            or sidecar["neqo_provenance"].get("migration_commit") != runtime["native_commit"]):
+        raise ValueError("capped BuFLO sidecar policy, runtime or workload binding differs")
+    chaff._validate_response_only_v2_policy(sidecar["qualification_policy"])
+    attempts, outcomes = sidecar["candidate_attempts"], sidecar["selection_outcomes"]
+    if (type(attempts) is not list or not 1 <= len(attempts) <= len(candidates)
+            or type(outcomes) is not list or len(outcomes) != len(attempts)):
+        raise ValueError("capped BuFLO attempts must be the exact nonempty eligible prefix")
+    for index, (attempt, outcome) in enumerate(zip(attempts, outcomes)):
+        resource, response = candidates[index]
+        checked = chaff._validate_response_only_candidate_attempt(attempt,
+            candidate_index=index, base_resource=resource, prepared_response=response,
+            application_manifest_sha256=prepared_sha256, application_resource_id=0,
+            neqo_provenance=sidecar["neqo_provenance"])
+        epochs = [(row["process_exit_code"], row["receipt"]) for row in checked["connection_epochs"]]
+        _, identity, _ = chaff._candidate_attempt_record_v2(candidate_index=index,
+            base_resource=resource, prepared_response=response, epochs=epochs,
+            application_manifest_sha256=prepared_sha256, application_resource_id=0,
+            neqo_provenance=sidecar["neqo_provenance"])
+        actual = "rejected" if identity is None else "over-cap" if identity["body_bytes"] > cap else "selected"
+        if outcome != actual or (actual == "selected") != (index == len(attempts) - 1):
+            raise ValueError("capped BuFLO selected candidate or earlier outcome differs")
+    selected = candidates[len(attempts) - 1][0]
+    if sidecar["selected_chaff_resource_id"] != selected["id"]:
+        raise ValueError("capped BuFLO selected resource is outside its exact candidate prefix")
+    resource = chaff._validate_response_only_v2_resource_receipt(sidecar["resource"], selected,
+        selected_attempt=attempts[-1])
+    if resource["expected_response"]["body_bytes"] > cap:
+        raise ValueError("qualified BuFLO identity response exceeds its explicit cap")
+    derived = chaff.derive_response_only_chaff_manifest_v2({"base_manifest": {"sha256": prepared_sha256},
+        "application_resource_id": 0, "selected_chaff_resource_id": selected["id"], "resource": resource}, selected)
+    digest = hashlib.sha256(canonical_json(derived)).hexdigest()
+    if canonical_json(manifest) != canonical_json(derived) or sidecar["native_manifest_sha256"] != digest:
+        raise ValueError("capped BuFLO sidecar does not derive the exact Native schema-four manifest")
+
+
+def validate_buflo_capped_enrollment(root: Path, enrollment: Mapping[str, Any]) -> dict | None:
+    """Validate only the explicit new branch; all launch files retain their hashes."""
+    if "buflo_chaff_selection" not in enrollment:
+        return None
+    selection = enrollment["buflo_chaff_selection"]
+    if (type(selection) is not dict or set(selection) != {"schema_version", "record_type", "selection_policy", "cap_bytes"}
+            or type(selection["schema_version"]) is not int or selection["schema_version"] != 1
+            or selection["record_type"] != BUFLO_CAPPED_SELECTION_TYPE
+            or selection["selection_policy"] != BUFLO_CAPPED_SELECTION_POLICY
+            or _buflo_chaff_cap(selection["cap_bytes"]) is None):
+        raise ValueError("capped BuFLO enrollment selection declaration differs")
+    keys = ("buflo_chaff_sidecar", "buflo_chaff_manifest")
+    if enrollment["mode_readiness"].get("buflo") is not True:
+        if (enrollment["mode_readiness"].get("buflo") is not False
+                or type(enrollment.get("buflo_chaff_qualification_error")) is not str
+                or not enrollment["buflo_chaff_qualification_error"]
+                or any(enrollment["paths"].get(key) is not None for key in keys)):
+            raise ValueError("unqualified capped BuFLO enrollment has launch inputs")
+        return None
+    if enrollment.get("buflo_chaff_qualification_error") is not None:
+        raise ValueError("qualified capped BuFLO enrollment retains a qualification error")
+    paths = {}
+    for key in (*keys, "prepared_workload"):
+        relative = enrollment["paths"].get(key)
+        if (type(relative) is not str or Path(relative).is_absolute() or ".." in Path(relative).parts
+                or str(Path(relative)) != relative):
+            raise ValueError("capped BuFLO launch input path is not canonical and relative")
+        path = _regular(root / relative)
+        if sha256_file(path) != enrollment["files"].get(relative):
+            raise ValueError("capped BuFLO launch input changed its enrollment digest")
+        paths[key] = path
+    prepared_sha = sha256_file(paths["prepared_workload"])
+    sidecar = _object(paths["buflo_chaff_sidecar"])
+    manifest = _object(paths["buflo_chaff_manifest"])
+    _validate_buflo_capped_sidecar(_object(paths["prepared_workload"]), prepared_sha,
+        sidecar, manifest, enrollment["runtime"], selection["cap_bytes"])
+    if sidecar["native_manifest_sha256"] != sha256_file(paths["buflo_chaff_manifest"]):
+        raise ValueError("capped BuFLO sidecar differs from the exact Native manifest bytes")
+    return {**selection, "application_workload_sha256": prepared_sha,
+        "selected_chaff_resource_id": sidecar["selected_chaff_resource_id"],
+        "sidecar_sha256": sha256_file(paths["buflo_chaff_sidecar"]),
+        "native_manifest_sha256": sha256_file(paths["buflo_chaff_manifest"])}
+
+
+def _qualify_buflo_capped(prepared: Path, root: Path, client: Path,
+                         runtime: Mapping[str, Any], cap: int) -> dict:
+    """Run genuine three-by-forty identity qualification for a new BF policy."""
+    from . import chaff_qualification as chaff
+    base = _object(prepared); digest = sha256_file(prepared)
+    attempts, outcomes, receipts = [], [], []
+    for index, (candidate, response) in enumerate(_buflo_capped_candidates(base, cap)):
+        directory = _new_directory(root / f"candidate-{index:03d}-resource-{candidate['id']:02d}")
+        epochs = chaff._run_response_qualifications_v2(prepared, directory,
+            selected_chaff_resource_id=candidate["id"], application_manifest_sha256=digest,
+            application_resource_id=0, url=candidate["url"], headers=chaff.project_identity_chaff_headers(candidate),
+            neqo_client=client, neqo_client_sha256=runtime["client_sha256"], timeout_seconds=120,
+            interval_seconds=chaff.RESPONSE_ONLY_EPOCH_SPACING_SECONDS)
+        receipts.extend(receipt for _, receipt in epochs)
+        attempt, identity, request_bytes = chaff._candidate_attempt_record_v2(candidate_index=index,
+            base_resource=candidate, prepared_response=response, epochs=epochs,
+            application_manifest_sha256=digest, application_resource_id=0)
+        attempts.append(attempt)
+        outcome = "rejected" if identity is None else "over-cap" if identity["body_bytes"] > cap else "selected"
+        outcomes.append(outcome)
+        if outcome != "selected":
+            continue
+        resource = {"resource_id": candidate["id"], "url": candidate["url"],
+            "headers": chaff.project_identity_chaff_headers(candidate), "request_stream_bytes": request_bytes,
+            "expected_response": identity, "response_qualification_sha256": attempt["response_qualification_sha256"]}
+        manifest = chaff.derive_response_only_chaff_manifest_v2({"base_manifest": {"sha256": digest},
+            "application_resource_id": 0, "selected_chaff_resource_id": candidate["id"], "resource": resource}, candidate)
+        sidecar = {"schema_version": 1, "record_type": BUFLO_CAPPED_SIDECAR_TYPE,
+            "selection_policy": BUFLO_CAPPED_SELECTION_POLICY, "cap_bytes": cap,
+            "application_workload_sha256": digest, "application_resource_id": 0,
+            "selected_chaff_resource_id": candidate["id"], "qualified_parallel_chaff_streams": 5,
+            "qualification_policy": chaff.response_only_v2_qualification_policy(), "runtime": dict(runtime),
+            "neqo_provenance": chaff._stable_neqo_provenance(receipts), "candidate_attempts": attempts,
+            "selection_outcomes": outcomes, "resource": resource,
+            "native_manifest_sha256": hashlib.sha256(canonical_json(manifest)).hexdigest(), "scientific_credit": False}
+        _validate_buflo_capped_sidecar(base, digest, sidecar, manifest, runtime, cap)
+        return {"sidecar": sidecar, "manifest": manifest, "error": None}
+    error = "no capped BuFLO candidate passed the genuine sustained identity qualification"
+    _write(root / "qualification-failed.json", {"error": error, "candidate_attempts": attempts,
+        "selection_outcomes": outcomes, "scientific_credit": False})
+    return {"sidecar": None, "manifest": None, "error": error}
 
 
 def _regular(path: str | Path) -> Path:
@@ -511,7 +704,7 @@ def _mode_settings(paths: Mapping[str, Path | None]) -> dict[str, dict[str, Any]
 
 def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
                    client: str | Path = DEFAULT_CLIENT,
-                   runtime: Mapping[str, Any]) -> dict[str, Any]:
+                   runtime: Mapping[str, Any], buflo_chaff_cap_bytes: int | None = None) -> dict[str, Any]:
     """Freeze20 real GET URLs, with an ordinary lane independent of chaff failures.
 
     Pools are probed in their given order until20 individually complete URLs
@@ -519,6 +712,7 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     and failed qualifier remains retained. There is no resource substitution
     after enrollment, no fitter, and no HTML or cross-origin claim.
     """
+    cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
     pool = _manifest(hostname, urls, require_twenty=False)
     if len(pool["resources"]) < RESOURCES_PER_SESSION:
         raise ValueError("candidate pool has fewer than20 distinct same-host URLs")
@@ -574,6 +768,11 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
                          _new_directory(root / "qualification"), executable, bound)
     paths["chaff_core"] = _write(root / "chaff-core.json", qualified["core"]) if qualified["core"] else None
     paths["chaff_manifest"] = _write(root / "chaff-manifest.json", qualified["manifest"]) if qualified["manifest"] else None
+    capped = None
+    if cap is not None:
+        capped = _qualify_buflo_capped(prepared, _new_directory(root / "buflo-capped-qualification"), executable, bound, cap)
+        paths["buflo_chaff_sidecar"] = _write(root / "buflo-capped-chaff-qualification.json", capped["sidecar"]) if capped["sidecar"] else None
+        paths["buflo_chaff_manifest"] = _write(root / "buflo-capped-chaff-manifest.json", capped["manifest"]) if capped["manifest"] else None
     # This self inventory deliberately excludes enrollment.json, whose digest
     # is returned separately for the outer coordinator's immutable reference.
     enrollment = {"schema_version": 1, "role": ROLE, "hostname": probe["hostname"],
@@ -583,6 +782,12 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         "mode_settings": _mode_settings(paths),
         "mode_readiness": {mode: mode == "undefended" or qualified["error"] is None for mode in MODES},
         "qualification_error": qualified["error"], "scientific_credit": False}
+    if cap is not None:
+        enrollment["buflo_chaff_selection"] = {"schema_version": 1, "record_type": BUFLO_CAPPED_SELECTION_TYPE,
+            "selection_policy": BUFLO_CAPPED_SELECTION_POLICY, "cap_bytes": cap}
+        enrollment["mode_readiness"]["buflo"] = capped["error"] is None
+        enrollment["buflo_chaff_qualification_error"] = capped["error"]
+        validate_buflo_capped_enrollment(root, enrollment)
     enrollment_path = _write(root / "enrollment.json", enrollment)
     return {**enrollment, "workload_path": str(manifest_path),
         "paths": {**{key: str(value) if value else None for key, value in paths.items()},
@@ -638,6 +843,8 @@ def _enrollment(directory: str | Path, hostname: str, runtime: Mapping[str, Any]
     actual_paths = {key: root / value if value else None for key, value in enrollment["paths"].items()}
     if enrollment.get("mode_settings") != _mode_settings(actual_paths):
         raise ValueError("enrollment mode settings differ from actual fixed input bytes")
+    if "buflo_chaff_selection" in enrollment:
+        validate_buflo_capped_enrollment(root, enrollment)
     return root, enrollment
 
 
@@ -720,7 +927,8 @@ def capture_session(hostname: str, mode: str, enrollment_dir: str | Path,
         raise ValueError("attempt must be a fresh nonsymlink directory disjoint from enrollment")
     manifest = root / enrollment["paths"]["manifest"]
     prepared = root / enrollment["paths"]["prepared_workload"]
-    chaff = root / enrollment["paths"]["chaff_manifest"] if mode != "undefended" else None
+    chaff_key = "buflo_chaff_manifest" if mode == "buflo" and "buflo_chaff_selection" in enrollment else "chaff_manifest"
+    chaff = root / enrollment["paths"][chaff_key] if mode != "undefended" else None
     defense, context = _capture_inputs(mode, root, enrollment)
     result = collector._collect_attempt(attempt, manifest, chaff, hostname, defense, seed, context,
         application_workload_source=prepared if mode != "undefended" else None,
