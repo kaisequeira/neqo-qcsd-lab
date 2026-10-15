@@ -93,7 +93,7 @@ def test_execution_source_change_outside_the_exact_approved_pair_refuses(name):
 def test_legacy_profile_cannot_be_presented_as_the_current_execution():
     with pytest.raises(ValueError, match="execution reader"):
         compatibility.qualify_execution(compatibility.legacy_contract())
-    with pytest.raises(ValueError, match="qualified Source020"):
+    with pytest.raises(ValueError, match="qualified Source023"):
         compatibility.require_supported(compatibility.legacy_contract(), object())
 
 

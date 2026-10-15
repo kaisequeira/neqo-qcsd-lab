@@ -379,6 +379,39 @@ def _records_file(path, *, content=False):
     return stamp(before), digest.hexdigest() if content else None, raw
 
 
+def _records_root(path):
+    """Fence directory identity without treating live child entries as immutable."""
+    path = Path(path)
+    if not path.is_absolute() or ".." in path.parts or path.resolve(strict=True) != path:
+        raise ValueError("records root path is not canonical")
+    nodes = (path, *path.parents)
+    def identities():
+        result = []
+        for node in nodes:
+            info = node.lstat()
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("records root contains a linked or nondirectory component")
+            # Directory contents legitimately change during capture. Their
+            # identity, owner and permissions remain guarded on every use.
+            result.append((str(node), info.st_dev, info.st_ino, info.st_uid,
+                           info.st_gid, info.st_mode))
+        return tuple(result)
+    before = identities()
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(descriptor)
+        observed = (str(path), opened.st_dev, opened.st_ino, opened.st_uid,
+                    opened.st_gid, opened.st_mode)
+        if not stat.S_ISDIR(opened.st_mode) or observed != before[0]:
+            raise ValueError("records root FD/path differs")
+        after = identities()
+    finally:
+        os.close(descriptor)
+    if before != after or path.resolve(strict=True) != path:
+        raise ValueError("records root changed during its identity check")
+    return before
+
+
 class _RecordsRead:
     """Immutable data reuse within exactly one synchronous records() call.
 
@@ -388,6 +421,7 @@ class _RecordsRead:
     def __init__(self):
         self.pid, self.thread, self.active = os.getpid(), threading.get_ident(), True
         self.files, self.plans, self.stores, self.sciences = {}, {}, {}, {}
+        self.roots, self.frozen_values = {}, {}
 
     def check(self):
         if not self.active or self.pid != os.getpid() or self.thread != threading.get_ident():
@@ -431,8 +465,28 @@ class _RecordsRead:
 
     def store(self, root):
         self.check(); key = str(root)
+        observed = _records_root(root)
+        if key in self.roots and self.roots[key] != observed:
+            raise ValueError("records root identity changed within its call")
+        self.roots.setdefault(key, observed)
         if key not in self.stores: self.stores[key] = StudyStore(root)
         return self.stores[key]
+
+    def frozen_value(self, parent, member):
+        self.check()
+        key = (str(parent.root), _epochs()._sha(member))
+        ref = member["frozen_accepted"]
+        if (type(ref) is not dict or set(ref) != {"path", "sha256"}
+                or type(ref["path"]) is not str or not ref["path"].startswith("runtime-cohorts/")):
+            raise ValueError("runtime cohort retained manifest reference differs")
+        path = parent._relative(ref["path"])
+        self.file(path, ref["sha256"])
+        self.store(member["cell"]["root"])
+        if key not in self.frozen_values:
+            value = _uncached_frozen_value(parent, member)
+            self.file(path, ref["sha256"])
+            self.frozen_values[key] = deepcopy(value)
+        return deepcopy(self.frozen_values[key])
 
     def science(self, cell):
         self.check(); key = (cell["root"], _epochs()._sha(cell["definition"]))
@@ -445,6 +499,9 @@ class _RecordsRead:
 
     def finish(self):
         self.check()
+        for root, old in self.roots.items():
+            if _records_root(root) != old:
+                raise ValueError("records root identity changed before call closure")
         for path, old in self.files.items():
             stamp, digest, _ = _records_file(Path(path), content=True)
             if (stamp, digest) != old:
@@ -453,6 +510,7 @@ class _RecordsRead:
     def discard(self):
         self.active = False
         self.files.clear(); self.plans.clear(); self.stores.clear(); self.sciences.clear()
+        self.roots.clear(); self.frozen_values.clear()
 
 
 @contextmanager
@@ -627,6 +685,16 @@ def _check_markers(parent, record):
 
 
 def _frozen_value(parent, member):
+    """Reuse immutable carry metadata only within one records() call."""
+    scope = _PLAN_READ_SCOPE.get()
+    if scope is None:
+        return _uncached_frozen_value(parent, member)
+    if type(scope) is not _RecordsRead:
+        raise ValueError("foreign records frozen-manifest read scope")
+    return scope.frozen_value(parent, member)
+
+
+def _uncached_frozen_value(parent, member):
     """Authenticate immutable carry metadata; do not scan its old ledger here."""
     e = _epochs()
     ref = member["frozen_accepted"]
@@ -642,6 +710,10 @@ def _frozen_value(parent, member):
             or type(value["rows"]) is not list or len(value["rows"]) > 400
             or e._sha(value) != ref["sha256"] or sha256_file(path) != ref["sha256"]):
         raise ValueError("runtime cohort retained manifest immutable authority differs")
+    scope = _PLAN_READ_SCOPE.get()
+    if scope is not None and type(scope) is not _RecordsRead:
+        raise ValueError("foreign records frozen-manifest root scope")
+    store = None if scope is None else scope.store(cell["root"])
     slots, tuples, ids = set(), set(), set()
     for row in value["rows"]:
         if (type(row) is not dict or set(row) != fields
@@ -653,7 +725,7 @@ def _frozen_value(parent, member):
                 or row["slot"] in slots or row["five_tuple"] in tuples or row["attempt_id"] in ids):
             raise ValueError("runtime cohort retained manifest row/slot/tuple identity differs")
         _digest(row["receipt_sha256"]); _digest(row["accepted_row_sha256"])
-        StudyStore(cell["root"])._relative(row["receipt_path"])
+        (StudyStore(cell["root"]) if store is None else store)._relative(row["receipt_path"])
         slots.add(row["slot"]); tuples.add(row["five_tuple"]); ids.add(row["attempt_id"])
     if not _same(value["rows"], sorted(value["rows"], key=lambda row: (row["slot"], row["attempt_id"]))):
         raise ValueError("runtime cohort retained manifest order differs")
