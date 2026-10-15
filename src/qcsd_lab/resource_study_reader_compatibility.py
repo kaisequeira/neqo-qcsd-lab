@@ -1,7 +1,7 @@
-"""Exact Source017/018/019 admission-reader compatibility for Source040 execution.
+"""Exact Source017/018/019 admission-reader compatibility for Source042 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source040 reader. This
+never returned as the source identity of the executing Source042 reader. This
 registry permits the reviewed allocator/control changes and call-local pure
 network validation reuse, with bounded owned kernel-thread teardown after the
 original Python pool join. The new guarded local-only BuFLO terminal protocol
@@ -18,6 +18,10 @@ schema-four manifest; all twenty application resources and other modes remain.
 The preparation adapter retains the original four-field acquisition job and
 passes the cap through a separate prepare-only Native CLI option. Its returned
 typed declaration must match that requested cap.
+The outgoing terminal reader separately binds the semantic provisional TAI
+timestamp and physical packet MONOTONIC timestamp to a complete typed kernel
+proof and the exact initial epoch midpoint. Legacy exact joins, independent
+post-veth evidence and all physical realization windows remain unchanged.
 The original network, primary-resource, cadence and kernel predicates remain.
 Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
@@ -38,8 +42,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = "040"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-040-reader-execution-binding-v1"
+EXECUTION_KIND = "042"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-042-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -243,7 +247,7 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
 # Source022 startup eligibility and the immutable profile-byte cache remain.
 # Actual helper bytes enter execution_files() below.
 # An empty mapping refuses execution; no prospective hash is accepted.
-# Source040002 preserves the acquisition-job schema and binds the explicit cap CLI.
+# Source042 binds both outgoing clock frames to the exact modern kernel proof.
 APPROVED_EXECUTION_FILES = {
     'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
     'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
@@ -251,7 +255,7 @@ APPROVED_EXECUTION_FILES = {
     'resource_study_runtime.py': 'd5c299a273c264c0b8e4c65cc86e43e22707ce23a3399a1f2a26d19623d8c923',
     'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
     'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
-    'buflo_handoff.py': 'd9cd39b85ac8c5a0e52065c162918a5b7f7c67ab66af6596ac45ef4979dfdcb2',
+    'buflo_handoff.py': '1017b799b930578d2c9cffb437c7c844cea17d4625b2f3569ea4a61614eec4c1',
     'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
     'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235',
     'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
@@ -330,7 +334,7 @@ def execution_files():
                                          "resource_study_epochs.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source040 reader compatibility registry is not sealed")
+        raise ValueError("Source042 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -356,21 +360,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source040 profile, never a legacy alias.
+    """Authenticate the exact approved Source042 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source040 execution reader")
+        raise ValueError("unsupported or changed Source042 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source040 execution reader required")
+        raise ValueError("qualified Source042 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -389,7 +393,7 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source040 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source042 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,
@@ -404,6 +408,7 @@ def execution_binding(admission, qualified):
         "buflo_ack_start_retained_evaluation_join_changed": True,
         "buflo_startup_ack_sparse_false_fin_changed": True,
         "buflo_capped_chaff_selection_changed": True,
+        "buflo_outgoing_physical_clock_binding_changed": True,
         "prospective_buflo_terminal_protocol_changed": True,
         "scientific_truth_conditions_changed": True,
         "historical_receipts_requalified_by_compatibility": False,

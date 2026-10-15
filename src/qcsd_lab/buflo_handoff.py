@@ -2077,14 +2077,111 @@ def _validate_cs_buflo_outgoing_packet_evidence(
                 )
 
 
+def _buflo_kernel_outgoing_terminal_bindings(
+    run: Mapping[str, Any] | None,
+    *,
+    defense_start_monotonic_ns: int,
+) -> dict[int, dict[str, int]] | None:
+    """Keep physical MONOTONIC and semantic TAI clocks separately exact."""
+    if run is None:
+        return None
+    if not isinstance(run, Mapping):
+        raise ValueError("study handoff BuFLO kernel run binding is invalid")
+    wakeups = run.get("runner_wakeup_metrics")
+    if wakeups is not None and not isinstance(wakeups, Mapping):
+        raise ValueError("study handoff BuFLO kernel wakeup receipt is invalid")
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    if raw is None:
+        if ("buflo_kernel_preparation_policy" in run
+                or isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22):
+            raise ValueError("study handoff BuFLO claimed kernel clock proof is missing")
+        return None
+    if not isinstance(raw, Mapping) or type(raw.get("schema_version")) is not int:
+        raise ValueError("study handoff BuFLO claimed kernel clock proof is invalid")
+    if raw["schema_version"] != 14:
+        if raw["schema_version"] not in set(range(1, 14)):
+            raise ValueError("study handoff BuFLO kernel clock schema is unsupported")
+        return None
+
+    from .fidelity import _runner_wakeup_metrics_valid
+    from .kernel_tx import (
+        kernel_tx_incoming_window_bound_to_run_valid,
+        kernel_tx_runner_receipt_valid,
+    )
+
+    mapping = raw.get("clock_mapping")
+    if (type(wakeups.get("schema_version")) is not int or wakeups["schema_version"] != 22
+            or not _runner_wakeup_metrics_valid(wakeups)
+            or not isinstance(mapping, Mapping)
+            or type(mapping.get("schema_version")) is not int or mapping["schema_version"] != 6
+            or type(defense_start_monotonic_ns) is not int or defense_start_monotonic_ns < 0
+            or type(run.get("defense_start_monotonic_ns")) is not int
+            or run["defense_start_monotonic_ns"] != defense_start_monotonic_ns
+            or not kernel_tx_runner_receipt_valid(raw)
+            or not kernel_tx_incoming_window_bound_to_run_valid(run)
+            or raw["terminal_outcome"] != "complete"):
+        raise ValueError("study handoff BuFLO kernel clock proof or native run binding is invalid")
+
+    start_monotonic_ns = raw["defense_start_monotonic_ns"]
+    start_tai_ns = raw["defense_start_tai_ns"]
+    start = raw["clock_start"]["monotonic"]
+    start_lower = start["tai_before_ns"] - start["clock_ns"]
+    start_upper = start["tai_after_ns"] - start["clock_ns"]
+    midpoint = start_lower + (start_upper - start_lower) // 2
+    if (type(start_monotonic_ns) is not int or type(start_tai_ns) is not int
+            or start_monotonic_ns != start_tai_ns - midpoint):
+        raise ValueError("study handoff BuFLO kernel epoch midpoint differs")
+
+    bindings: dict[int, dict[str, int]] = {}
+    for job in raw["jobs"]:
+        mains = [item for item in job["items"] if item["role"] == "exact-outgoing"]
+        if len(mains) != 1:
+            raise ValueError("study handoff BuFLO kernel main item inventory is not one-to-one")
+        item = mains[0]
+        slot = item["event_id"]
+        upper = item["provisional_tx_software_tai_upper_ns"]
+        if (type(slot) is not int or slot != job["tick"] * 2 or slot in bindings
+                or item["job_id"] != job["job_id"]
+                or item["send_path"] != "etf" or item["udp_payload_bytes"] != 1200
+                or item["target_tai_ns"] != job["release_tai_ns"]
+                or item["finalization_state"] != "controller-and-trace-finalized"
+                or type(upper) is not int):
+            raise ValueError("study handoff BuFLO kernel main slot identity is invalid")
+        phase = item["post_tx_clock_phase"]["monotonic"]
+        phase_lower = phase["tai_before_ns"] - phase["clock_ns"]
+        physical_monotonic_ns = upper - phase_lower
+        packet_ns = defense_start_monotonic_ns + physical_monotonic_ns - start_monotonic_ns
+        terminal_ns = upper - start_tai_ns
+        target_ns = job["release_tai_ns"] - start_tai_ns
+        if (not 0 <= physical_monotonic_ns <= 2**64 - 1
+                or not 0 <= packet_ns <= 2**64 - 1
+                or not 0 <= terminal_ns <= 2**64 - 1
+                or target_ns != job["tick"] * 64_000_000):
+            raise ValueError("study handoff BuFLO kernel terminal clock arithmetic is invalid")
+        # arm() and physical_instant_from_monotonic() share one Instant anchor.
+        # It cancels here. The provisional TAI upper is the actual conservative
+        # value used during controller finalization, before later refinement.
+        bindings[slot] = {"endpoint": item["endpoint"], "size": item["udp_payload_bytes"],
+                          "target_time_us": target_ns // 1_000,
+                          "terminal_us": terminal_ns // 1_000,
+                          "packet_us": packet_ns // 1_000}
+    if not bindings:
+        raise ValueError("study handoff BuFLO kernel main item inventory is empty")
+    return bindings
+
+
 def _buflo_terminal_times(
     schedule_rows: Sequence[Mapping[str, str]],
     packets_rows: Sequence[Mapping[str, str]],
     *,
     defense_start_monotonic_ns: int,
+    run: Mapping[str, Any] | None = None,
 ) -> dict[str, list[int]]:
     """Bind every BuFLO slot to its exact controller terminal time."""
 
+    kernel_bindings = _buflo_kernel_outgoing_terminal_bindings(
+        run, defense_start_monotonic_ns=defense_start_monotonic_ns,
+    )
     outgoing_schedule = [row for row in schedule_rows if row["direction"] == "outgoing"]
     outgoing_packets = [
         row for row in packets_rows if row["direction"] == "outgoing" and row["scheduled_target"]
@@ -2098,6 +2195,8 @@ def _buflo_terminal_times(
     }
     if len(scheduled_slots) != len(outgoing_schedule) or set(packets_by_slot) != scheduled_slots:
         raise ValueError("study handoff BuFLO outgoing terminal packet inventory is not one-to-one")
+    if kernel_bindings is not None and set(kernel_bindings) != scheduled_slots:
+        raise ValueError("study handoff BuFLO kernel and CSV slot inventories differ")
 
     outgoing: list[int] = []
     for row in outgoing_schedule:
@@ -2168,18 +2267,27 @@ def _buflo_terminal_times(
             raise ValueError(
                 "study handoff BuFLO exact outgoing cell exceeds its half-open realization window"
             )
-        packet_bounds = _defense_elapsed_us_bounds(
-            _csv_unsigned(
-                matches[0]["monotonic_us"],
+        if kernel_bindings is None:
+            packet_bounds = _defense_elapsed_us_bounds(
+                _csv_unsigned(
+                    matches[0]["monotonic_us"],
+                    label="packets.csv BuFLO packet time",
+                ),
+                defense_start_monotonic_ns=defense_start_monotonic_ns,
                 label="packets.csv BuFLO packet time",
-            ),
-            defense_start_monotonic_ns=defense_start_monotonic_ns,
-            label="packets.csv BuFLO packet time",
-        )
-        if not packet_bounds[0] <= terminal_us <= packet_bounds[1]:
-            raise ValueError(
-                "study handoff BuFLO outgoing controller terminal time differs from its packet"
             )
+            if not packet_bounds[0] <= terminal_us <= packet_bounds[1]:
+                raise ValueError(
+                    "study handoff BuFLO outgoing controller terminal time differs from its packet"
+                )
+        else:
+            bound = kernel_bindings[slot]
+            if (_csv_unsigned(row["connection"], label="schedule.csv BuFLO endpoint") != bound["endpoint"]
+                    or size != bound["size"] or target_us != bound["target_time_us"]
+                    or terminal_us != bound["terminal_us"]
+                    or _csv_unsigned(matches[0]["monotonic_us"], label="packets.csv BuFLO packet time")
+                    != bound["packet_us"]):
+                raise ValueError("study handoff BuFLO exact kernel terminal/packet clock binding differs")
         realized_us = target_us + packet_lateness_us
         if realized_us > terminal_us:
             raise ValueError(
@@ -2606,6 +2714,7 @@ def _algorithm_diagnostics(
                 schedule_rows,
                 packets_rows,
                 defense_start_monotonic_ns=defense_start_ns,
+                run=run,
             )
         responses = run.get("chaff_responses")
         if not isinstance(responses, list):

@@ -327,6 +327,23 @@ packet evidence. A changed BuFLO enrollment still requires its own exact-class
 pilot before formal acquisition. Host tests establish behavior only; a public
 runtime build, live pilot and independent verification remain separate evidence.
 
+### Exact BuFLO outgoing clock frames
+
+For the explicit kernel receipt version 14, mapping version 6 and runner wakeup
+version 22, the outgoing controller terminal time uses the provisional kernel
+TX upper TAI bound. The packet timestamp converts that same bound through its
+own recorded post-transmission monotonic observation and the original epoch
+midpoint. The handoff reader verifies both exact producer formulas and joins
+every slot, connection and payload to its raw main item. It does not assume
+that the two clock frames coincide. Claimed modern proof must validate in full;
+older receipts retain the original monotonic timestamp join.
+
+This reader change adds no timing tolerance and changes no Native traffic.
+The outgoing half-open 5 ms window, packet-build ordering, primary 10 ms clock
+limit and independent router capture/kernel transmission checks remain required.
+Focused tests and re-reading retained pilots provide engineering evidence only;
+fresh formal capture still requires its own bound source, runtime and admission.
+
 ### Explicit prospective twenty-resource selection
 
 The default preparation path still probes the authenticated candidate pool in
