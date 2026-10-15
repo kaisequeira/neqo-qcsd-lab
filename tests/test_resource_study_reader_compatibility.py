@@ -1,9 +1,9 @@
-"""Source017/018/019 admission and Source028 execution regression controls.
+"""Source017/018/019 admission and Source029 execution regression controls.
 
 These HOST fixtures qualify source identities and the real metadata dispatch.
 The one raw leaf is explicitly synthetic; no capture, Native qualification,
 historical data replay, admission, ledger credit or durability is claimed.
-ROOT alone executes these tests after the complete Source028 pins are sealed.
+ROOT alone executes these tests after the complete Source029 pins are sealed.
 """
 from copy import deepcopy
 import hashlib
@@ -66,6 +66,7 @@ def test_old_admission_and_actual_execution_remain_distinct_and_unaliased():
     assert binding["execution_reader_is_admission_reader"] is False
     assert binding["coordinator_pool_thread_closure_changed"] is True
     assert binding["records_network_validation_cache_changed"] is True
+    assert binding["coordinator_kernel_thread_teardown_changed"] is True
     assert binding["scientific_truth_conditions_changed"] is False
     assert binding["historical_receipts_requalified_by_compatibility"] is False
     assert binding["authority_issued"] is False and binding["scientific_credit_added"] == 0
@@ -98,12 +99,12 @@ def test_execution_source_change_outside_the_exact_approved_pair_refuses(name):
 def test_legacy_profile_cannot_be_presented_as_the_current_execution():
     with pytest.raises(ValueError, match="execution reader"):
         compatibility.qualify_execution(compatibility.legacy_contract())
-    with pytest.raises(ValueError, match="qualified Source028"):
+    with pytest.raises(ValueError, match="qualified Source029"):
         compatibility.require_supported(compatibility.legacy_contract(), object())
 
 
-@pytest.mark.parametrize("version", ["024", "027"])
-def test_exact_prior_producer_profile_cannot_alias_source028_execution(version):
+@pytest.mark.parametrize("version", ["024", "027", "028"])
+def test_exact_prior_producer_profile_cannot_alias_source029_execution(version):
     # Immutable prior SOURCE metadata, independent of any live receipt.
     # Keeping this dated producer identity never grants a new admission.
     files = dict(compatibility.LEGACY_FILES)
@@ -114,25 +115,33 @@ def test_exact_prior_producer_profile_cannot_alias_source028_execution(version):
         "resource_study_runtime.py": "82f1b92a3ff76a508a0d7e5304622a11391830c20c5e439189eeaf6acc22042d",
         compatibility.HELPER_NAME: "e554ebd4749ad6510d2c55f066a8859a80a1d0e8a18070fe694e6332bf25132c",
     })
-    if version == "027":
+    if version in ("027", "028"):
         files.update({
             "resource_study.py": "3b8d2171b5b7a0d44a927e215fa6f553d6a2a3300c7311ec80ce3e2c8a3ea644",
             "resource_study_runtime.py": "90ea05084b7686e04da9f7a673dfa7d06ebc34c6cd0beee69e46fb8a4f1852e2",
             compatibility.HELPER_NAME: "d2f520fd2e3dbe6f3675f866a08d672541e5b9935de10d75f1c762cfe0f2423e",
+        })
+    if version == "028":
+        files.update({
+            "resource_study_cohorts.py": "07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8",
+            "resource_study_network.py": "d1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20",
+            compatibility.HELPER_NAME: "adba3411f23ce3d44c8714b3b24ba75196259c2edb5c5cfff1b580d0d8e30417",
         })
     dated = profile_from_files(files)
     assert dated["transitive_source_files"] == 170
     graph, contract = {
         "024": ("e6fc499a07e846675a15a7c8f0481a5d203ff446ec2b3ceb7dcb8017578fa2bb", "9487b3b2a8643e8f280185732b57d94f14d856d043aa085008e9405ef37595d3"),
         "027": ("889b366f5f328903bde4f927ebe802a2265ad1684e4c3d21be9d60762c599baa", "d6d658b708c358147939ac6e97d78e61d8123ee0b37bd1d7f001dcd434b706c1"),
+        "028": ("886f314f3c4b67ebd3393fa62ce2ee27bad9a3996a6697bf7f5503c2ad8acf9f", "ac374a71eaa8edc9ce817092fe01085b314bd983d3ed9dfd35d9362a8f47e1b7"),
     }[version]
     assert dated["transitive_source_sha256"] == graph
     assert hashlib.sha256(canonical_json(dated)).hexdigest() == contract
     original = canonical_json(dated)
     current = cohorts.verifier_contract()
     assert dated != current
-    assert {name for name in current["files"] if current["files"][name] != dated["files"][name]} == {"resource_study_network.py"}
-    with pytest.raises(ValueError, match="Source028 execution"):
+    expected_primary_changes = set() if version == "028" else {"resource_study_network.py"}
+    assert {name for name in current["files"] if current["files"][name] != dated["files"][name]} == expected_primary_changes
+    with pytest.raises(ValueError, match="Source029 execution"):
         compatibility.qualify_execution(dated)
     pair = compatibility.qualify_execution(current)
     with pytest.raises(ValueError, match="admission reader"):

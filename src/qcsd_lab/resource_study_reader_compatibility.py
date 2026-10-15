@@ -1,9 +1,10 @@
-"""Exact Source017/018/019 admission-reader compatibility for Source028 execution.
+"""Exact Source017/018/019 admission-reader compatibility for Source029 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source028 reader. This
+never returned as the source identity of the executing Source029 reader. This
 registry permits the reviewed allocator/control changes and call-local pure
-network validation reuse; the original network validator remains whole. All
+network validation reuse, with bounded owned kernel-thread teardown after the
+original Python pool join. The original network validator remains whole. All
 other scientific dependencies retain their exact Source017 bytes. Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
 The caller still executes every original raw predicate and authenticates its
@@ -23,8 +24,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = "028"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-028-reader-execution-binding-v1"
+EXECUTION_KIND = "029"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-029-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -219,6 +220,7 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
     "resource_study_reader_compatibility.py": "e30d340542260c0f372582d95f063b61d984cd4f7bf55e1b68eb3f1e7499714c",
 }
 
+# Source029 waits finitely for the exact joined pool's kernel-thread teardown.
 # Source028 reuses successful pure network validation within one records call.
 # Source027 checks the actual executor's owned threads after joining and keeps
 # surviving foreign threads confined to the same residual auxiliary CPUs.
@@ -231,7 +233,7 @@ APPROVED_EXECUTION_FILES = {
     'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
     'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
     'resource_study.py': '3b8d2171b5b7a0d44a927e215fa6f553d6a2a3300c7311ec80ce3e2c8a3ea644',
-    'resource_study_runtime.py': '90ea05084b7686e04da9f7a673dfa7d06ebc34c6cd0beee69e46fb8a4f1852e2',
+    'resource_study_runtime.py': '27946e752e90231dd6f73f982ef5d3758a9716685fba28c900e56f94f28eb27b',
     'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
 }
 
@@ -303,7 +305,7 @@ def execution_files():
                                          "resource_study.py", "resource_study_runtime.py", "resource_study_network.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source028 reader compatibility registry is not sealed")
+        raise ValueError("Source029 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -329,21 +331,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source028 profile, never a legacy alias.
+    """Authenticate the exact approved Source029 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source028 execution reader")
+        raise ValueError("unsupported or changed Source029 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source028 execution reader required")
+        raise ValueError("qualified Source029 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -362,13 +364,14 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source028 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source029 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,
         "outer_coordinator_auxiliary_affinity_scope_changed": True,
         "coordinator_pool_thread_closure_changed": True,
         "records_network_validation_cache_changed": True,
+        "coordinator_kernel_thread_teardown_changed": True,
         "scientific_truth_conditions_changed": False,
         "historical_receipts_requalified_by_compatibility": False,
         "authority_issued": False, "scientific_credit_added": 0}

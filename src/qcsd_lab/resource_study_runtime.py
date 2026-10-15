@@ -116,6 +116,75 @@ def _coordinator_thread_snapshot():
     return values
 
 
+def _coordinator_await_owned_kernel_exit(owned, auxiliary):
+    """Wait at most five seconds for joined pool tasks' exact Linux births.
+
+    Python's thread sentinel can clear before pthread TLS teardown finishes.
+    Only disappearance of a captured owned task permits a fresh census retry;
+    foreign task changes and every other observation error still refuse.
+    """
+    pid = os.getpid()
+    if (type(owned) is not frozenset
+            or any(type(pair) is not tuple or len(pair) != 2
+                or any(type(value) is not int or value <= 0 for value in pair)
+                or pair[0] == pid for pair in owned)
+            or len({tid for tid, _ in owned}) != len(owned)
+            or type(auxiliary) is not tuple or not auxiliary
+            or any(type(cpu) is not int or cpu < 0 for cpu in auxiliary)
+            or auxiliary != tuple(sorted(set(auxiliary)))):
+        raise ValueError("exact owned kernel births and auxiliary CPUs required")
+    expected = dict(owned)
+    foreign_reuses = set()
+    started = time.monotonic()
+    deadline = started + 5.0
+    polls, retries = 0, 0
+    while True:
+        if sorted(os.sched_getaffinity(0)) != list(auxiliary):
+            raise ValueError("coordinator main affinity changed during owned kernel teardown")
+        tids = _coordinator_tasks()
+        values, missing = [], set()
+        for tid in tids:
+            try:
+                value = _coordinator_thread(tid)
+            except (FileNotFoundError, ProcessLookupError):
+                if tid not in expected or tid in foreign_reuses:
+                    raise
+                missing.add(tid)
+                continue
+            if tid != pid and not set(value["affinity"]) <= set(auxiliary):
+                raise ValueError("coordinator task escaped auxiliary CPUs during kernel teardown")
+            if tid in expected and value["start_ticks"] != expected[tid]:
+                foreign_reuses.add(tid)
+            values.append(value)
+        after = _coordinator_tasks()
+        removed, added = set(tids) - set(after), set(after) - set(tids)
+        observed = {value["tid"]: value for value in values}
+        if (added or not removed <= expected.keys()
+                or any(tid in observed and observed[tid]["start_ticks"] != expected[tid]
+                       for tid in removed)):
+            raise ValueError("coordinator foreign task census changed during kernel teardown")
+        polls += 1
+        now = time.monotonic()
+        if now < started:
+            raise ValueError("coordinator teardown monotonic clock reversed")
+        if missing or tids != after:
+            retries += 1
+            if now >= deadline:
+                raise ValueError("owned kernel teardown census remained unstable for five seconds")
+        else:
+            remaining = [value for value in values
+                         if (value["tid"], value["start_ticks"]) in owned]
+            if not remaining or now >= deadline:
+                return values, {"maximum_wait_seconds": 5.0,
+                    "elapsed_seconds": now - started, "polls": polls,
+                    "owned_task_disappearance_retries": retries,
+                    "owned_thread_identities": [{"tid": tid, "start_ticks": start}
+                                                for tid, start in sorted(owned)],
+                    "remaining_owned_threads": remaining, "timed_out": now > deadline or bool(remaining),
+                    "complete": not remaining and now <= deadline}
+        time.sleep(min(0.01, deadline - now))
+
+
 def public_ipv4(hostname: str) -> dict:
     answers = socket.getaddrinfo(hostname, 443, type=socket.SOCK_DGRAM)
     addresses = list(dict.fromkeys(answer[4][0] for answer in answers))
@@ -270,7 +339,7 @@ class CaptureRuntime:
         baseline_threads = _coordinator_thread_snapshot()
         if [value["tid"] for value in baseline_threads] != [pid]:
             raise ValueError("coordinator baseline thread census differs")
-        fixed = {"record_type": "qcsd-Source027-outer-coordinator-affinity-v2", "schema_version": 2,
+        fixed = {"record_type": "qcsd-Source029-outer-coordinator-affinity-v2", "schema_version": 2,
             "pid": pid, "available_cpus": list(available), "worker_cpu_pairs": [list(p) for p in pairs],
             "auxiliary_cpus": list(auxiliary), "affinity_before": original,
             "existing_thread_ids": [pid], "new_pool_threads_inherit_auxiliary_mask": True,
@@ -326,14 +395,20 @@ class CaptureRuntime:
         finally:
             try:
                 try:
-                    remaining_before = _coordinator_thread_snapshot()
                     threads_after = [] if pool is None else list(pool._threads)
                     joined = (pool is None or (ownership_observed
                         and len(threads_after) == len(owned)
                         and all(any(thread is old for old, _ in owned) for thread in threads_after)
                         and all(not thread.is_alive() for thread in threads_after)))
                     owned_records = [{**value, "alive_after_join": thread.is_alive()} for thread, value in owned]
-                    owned_identities = {(value["tid"], value["start_ticks"]) for _, value in owned}
+                    owned_identities = frozenset((value["tid"], value["start_ticks"]) for _, value in owned)
+                    python_joined = joined
+                    kernel_wait = None
+                    if joined and pool is not None:
+                        remaining_before, kernel_wait = _coordinator_await_owned_kernel_exit(owned_identities, auxiliary)
+                        joined = joined and kernel_wait["complete"]
+                    else:
+                        remaining_before = _coordinator_thread_snapshot()
                     joined = joined and not any((value["tid"], value["start_ticks"]) in owned_identities
                                                  for value in remaining_before)
                 finally:
@@ -359,6 +434,8 @@ class CaptureRuntime:
                     "foreign_threads_confined_to_auxiliary": foreign_confined,
                     "main_thread_identity_and_affinity_valid": main_valid,
                     "restored": restored == original, "body_failed": body_error is not None,
+                    "python_pool_joined_before_kernel_wait": python_joined,
+                    "owned_kernel_thread_teardown": kernel_wait,
                     "pool_joined_before_restoration": joined}
                 for flight in flights:
                     _put(flight / "coordinator-affinity-closed.json", closed)
@@ -520,7 +597,7 @@ class CaptureRuntime:
             _put(self.flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
                 "runtime": self.runtime, "available_cpus": available, "study_sha256": self.study_sha256,
                 "coordinator_auxiliary_cpus": sidecars,
-                "coordinator_affinity_policy": "qcsd-Source027-outer-coordinator-affinity-v2",
+                "coordinator_affinity_policy": "qcsd-Source029-outer-coordinator-affinity-v2",
                 "class_mapping_sha256": mapping_sha256(self.plan), "scientific_credit": False})
             return self
         except BaseException:
@@ -848,7 +925,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                 _put(flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
                     "runtime": self.runtime, "available_cpus": available,
                     "coordinator_auxiliary_cpus": sidecars,
-                    "coordinator_affinity_policy": "qcsd-Source027-outer-coordinator-affinity-v2",
+                    "coordinator_affinity_policy": "qcsd-Source029-outer-coordinator-affinity-v2",
                     "study_sha256": self.contexts[root]["study_sha256"],
                     "class_mapping_sha256": mapping_sha256(self.contexts[root]["plan"]),
                     "shared_flight": self.flight_binding(), "scientific_credit": False})
