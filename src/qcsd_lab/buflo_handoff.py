@@ -55,6 +55,10 @@ from .fidelity import (
     BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
+    BUFLO_LOCAL_ABANDON_POLICY,
+    BUFLO_LOCAL_ABANDON_OBSERVER_EFFECT,
+    BUFLO_LOCAL_ABANDON_EVIDENCE_SEMANTICS,
+    buflo_local_abandonment_evidence,
     CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS,
     CS_BUFLO_EARLY_TERMINATION_SEMANTICS,
     CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION,
@@ -2463,8 +2467,9 @@ def _algorithm_diagnostics(
     if runtime_kind == "buflo":
         summary = run.get("buflo_summary")
         summary_schema = summary.get("schema_version") if isinstance(summary, Mapping) else None
-        parser_current = summary_schema in {3, 4}
-        stop_drain_current = summary_schema == 4
+        local_abandon = summary_schema == 5
+        parser_current = summary_schema in {3, 4, 5}
+        stop_drain_current = summary_schema in {4, 5}
         required = {
             "buflo_terminal_subcell_pending_request_cancellations",
             "buflo_terminal_subcell_stream_cancellations",
@@ -2477,7 +2482,7 @@ def _algorithm_diagnostics(
         )
         if (
             not isinstance(summary, Mapping)
-            or summary_schema not in {2, 3, 4}
+            or summary_schema not in {2, 3, 4, 5}
             or (require_current and not stop_drain_current)
             or not required_diagnostics <= set(diagnostics)
             or not new_defense_terminal_receipts_valid(
@@ -2485,6 +2490,7 @@ def _algorithm_diagnostics(
                 "buflo",
                 require_application_complete=True,
                 require_current_schema=require_current,
+                terminal_trace_paths={"events": events_path, "packets": packets_path},
             )
         ):
             raise ValueError("study handoff BuFLO terminal-tail evidence is unavailable")
@@ -2647,8 +2653,9 @@ def _algorithm_diagnostics(
             )
             for row in post_cancellation_control_rows
         )
-        policy = BUFLO_TERMINAL_SUBCELL_POLICY
-        observer_effect = BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+        local_events = buflo_local_abandonment_evidence(run, events_rows, packets_rows) if local_abandon else None
+        policy = BUFLO_LOCAL_ABANDON_POLICY if local_abandon else BUFLO_TERMINAL_SUBCELL_POLICY
+        observer_effect = BUFLO_LOCAL_ABANDON_OBSERVER_EFFECT if local_abandon else BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
         if (
             summary.get("terminal_subcell_policy") != policy
             or summary.get("terminal_subcell_observer_effect") != observer_effect
@@ -2675,7 +2682,7 @@ def _algorithm_diagnostics(
                     or last_scheduled_terminal_us is None
                     or first_cancellation_us < last_scheduled_terminal_us
                     or first_cancellation_upper_us < terminal_latched_at_us
-                    or not post_cancellation_control_rows
+                    or (not local_abandon and not post_cancellation_control_rows)
                 )
             )
             or (
@@ -2703,7 +2710,8 @@ def _algorithm_diagnostics(
                 max(exact_outgoing_times) if exact_outgoing_times else None
             ),
             "last_scheduled_terminal_monotonic_us": last_scheduled_terminal_us,
-            "control_evidence_semantics": BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+            "control_evidence_semantics": (BUFLO_LOCAL_ABANDON_EVIDENCE_SEMANTICS if local_abandon
+                else BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS),
             "post_cancellation_unscheduled_defense_control_packets": len(
                 post_cancellation_control_rows
             ),
@@ -2743,6 +2751,14 @@ def _algorithm_diagnostics(
                     "directions": stop_drain_ledger,
                 },
             }
+        if local_abandon:
+            assert local_events is not None and type(defense_start_ns) is int
+            buflo_state = {**buflo_state, "schema_version": 4,
+                "local_abandonments": summary["terminal_local_abandonments"],
+                "local_abandonment_events": [{"proof": event["proof"], "monotonic_us":
+                    _defense_elapsed_us_bounds(event["monotonic_us"],
+                        defense_start_monotonic_ns=defense_start_ns,
+                        label="events.csv local-abandonment time")[0]} for event in local_events]}
         if not buflo_terminal_state_valid(buflo_state):
             raise ValueError("study handoff BuFLO terminal-tail state is invalid")
     cs_state: dict[str, Any] | None = None
@@ -3045,6 +3061,8 @@ def _algorithm_diagnostics(
             raise ValueError("study handoff CS-BuFLO translation/termination state is invalid")
     return {
         "schema_version": (
+            5 if runtime_kind == "buflo" and isinstance(buflo_state, Mapping)
+                and buflo_state.get("schema_version") == 4 else
             4
             if (
                 runtime_kind == "cs_buflo"

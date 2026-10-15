@@ -106,6 +106,23 @@ BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS = (
     "post-cancellation unscheduled packet composition proves defense-control "
     "bytes but does not expose individual QUIC frame identity"
 )
+BUFLO_LOCAL_ABANDON_POLICY = (
+    "drain_whole_cells_then_guarded_local_abandon_unallocatable_reviewed_chaff_tail_v1"
+)
+BUFLO_LOCAL_ABANDON_OBSERVER_EFFECT = (
+    "local_http3_abandonment_without_stop_sending_reset_stream_receive_credit_or_qpack_cancellation"
+)
+BUFLO_LOCAL_ABANDON_EVIDENCE_SEMANTICS = (
+    "source-bound local abandonment proofs joined to actual cancellation events and "
+    "post-cancellation packet composition; no new STREAM or defense-control bytes"
+)
+BUFLO_LOCAL_ABANDON_PROOF_KEYS = frozenset({
+    "endpoint", "stream", "resource_id", "request_id", "encoded_receive_limit",
+    "manual_receive_limit", "consumed", "retired", "buffered_bytes",
+    "pending_receive_actions", "http3_response_headers_decoded", "http3_receive_state",
+    "qpack_blocked", "qpack_decoder_pending", "request_send_peer_confirmed",
+    "stop_sending_queued", "reset_stream_queued", "receive_credit_increase", "unshaped_data_bytes",
+})
 BUFLO_SCHEDULE_STOP_POLICY = (
     "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
     "then_drain_already_advertised_incoming_credit"
@@ -326,7 +343,7 @@ def _buflo_schedule_stop_state_valid(value: Any, *, terminal_latched_at_us: int)
     )
 
 
-def buflo_terminal_state_valid(value: Any) -> bool:
+def _legacy_buflo_terminal_state_valid(value: Any) -> bool:
     """Validate implicit-v1 or explicit schema-2/3 BuFLO tail evidence."""
 
     if not isinstance(value, Mapping):
@@ -429,6 +446,176 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         <= first_control
         <= last_control
     )
+
+
+def buflo_local_abandonment_proofs_valid(proofs: Any) -> bool:
+    """Validate only the new source-bound local-abandonment DTO, never a FIN."""
+    if type(proofs) is not list:
+        return False
+    identities, requests = set(), set()
+    integers = {"endpoint", "stream", "resource_id", "request_id", "encoded_receive_limit",
+        "manual_receive_limit", "consumed", "retired", "buffered_bytes", "pending_receive_actions",
+        "receive_credit_increase", "unshaped_data_bytes"}
+    for proof in proofs:
+        if (type(proof) is not dict or set(proof) != BUFLO_LOCAL_ABANDON_PROOF_KEYS
+                or any(type(proof[key]) is not int or proof[key] < 0 for key in integers)
+                or not 0 <= proof["resource_id"] < 20
+                or not 0 < proof["encoded_receive_limit"] == proof["manual_receive_limit"]
+                    == proof["consumed"] == proof["retired"]
+                or any(proof[key] != 0 for key in ("buffered_bytes", "pending_receive_actions",
+                    "receive_credit_increase", "unshaped_data_bytes"))
+                or any(proof[key] is not True for key in ("http3_response_headers_decoded",
+                    "request_send_peer_confirmed"))
+                or any(proof[key] is not False for key in ("qpack_blocked", "qpack_decoder_pending",
+                    "stop_sending_queued", "reset_stream_queued"))
+                or type(proof["http3_receive_state"]) is not str or proof["http3_receive_state"] not in {
+                    "reading-data", "waiting-for-data-at-frame-boundary"}):
+            return False
+        identity = (proof["endpoint"], proof["stream"])
+        request = (proof["resource_id"], proof["request_id"])
+        if identity in identities or request in requests:
+            return False
+        identities.add(identity); requests.add(request)
+    return True
+
+
+def buflo_local_abandonment_evidence(run, events_rows, packets_rows):
+    """Join new proofs to original action/response identities and actual CSV rows."""
+    summary = run.get("buflo_summary") if isinstance(run, Mapping) else None
+    if (not isinstance(summary, Mapping) or type(summary.get("schema_version")) is not int
+            or summary["schema_version"] != 5
+            or summary.get("terminal_subcell_policy") != BUFLO_LOCAL_ABANDON_POLICY
+            or summary.get("terminal_subcell_observer_effect") != BUFLO_LOCAL_ABANDON_OBSERVER_EFFECT):
+        raise ValueError("BuFLO local-abandonment summary identity differs")
+    proofs = summary.get("terminal_local_abandonments")
+    if not buflo_local_abandonment_proofs_valid(proofs):
+        raise ValueError("BuFLO local-abandonment proofs differ")
+    diagnostics = run.get("defense_diagnostics", {})
+    streams = diagnostics.get("buflo_terminal_subcell_stream_cancellations")
+    if type(streams) is not int or streams != len(proofs):
+        raise ValueError("BuFLO local-abandonment proof count differs")
+    expected = {(proof["endpoint"], proof["stream"]): proof for proof in proofs}
+    actions, observed = {}, {}
+    for row in events_rows:
+        if row["event"] not in {"action", "chaff_local_abandonment"}:
+            continue
+        from .resource_study_inputs import _pairs
+        details = json.loads(row["details"], object_pairs_hook=_pairs)
+        if row["event"] == "action" and not (
+                isinstance(details, Mapping) and details.get("type") == "cancel_chaff"):
+            continue
+        if (type(details) is not dict or row["outcome"] != "applied"
+                or type(details.get("endpoint")) is not int or type(details.get("stream")) is not int):
+            raise ValueError("BuFLO local-abandonment event identity differs")
+        identity = (details["endpoint"], details["stream"])
+        at = int(row["monotonic_us"])
+        if at < 0 or row["monotonic_us"] != str(at) or row["connection"] != str(identity[0]):
+            raise ValueError("BuFLO local-abandonment event clock/endpoint differs")
+        target = observed if row["event"] == "chaff_local_abandonment" else actions
+        if identity not in expected or identity in target:
+            raise ValueError("BuFLO local-abandonment event repeats or is unbound")
+        if row["event"] == "chaff_local_abandonment":
+            if details != expected[identity] or not buflo_local_abandonment_proofs_valid([details]):
+                raise ValueError("BuFLO local-abandonment event proof differs")
+        elif (set(details) != {"type", "endpoint", "stream", "reason"}
+                or details["reason"] != "buflo_terminal_subcell_tail"):
+            raise ValueError("BuFLO local-abandonment typed action differs")
+        target[identity] = at
+    if set(actions) != set(expected) or set(observed) != set(expected) or actions != observed:
+        raise ValueError("BuFLO local-abandonment action/proof chronology differs")
+    start = run.get("defense_start_monotonic_ns")
+    latch = diagnostics.get("buflo_terminal_subcell_latched_at_us")
+    if (type(start) is not int or start < 0 or type(latch) is not int or latch < 10_000_000
+            or any(at * 1_000 + 999 < start + latch * 1_000 for at in actions.values())):
+        raise ValueError("BuFLO local-abandonment precedes its actual terminal latch")
+    responses = run.get("chaff_responses")
+    if type(responses) is not list:
+        raise ValueError("BuFLO local-abandonment response identities are absent")
+    cancelled = [row for row in responses if isinstance(row, Mapping)
+        and row.get("outcome") == "buflo_terminal_subcell_tail_cancelled"]
+    requests = {(proof["resource_id"], proof["request_id"]) for proof in proofs}
+    if (len(cancelled) != len(proofs)
+            or any(type(row.get("resource_id")) is not int or type(row.get("request_id")) is not int
+                or row.get("complete") is not False for row in cancelled)
+            or {(row["resource_id"], row["request_id"]) for row in cancelled} != requests):
+        raise ValueError("BuFLO local-abandonment cancelled response join differs")
+    first = min(actions.values()) if actions else None
+    for row in packets_rows:
+        if first is None or row["direction"] != "outgoing" or int(row["monotonic_us"]) < first:
+            continue
+        if row["send_policy"] != "unscheduled":
+            raise ValueError("BuFLO local-abandonment retained post-cancellation scheduled output")
+        if (row["qcsd_outcome_schema_version"] != "2"
+                or any(row[key] != "0" for key in ("application_stream_bytes",
+                    "retransmission_stream_bytes", "chaff_stream_bytes", "defense_control_bytes"))):
+            raise ValueError("BuFLO local-abandonment emitted new STREAM or defense control")
+    return [{"proof": expected[key], "monotonic_us": observed[key]} for key in sorted(expected)]
+
+
+def _buflo_local_abandon_state_valid(value):
+    if (type(value) is not dict or set(value) != BUFLO_TERMINAL_STATE_KEYS | {
+            "local_abandonments", "local_abandonment_events"}
+            or type(value.get("schema_version")) is not int or value["schema_version"] != 4
+            or value["terminal_subcell_policy"] != BUFLO_LOCAL_ABANDON_POLICY
+            or value["terminal_subcell_observer_effect"] != BUFLO_LOCAL_ABANDON_OBSERVER_EFFECT
+            or value["control_evidence_semantics"] != BUFLO_LOCAL_ABANDON_EVIDENCE_SEMANTICS
+            or not buflo_local_abandonment_proofs_valid(value["local_abandonments"])):
+        return False
+    integers = {"pending_request_cancellations", "stream_cancellations", "receipt_cancellations",
+        "exact_capacity_bytes_cancelled", "whole_cell_floor_bytes", "terminal_latched_at_us",
+        "open_streams_at_latch", "parser_lease_bytes_at_latch", "pending_parser_boundaries_at_latch",
+        "pending_application_parser_boundaries_at_latch", "typed_cancellation_action_events",
+        "post_cancellation_unscheduled_defense_control_packets", "post_cancellation_unscheduled_defense_control_bytes",
+        "last_exact_outgoing_cell_monotonic_us", "last_scheduled_terminal_monotonic_us"}
+    if any(type(value[key]) is not int or value[key] < 0 for key in integers):
+        return False
+    streams = value["stream_cancellations"]
+    if (value["pending_request_cancellations"] != 0
+            or streams != value["receipt_cancellations"] or streams != value["typed_cancellation_action_events"]
+            or streams != value["open_streams_at_latch"] or streams != len(value["local_abandonments"])
+            or value["whole_cell_floor_bytes"] != 1_200 or value["terminal_latched"] is not True
+            or value["terminal_latched_at_us"] < 10_000_000
+            or value["parser_lease_bytes_at_latch"] != 0
+            or value["pending_application_parser_boundaries_at_latch"] != 0
+            or value["pending_parser_boundaries_at_latch"] > streams
+            or value["paper_equivalent"] is not False or value["implementation_scope"] != "client_only_quic"
+            or not value["last_exact_outgoing_cell_monotonic_us"] <= value["last_scheduled_terminal_monotonic_us"]
+                <= value["terminal_latched_at_us"]
+            or not _buflo_schedule_stop_state_valid(value["schedule_stop"],
+                terminal_latched_at_us=value["terminal_latched_at_us"])
+            or any(value[key] != 0 for key in ("post_cancellation_unscheduled_defense_control_packets",
+                "post_cancellation_unscheduled_defense_control_bytes"))
+            or value["first_post_cancellation_defense_control_monotonic_us"] is not None
+            or value["last_post_cancellation_defense_control_monotonic_us"] is not None):
+        return False
+    events = value["local_abandonment_events"]
+    if type(events) is not list or len(events) != streams:
+        return False
+    expected = {(p["endpoint"], p["stream"]): p for p in value["local_abandonments"]}
+    seen, times = set(), []
+    for event in events:
+        if type(event) is not dict or set(event) != {"proof", "monotonic_us"}:
+            return False
+        proof, at = event["proof"], event["monotonic_us"]
+        if not buflo_local_abandonment_proofs_valid([proof]) or type(at) is not int:
+            return False
+        key = (proof["endpoint"], proof["stream"])
+        if key in seen or expected.get(key) != proof or at + 1 < max(
+                value["last_scheduled_terminal_monotonic_us"], value["terminal_latched_at_us"]):
+            return False
+        seen.add(key); times.append(at)
+    if not streams:
+        return value["exact_capacity_bytes_cancelled"] == 0 and value["pending_parser_boundaries_at_latch"] == 0 and value["first_cancellation_monotonic_us"] is None
+    return (0 <= value["exact_capacity_bytes_cancelled"] < 1_200
+        and type(value["first_cancellation_monotonic_us"]) is int
+        and value["first_cancellation_monotonic_us"] == min(times))
+
+
+def buflo_terminal_state_valid(value: Any) -> bool:
+    """Keep old state readers whole; schema4 proves guarded zero-wire abandonment."""
+    if isinstance(value, Mapping) and type(value.get("schema_version")) is int and value["schema_version"] == 4:
+        return _buflo_local_abandon_state_valid(value)
+    return _legacy_buflo_terminal_state_valid(value)
 
 
 def _buflo_run_period_us(run: Mapping[str, Any]) -> int:
@@ -4268,6 +4455,57 @@ def _cs_buflo_rate_transition_vector_valid(value: Any) -> bool:
 
 
 def new_defense_terminal_receipts_valid(
+    run: Mapping[str, Any], defense_kind: str, *, require_application_complete: bool = False,
+    require_current_schema: bool = False, runner_directory: Path | None = None,
+    terminal_trace_paths: Mapping[str, Path] | None = None,
+) -> bool:
+    """Dispatch only the declared local-only schema; keep old acceptance intact."""
+    summary = run.get("buflo_summary") if isinstance(run, Mapping) else None
+    if not (defense_kind == "buflo" and isinstance(summary, Mapping)
+            and type(summary.get("schema_version")) is int and summary["schema_version"] == 5):
+        return _legacy_new_defense_terminal_receipts_valid(run, defense_kind,
+            require_application_complete=require_application_complete,
+            require_current_schema=require_current_schema, runner_directory=runner_directory)
+    expected = {"schema_version", "kind", "implementation_scope", "paper_equivalent",
+        "incoming_opportunity_semantics", "unavailable_peer_properties", "diagnostics",
+        "terminal_subcell_policy", "terminal_subcell_observer_effect", "terminal_schedule_stop_policy",
+        "terminal_local_abandonments"}
+    if "incoming_startup" in summary:
+        expected.add("incoming_startup")
+    if set(summary) != expected:
+        return False
+    # This private projection executes the unchanged common schema4 predicates.
+    # It is never published or returned as an old receipt or source identity.
+    projected_summary = dict(summary)
+    projected_summary.pop("terminal_local_abandonments")
+    projected_summary.update(schema_version=4, terminal_subcell_policy=BUFLO_TERMINAL_SUBCELL_POLICY,
+        terminal_subcell_observer_effect=BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT)
+    projected = {**run, "buflo_summary": projected_summary}
+    if not _legacy_new_defense_terminal_receipts_valid(projected, defense_kind,
+            require_application_complete=require_application_complete,
+            require_current_schema=True, runner_directory=runner_directory):
+        return False
+    try:
+        from .buflo_handoff import _read_extended_runner_csv, _EVENT_PREFIX_FIELDS, _PACKET_PREFIX_FIELDS
+        paths = terminal_trace_paths
+        if paths is None:
+            if runner_directory is None:
+                return False
+            paths = {"events": Path(runner_directory) / "events.csv",
+                "packets": Path(runner_directory) / "packets.csv"}
+        if set(paths) != {"events", "packets"}:
+            return False
+        events = _read_extended_runner_csv(Path(paths["events"]), _EVENT_PREFIX_FIELDS,
+            label="local-abandonment events.csv")
+        packets = _read_extended_runner_csv(Path(paths["packets"]), _PACKET_PREFIX_FIELDS,
+            label="local-abandonment packets.csv")
+        buflo_local_abandonment_evidence(run, events, packets)
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        return False
+    return True
+
+
+def _legacy_new_defense_terminal_receipts_valid(
     run: Mapping[str, Any],
     defense_kind: str,
     *,

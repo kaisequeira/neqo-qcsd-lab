@@ -483,6 +483,15 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
                                  or "kernel_tx" not in artifact or "post_veth" not in artifact):
             raise ValueError("BuFLO requires its kernel TX and post-veth measurement")
         if mode == "buflo":
+            if isinstance(run.get("buflo_summary"), dict) and run["buflo_summary"].get("schema_version") == 5:
+                from .fidelity import new_defense_terminal_receipts_valid
+                if "events" not in artifact:
+                    raise ValueError("independent BuFLO local-abandonment event proof is absent")
+                if not new_defense_terminal_receipts_valid(run, "buflo",
+                        require_application_complete=True, require_current_schema=True,
+                        runner_directory=artifact["run"].parent,
+                        terminal_trace_paths={"events": artifact["events"], "packets": artifact["packets"]}):
+                    raise ValueError("independent BuFLO local-abandonment proof verification failed")
             from .kernel_tx import kernel_tx_evidence_success_valid
             evidence = load(artifact["kernel_tx"])
             router_packets = router_udp_packets(artifact["post_veth"])

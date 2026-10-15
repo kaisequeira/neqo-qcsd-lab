@@ -1156,7 +1156,7 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
     if (
         not isinstance(value, dict)
         or type(value.get("schema_version")) is not int
-        or value.get("schema_version") not in {1, 2, 3, 4}
+        or value.get("schema_version") not in {1, 2, 3, 4, 5}
         or set(value) != (legacy_keys if value.get("schema_version") == 1 else current_keys)
         or value.get("mode") != defense
         or value.get("classifier_input") is not False
@@ -1164,14 +1164,16 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         or set(value.get("directions", {})) != {"outgoing", "incoming"}
     ):
         raise ValueError("study handoff algorithm diagnostic schema is invalid")
-    if value["schema_version"] in {2, 3, 4}:
+    if value["schema_version"] in {2, 3, 4, 5}:
         runtime_kind = value.get("runtime_kind")
         buflo_state = value.get("buflo_state")
         cs_state = value.get("cs_buflo_state")
+        if value["schema_version"] == 5 and runtime_kind != "buflo":
+            raise ValueError("algorithm diagnostic schema5 requires local-abandon BuFLO state")
         if value["schema_version"] == 4 and runtime_kind not in {"buflo", "cs_buflo"}:
             raise ValueError("algorithm diagnostic schema 4 requires BuFLO or CS-BuFLO state")
         if runtime_kind == "buflo":
-            expected_state_schema = {1: 1, 2: 1, 3: 2, 4: 3}[value["schema_version"]]
+            expected_state_schema = {1: 1, 2: 1, 3: 2, 4: 3, 5: 4}[value["schema_version"]]
             observed_state_schema = (
                 buflo_state.get("schema_version", 1) if isinstance(buflo_state, Mapping) else None
             )
@@ -1179,7 +1181,7 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
                 observed_state_schema != expected_state_schema
                 or not buflo_terminal_state_valid(buflo_state)
                 or (
-                    value["schema_version"] == 4
+                    value["schema_version"] in {4, 5}
                     and not _current_buflo_schedule_stop_state_valid(
                         buflo_state, value["directions"]
                     )
