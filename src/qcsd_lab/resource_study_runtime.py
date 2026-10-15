@@ -78,6 +78,12 @@ def _encoded(value):
     return base64.b64encode(canonical_json(value).rstrip(b"\n")).decode("ascii")
 
 
+def _coordinator_tasks():
+    """The outer Guest process only; collection containers have separate PIDs."""
+    return sorted(int(path.name) for path in Path("/proc/self/task").iterdir()
+                  if path.name.isascii() and path.name.isdecimal())
+
+
 def public_ipv4(hostname: str) -> dict:
     answers = socket.getaddrinfo(hostname, 443, type=socket.SOCK_DGRAM)
     addresses = list(dict.fromkeys(answer[4][0] for answer in answers))
@@ -202,6 +208,71 @@ class CaptureRuntime:
         self.switch_lock = threading.RLock()
         self.closed = False
 
+    @contextmanager
+    def coordinator_affinity_scope(self):
+        """Keep the outer coordinator and its future pool on residual CPUs.
+
+        Enter only after the full-affinity Docker partition is constructed and
+        before creating pool threads. Existing unknown siblings refuse entry;
+        new pool threads inherit this mask. No client/container mask changes.
+        """
+        pid = os.getpid()
+        available, pairs, auxiliary = self.coordinator_partition
+        protected = [cpu for pair in pairs for cpu in pair]
+        if (threading.current_thread() is not threading.main_thread()
+                or _coordinator_tasks() != [pid]
+                or not available or tuple(sorted(set(available))) != available
+                or any(type(cpu) is not int or cpu < 0 for cpu in available)
+                or len(pairs) != self.count or any(len(pair) != 2 for pair in pairs)
+                or any(type(cpu) is not int for cpu in protected)
+                or len(protected) != len(set(protected))
+                or not set(protected) <= set(available)
+                or not auxiliary or tuple(sorted(set(available) - set(protected))) != auxiliary):
+            raise ValueError("coordinator scope requires one main thread and the actual residual CPU partition")
+        original = sorted(os.sched_getaffinity(0))
+        if original != list(available):
+            raise ValueError("coordinator must enter with the complete measured available CPU set")
+        flights = list(self.flights.values()) if hasattr(self, "flights") else [self.flight]
+        fixed = {"record_type": "qcsd-Source024-outer-coordinator-affinity-v1", "schema_version": 1,
+            "pid": pid, "available_cpus": list(available), "worker_cpu_pairs": [list(p) for p in pairs],
+            "auxiliary_cpus": list(auxiliary), "affinity_before": original,
+            "existing_thread_ids": [pid], "new_pool_threads_inherit_auxiliary_mask": True,
+            "container_and_Native_affinity_changed": False, "scientific_credit": False}
+        body_error = None
+        try:
+            os.sched_setaffinity(0, set(auxiliary))
+            during = sorted(os.sched_getaffinity(0))
+            if during != list(auxiliary) or _coordinator_tasks() != [pid]:
+                raise ValueError("coordinator auxiliary affinity or pre-pool thread identity differs")
+            self.coordinator_affinity = {**fixed, "affinity_during": during}
+            for flight in flights:
+                _put(flight / "coordinator-affinity-started.json", self.coordinator_affinity)
+            yield
+        except BaseException as error:
+            body_error = error
+            raise
+        finally:
+            try:
+                try:
+                    remaining_before = _coordinator_tasks()
+                finally:
+                    os.sched_setaffinity(0, set(original))
+                restored = sorted(os.sched_getaffinity(0))
+                remaining_after = _coordinator_tasks()
+                closed = {**fixed, "affinity_restored": restored,
+                    "remaining_thread_ids_before_restoration": remaining_before,
+                    "remaining_thread_ids_after_restoration": remaining_after,
+                    "restored": restored == original, "body_failed": body_error is not None,
+                    "pool_joined_before_restoration": remaining_before == [pid]}
+                for flight in flights:
+                    _put(flight / "coordinator-affinity-closed.json", closed)
+                if restored != original or remaining_before != [pid] or remaining_after != [pid]:
+                    raise ValueError("coordinator affinity restoration or pool-thread closure differs")
+            except BaseException as failure:
+                if body_error is None:
+                    raise
+                body_error.add_note("Coordinator affinity closure also refused: " + str(failure))
+
     def __enter__(self):
         self.lock = docker_lock()
         self.lock.__enter__()
@@ -231,6 +302,7 @@ class CaptureRuntime:
             positive = [cpu for cpu in available if cpu >= 1]
             pairs = [(positive[2*i], positive[2*i+1]) for i in range(self.count)]
             sidecars = sorted(set(available) - {cpu for pair in pairs for cpu in pair})
+            self.coordinator_partition = (tuple(available), tuple(pairs), tuple(sidecars))
             sidecar_cpuset = ",".join(map(str, sidecars))
             bridge = json.loads(_docker("network", "inspect", "bridge"))[0]
             from .resource_study_store import StudyStore
@@ -351,6 +423,8 @@ class CaptureRuntime:
                 _docker("start", worker["id"])
             _put(self.flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
                 "runtime": self.runtime, "available_cpus": available, "study_sha256": self.study_sha256,
+                "coordinator_auxiliary_cpus": sidecars,
+                "coordinator_affinity_policy": "qcsd-Source024-outer-coordinator-affinity-v1",
                 "class_mapping_sha256": mapping_sha256(self.plan), "scientific_credit": False})
             return self
         except BaseException:
@@ -556,6 +630,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             positive = [cpu for cpu in available if cpu >= 1]
             pairs = [(positive[2*i], positive[2*i+1]) for i in range(self.count)]
             sidecars = sorted(set(available) - {cpu for pair in pairs for cpu in pair})
+            self.coordinator_partition = (tuple(available), tuple(pairs), tuple(sidecars))
             sidecar_cpuset = ",".join(map(str, sidecars))
             bridge = json.loads(_docker("network", "inspect", "bridge"))[0]
             domains = sorted(self.cell_roots)
@@ -676,6 +751,8 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             for root, flight in self.flights.items():
                 _put(flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
                     "runtime": self.runtime, "available_cpus": available,
+                    "coordinator_auxiliary_cpus": sidecars,
+                    "coordinator_affinity_policy": "qcsd-Source024-outer-coordinator-affinity-v1",
                     "study_sha256": self.contexts[root]["study_sha256"],
                     "class_mapping_sha256": mapping_sha256(self.contexts[root]["plan"]),
                     "shared_flight": self.flight_binding(), "scientific_credit": False})

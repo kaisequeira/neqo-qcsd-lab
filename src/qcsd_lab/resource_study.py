@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timezone
@@ -450,6 +451,18 @@ def tamaraw_retry_reason(mode: str, result: dict, error: Exception, *,
     return reason if reason in TAMARAW_RETRY_REASONS else None
 
 
+@contextmanager
+def _capture_executor(backend, workers):
+    """Construct the pool after real runtime auxiliary confinement, join first."""
+    with backend:
+        scope = getattr(backend, "coordinator_affinity_scope", None)
+        # Existing injected test backends have no physical topology. The
+        # public CLI always constructs CaptureRuntime and its strict scope.
+        with (nullcontext() if scope is None else scope()):
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                yield executor
+
+
 def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
             hostnames=None, stop=None, backend=None, chunk_sessions=CHUNK, pilot=False) -> dict:
     from .resource_study_cohorts import source_operation
@@ -661,7 +674,7 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 if release is not None:
                     release(worker)
 
-    with backend, ThreadPoolExecutor(max_workers=workers) as executor:
+    with _capture_executor(backend, workers) as executor:
         futures = {}
         available = list(range(workers))
         while futures or (available and not stop.is_set()):
@@ -1203,7 +1216,7 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                 if release is not None:
                     release(worker)
 
-    with backend, ThreadPoolExecutor(max_workers=workers) as executor:
+    with _capture_executor(backend, workers) as executor:
         futures = {}
         available = list(range(workers))
         while futures or (available and not stop.is_set()):
