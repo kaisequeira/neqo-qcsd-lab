@@ -1645,6 +1645,28 @@ def _direction_algorithm_metrics(
         action_time_us = _csv_unsigned(row["action_time_us"], label="schedule action time")
         if advertised_at_us < action_time_us or delay_us != advertised_at_us - action_time_us:
             raise ValueError("study handoff incoming credit advertisement timing is invalid")
+        if (runtime_kind == "cs_buflo" and consumed == consumption_delay == ""
+                and run is not None and runner_directory is not None):
+            from .capture_acceptance_policy import validate_terminal_primary_partial_evidence
+
+            resolved = run.get("resolved_configuration") if isinstance(run, Mapping) else None
+            defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+            if not isinstance(defense, Mapping) or defense.get("kind") != "cs_buflo":
+                raise ValueError("CS terminal primary partial metrics require actual CS-BuFLO")
+            partial = validate_terminal_primary_partial_evidence(
+                run, runner_directory=runner_directory, schedule_rows=list(rows)
+            )
+            if (partial.get("terminal_primary_partial_cells") != 1
+                    or partial.get("terminal_primary_partial_cell_size") != 600
+                    or partial["terminal_primary_partial_proof"]["slot"] != _csv_unsigned(
+                        row["slot_id"], label="incoming CS terminal primary partial slot"
+                    )):
+                raise ValueError("incoming blank consumption lacks its validated CS primary partial slot")
+            # Preserve its raw missed outcome and advertisement. The exact
+            # positive consumed split is proved, but no full consumption time
+            # or retired-byte realization is invented.
+            credit_delays.append(delay_us)
+            continue
         if (runtime_kind == "buflo" and consumed == consumption_delay == ""
                 and run is not None and runner_directory is not None):
             from .capture_acceptance_policy import validate_terminal_primary_partial_evidence
@@ -1921,6 +1943,8 @@ def _validate_candidate_schedule_diagnostic_counts(
     schedule_rows: Sequence[Mapping[str, str]],
     *,
     runtime_kind: str,
+    run: Mapping[str, Any] | None = None,
+    runner_directory: Path | None = None,
 ) -> None:
     """Bind terminal schedule outcomes and CS composition to flat counters."""
 
@@ -1980,6 +2004,21 @@ def _validate_candidate_schedule_diagnostic_counts(
         for row in incoming
         if row["satisfaction"] == "satisfied"
     )
+    if run is not None:
+        if runner_directory is None:
+            raise ValueError("CS composition requires the exact same-attempt runner directory")
+        from .capture_acceptance_policy import validate_terminal_primary_partial_evidence
+
+        partial = validate_terminal_primary_partial_evidence(
+            run, runner_directory=runner_directory, schedule_rows=list(schedule_rows)
+        )
+        if partial.get("terminal_primary_partial_cells") == 1:
+            if partial.get("terminal_primary_partial_cell_size") != 600:
+                raise ValueError("CS composition requires the original proved600 primary cell")
+            # Native accounts actual consumed bytes, including this one raw
+            # missed/ReceiveCreditRetired cell. Its retired suffix remains
+            # unconsumed; it is never credited as a realized whole cell.
+            incoming_credit_bytes += partial["terminal_primary_partial_consumed_bytes"]
     if (
         diagnostics.get("cs_buflo_desired_udp_bytes") != desired_bytes
         or diagnostics.get("cs_buflo_realized_udp_bytes") != observed_bytes
@@ -2657,6 +2696,14 @@ def _algorithm_diagnostics(
             diagnostics,
             schedule_rows,
             runtime_kind=runtime_kind,
+            run=run,
+            runner_directory=(
+                events_path.parent
+                if events_path == events_path.parent / "events.csv"
+                and schedule_path == events_path.parent / "schedule.csv"
+                and packets_path == events_path.parent / "packets.csv"
+                else None
+            ),
         )
         if require_current_trace:
             if type(defense_start_ns) is not int or defense_start_ns < 0:

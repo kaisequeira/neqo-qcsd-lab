@@ -1,4 +1,10 @@
-"""Progressive controlled resource-domain replay with independently recoverable cells."""
+"""Progressive controlled resource-domain replay with independently recoverable cells.
+
+Source061 coordinator provenance binds the distinct Source061 reader registry.
+Its CS handoff reader includes only the original same-attempt primary FIN proof's
+consumed prefix in aggregate accounting; retired bytes and the raw missed cell
+remain visible. Historical Source060 producer/runtime identities stay dated.
+"""
 from __future__ import annotations
 
 import argparse
