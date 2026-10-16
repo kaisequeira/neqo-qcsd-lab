@@ -14,7 +14,7 @@ from pathlib import Path
 import stat
 
 from .resource_study_inputs import MODES, canonical_json, sha256_file
-from .resource_study_store import StudyStore, DuplicateSession, _create, _load, _tuple, _json, _hostname, _mode, _scientific_runtime
+from .resource_study_store import StudyStore, DuplicateSession, _create, _load, _tuple, _json, _hostname, _mode, _scientific_runtime, _observe_authority
 from .resource_study_verify import verify_receipt, within, load
 from .resource_study_runtime import docker_lock
 from .resource_study_network import (ACCEPTANCE as NETWORK_ACCEPTANCE, mapping_sha256,
@@ -50,7 +50,9 @@ def _read(path):
         raw = handle.read(LIMIT + 1)
     if len(raw) > LIMIT or stat.S_IMODE(path.stat().st_mode) != 0o444:
         raise ValueError("epoch authority exceeds its limit or immutable full mode changed")
-    return _load(raw)
+    value = _load(raw)
+    _observe_authority("file", path, raw)
+    return value
 
 
 def _meta(store, key):
@@ -87,6 +89,7 @@ def _membership(store):
     if bound is None:
         if (store.root / "epoch-membership.json").exists() or (store.root / "epoch-membership.json").is_symlink():
             raise ValueError("unbound epoch membership file")
+        _observe_authority("absence", store.root / "epoch-membership.json")
         return None
     cached = getattr(store, "_epoch_membership_cache", None)
     if cached is not None:
@@ -159,6 +162,7 @@ def _cell(store, host, mode):
     if cached is not None:
         if cached[:2] != (digest, stamp):
             raise ValueError("immutable epoch enrollment changed")
+        _observe_authority("cell", cached[2])
         return cached[2]
     enrollment = _load(store._file(relative, digest)[0])
     if stamp[-1] != 0o444 or enrollment.get("hostname") != host:
@@ -182,6 +186,7 @@ def _cell(store, host, mode):
             "enrollment_sha256": digest, "definition": definition, "definition_sha256": _sha(definition)}
     cache[(host, mode)] = (digest, stamp, value)
     store._epoch_cell_cache = cache
+    _observe_authority("cell", value)
     return value
 
 
@@ -629,11 +634,14 @@ def mutate_attempt(store, identifier, operation):
         return operation()  # Historical behavior; a damaged trigger still denies SQL.
     if getattr(store._stable_write_local, "scope", None) is not None:
         return operation()  # A narrower enclosing reserve/credit scope owns cleanup.
+    from .resource_study_cohorts import require_capture_membership
     parent = _membership(store)
+    require_capture_membership(store, parent)
     if parent is None:
         return operation()
-    with _lock(parent.root):
-        records = _records(parent)
+    from .resource_study_cohorts import capture_records_scope
+    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
+        records = (_records(parent) if captured_records is None else captured_records)
         if not records or "class_transition" not in records[-1]:
             return operation()
         with store._transaction() as connection:
@@ -744,15 +752,18 @@ def reserve(store, hostname, mode, operation, *, purpose="formal"):
     """Store allocation hook: authority is checked before the reservation."""
     if purpose not in {"formal", "pilot"}:
         raise ValueError("unregistered reservation purpose")
+    from .resource_study_cohorts import require_capture_membership
     parent = _membership(store)
+    require_capture_membership(store, parent)
     if parent is None:
         if "class_selection" in store.plan():
             raise ValueError("stable-map child has no committed parent admission")
         if purpose == "formal" and validate_network_plan(store.plan()) is not None:
             _pilot(store, _cell(store, _hostname(hostname), _mode(mode)))
         return operation()
-    with _lock(parent.root):
-        records = _records(parent)
+    from .resource_study_cohorts import capture_records_scope
+    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
+        records = (_records(parent) if captured_records is None else captured_records)
         from .resource_study_cohorts import ADMISSION, reserve as cohort_reserve
         if records and records[-1]["record_type"] == ADMISSION:
             return cohort_reserve(store, parent, records, hostname, mode, operation, purpose=purpose)
@@ -778,7 +789,9 @@ def reserve(store, hostname, mode, operation, *, purpose="formal"):
 
 def credit(store, receipt_path, operation):
     """Store first-credit hook: active scope, pilot and ancestry tuple fence."""
+    from .resource_study_cohorts import require_capture_membership
     parent = _membership(store)
+    require_capture_membership(store, parent)
     if parent is None:
         if "class_selection" in store.plan():
             raise ValueError("stable-map child has no committed parent admission")
@@ -786,10 +799,11 @@ def credit(store, receipt_path, operation):
             receipt = store._receipt(receipt_path)[0]
             _pilot(store, _cell(store, receipt["hostname"], receipt["mode"]))
         return operation()
-    with _lock(parent.root):
+    from .resource_study_cohorts import capture_records_scope
+    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
         from .resource_study_cohorts import has_authority, credit as cohort_credit
         if has_authority(parent):
-            return cohort_credit(store, parent, _records(parent), receipt_path, operation)
+            return cohort_credit(store, parent, (_records(parent) if captured_records is None else captured_records), receipt_path, operation)
         path = Path(receipt_path)
         relative = path.relative_to(store.root).as_posix() if path.is_absolute() else path.as_posix()
         receipt = _load(store._file(relative)[0])
@@ -799,7 +813,7 @@ def credit(store, receipt_path, operation):
             raise ValueError("epoch credit has no reserved attempt")
         if row["state"] == "accepted":
             return operation()  # Existing immutable idempotent audit adds no credit.
-        records = _records(parent)
+        records = (_records(parent) if captured_records is None else captured_records)
         host, mode = _hostname(receipt["hostname"]), _mode(receipt["mode"])
         cell = _active(store, host, mode, records)
         intent = _read(store.root / row["path"] / "epoch-purpose.json")

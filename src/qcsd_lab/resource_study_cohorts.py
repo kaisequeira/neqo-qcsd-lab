@@ -15,12 +15,13 @@ import hashlib
 import json
 import os
 import stat
+import sys
 import threading
 from pathlib import Path
 from types import FunctionType
 
 from .resource_study_inputs import MODES, canonical_json, sha256_file
-from .resource_study_store import StudyStore, _PLAN_READ_SCOPE, _create, _load, _json, _tuple, _hostname, _mode, _digest
+from .resource_study_store import StudyStore, _PLAN_READ_SCOPE, _AUTHORITY_INPUT_COLLECTOR, _observe_authority, _create, _load, _json, _tuple, _hostname, _mode, _digest
 from .resource_study_audit import ReceiptReplay, verification_workers as _verification_workers
 from .resource_study_verify import verify_receipt
 from . import resource_study_reader_compatibility as reader_compatibility
@@ -376,6 +377,8 @@ def _records_file(path, *, content=False):
     raw = b"".join(chunks) if content else None
     if content and len(raw) != before.st_size:
         raise ValueError("records input size changed during hashing")
+    if content:
+        _observe_authority("file", path, raw)
     return stamp(before), digest.hexdigest() if content else None, raw
 
 
@@ -410,6 +413,409 @@ def _records_root(path):
     if before != after or path.resolve(strict=True) != path:
         raise ValueError("records root changed during its identity check")
     return before
+
+
+_CAPTURE_AUTHORITY = ContextVar("resource-study-capture-authority", default=None)
+
+
+class _CaptureAuthority:
+    """Private ancestry; callback authority always rereads full bytes and SQL."""
+    def __init__(self, root, docker_owner):
+        from .resource_study_runtime import _DockerLockOwner
+        if type(docker_owner) is not _DockerLockOwner:
+            raise ValueError("capture authority requires the actual Docker lock owner")
+        docker_owner.check()
+        self.pid, self.owner_thread = os.getpid(), threading.get_ident()
+        self.docker_owner, self.active, self.collecting = docker_owner, True, True
+        self.files, self.roots, self.classes, self.absences = {}, {}, {}, set()
+        roots = root if type(root) in (list, tuple) else (root,)
+        if not roots or len(roots) != len(set(map(str, roots))):
+            raise ValueError("capture authority requires distinct owning roots")
+        self.writers = frozenset(str(Path(path).absolute()) for path in roots)
+        self.records, self.parent, self.meta, self.fences = None, None, {}, {}
+        self.epoch_lock = None
+        self.source_auth = _SOURCE_OPERATION.get()
+        self.owns_source = self.source_auth is None
+        if self.owns_source:
+            self.source_auth = _SourceAuthorization()
+        elif type(self.source_auth) is not _SourceAuthorization:
+            raise ValueError("foreign capture Source authorization")
+        self.implementations = self._implementations()
+        token = _AUTHORITY_INPUT_COLLECTOR.set(self)
+        try:
+            with bind_source(self.source_auth):
+                # Fresh Stores prevent warmed membership/prefix caches from
+                # omitting dependencies during unchanged full validation.
+                parents = [_epochs()._membership(StudyStore(path)) for path in self.writers]
+                if all(parent is None for parent in parents):
+                    return
+                if any(parent is None for parent in parents) or len({str(parent.root) for parent in parents}) != 1:
+                    raise ValueError("capture authority owning roots have different parents")
+                self.parent = StudyStore(parents[0].root)
+                with _epochs()._lock(self.parent.root):
+                    lock_path = self.parent.root / "epoch-admission.lock"
+                    lock_fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    self.epoch_lock = (lock_path, lock_fd, self._db_identity(os.fstat(lock_fd)))
+                    self._check_epoch_lock()
+                    self.records = deepcopy(records(self.parent))
+                    if not self.records or self.records[-1].get("class_transition") is None:
+                        self.records = None
+                        return
+                    for path in tuple(self.roots):
+                        actual = _epochs()._membership(StudyStore(path))
+                        if actual is None or actual.root != self.parent.root:
+                            raise ValueError("capture authority root membership differs")
+                    head = self.records[-1]
+                    current_roots = {cell["root"] for cell in head["cells"]}
+                    if not self.writers <= current_roots:
+                        raise ValueError("capture authority includes a superseded owning root")
+                    self.fences = dict(head["write_fences"])
+                    if set(self.roots) != set(self.fences):
+                        raise ValueError("capture authority root/fence census differs")
+                    self.observe_absence(self.parent.root / "epoch-admissions" / f"{len(self.records):06d}.json")
+                    from .resource_study_lineage import EXCLUDED
+                    for path in self.roots:
+                        for kind in ("classes", "attempts", "corpus", "pilots"):
+                            self.observe_absence(Path(path) / kind / EXCLUDED)
+                        study = self.files[str(Path(path) / "study.json")]
+                        member = self.files[str(Path(path) / "epoch-membership.json")]
+                        plan, membership = _load(study[2]), _load(member[2])
+                        expected = {"study_sha256": study[1],
+                            "epoch_parent": membership["parent"],
+                            "epoch_membership_sha256": member[1]}
+                        if "class_network" in plan:
+                            expected.update(tuple_uniqueness_scope=plan["tuple_uniqueness_scope"],
+                                class_network_sha256=hashlib.sha256(canonical_json(plan["class_network"])).hexdigest())
+                        if path == str(self.parent.root):
+                            expected["epoch_head"] = canonical_json({"sequence": len(self.records)-1,
+                                "sha256": _epochs()._sha(head)}).decode()
+                        self.meta[path] = expected
+                    self._bind_classes()
+                    self.collecting = False
+                    self.check()
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            _AUTHORITY_INPUT_COLLECTOR.reset(token)
+
+    @staticmethod
+    def _implementations():
+        from . import resource_study_network as network
+        from . import resource_study_lineage as lineage
+        from . import resource_study_runtime as runtime
+        return (StudyStore._file, StudyStore._connect, StudyStore._plan_data,
+            _epochs()._read, _epochs()._cell, _epochs()._records, records, _records,
+            _records_file, _records_root, _RecordsRead, _records_read_scope,
+            _RecordsRead.__init__, _RecordsRead.check, _RecordsRead.file,
+            _RecordsRead.plan_data, _RecordsRead.network_plan, _RecordsRead.store,
+            _RecordsRead.frozen_value, _RecordsRead.science, _RecordsRead.finish,
+            _RecordsRead.discard, _check_frozen, _uncached_frozen_value,
+            network._uncached_validate_network_plan, canonical_json, deepcopy,
+            lineage.check_fence_connection, runtime._DockerLockOwner.check)
+
+    def _owner(self):
+        if not self.active or self.pid != os.getpid():
+            raise ValueError("capture authority is closed or foreign")
+        if self._implementations() != self.implementations:
+            raise ValueError("capture authority reader implementation changed")
+        self.docker_owner.check()
+        self.source_auth.check()
+
+    def _collector(self):
+        self._owner()
+        if threading.get_ident() != self.owner_thread:
+            raise ValueError("capture authority collector has a foreign thread")
+
+    def observe_file(self, path, raw):
+        self._collector()
+        # Compare the actual successfully parsed bytes to a canonical FD read;
+        # never adopt an unchecked later file. Disable only recursive collection.
+        token = _AUTHORITY_INPUT_COLLECTOR.set(None)
+        try:
+            observed = _records_file(Path(path), content=True)
+        finally:
+            _AUTHORITY_INPUT_COLLECTOR.reset(token)
+        if type(raw) is not bytes or observed[2] != raw:
+            raise ValueError("capture authority input changed during trusted read")
+        key = str(Path(path)); old = self.files.get(key)
+        if old is not None and old != observed:
+            raise ValueError("capture authority input differs from its trusted bytes")
+        if old is None:
+            if not self.collecting:
+                raise ValueError("capture authority full validator discovered an unbound input")
+            self.files[key] = observed
+
+    @staticmethod
+    def _db_identity(info):
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("capture authority database is not one regular file")
+        return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode, info.st_nlink)
+
+    def observe_store(self, store):
+        self._collector(); path = str(store.root)
+        observed = _records_root(store.root); old = self.roots.get(path)
+        if old is not None:
+            self._check_root(path, old)
+            return
+        if not self.collecting:
+            raise ValueError("capture authority full validator discovered an unbound root")
+        root_fd = os.open(store.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            db_fd = os.open(store.database, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                identity = self._db_identity(os.fstat(db_fd))
+                if identity != self._db_identity(store.database.lstat()):
+                    raise ValueError("capture authority database FD/path differs")
+                info = os.fstat(root_fd)
+                if (path, info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode) != observed[0]:
+                    raise ValueError("capture authority root FD/path differs")
+                self.roots[path] = (observed, root_fd, db_fd, identity)
+            except BaseException:
+                os.close(db_fd)
+                raise
+        except BaseException:
+            os.close(root_fd)
+            raise
+
+    def observe_cell(self, cell):
+        self._collector()
+        key = cell["root"], cell["hostname"]
+        value = cell["enrollment_path"], cell["enrollment_sha256"]
+        old = self.classes.get(key)
+        if old is not None and old != value:
+            raise ValueError("capture authority trusted cell binding differs")
+        if old is None:
+            if not self.collecting:
+                raise ValueError("capture authority full validator discovered an unbound class")
+            self.classes[key] = value
+
+    def observe_absence(self, path):
+        self._collector(); path = Path(path)
+        if path.exists() or path.is_symlink():
+            raise ValueError("capture authority forbidden artifact appeared")
+        if not self.collecting and str(path) not in self.absences:
+            raise ValueError("capture authority full validator discovered an unbound absence")
+        self.absences.add(str(path))
+
+    def _bind_classes(self):
+        """Authenticate the full class census, including unselected history."""
+        self._collector()
+        expected = dict(self.classes)
+        for record in self.records:
+            for cell in record["cells"]:
+                key = cell["root"], cell["hostname"]
+                value = cell["enrollment_path"], cell["enrollment_sha256"]
+                if key in expected and expected[key] != value:
+                    raise ValueError("capture authority historical enrollment binding differs")
+                expected[key] = value
+        census = {}
+        for path, old in self.roots.items():
+            self._check_root(path, old)
+            store = StudyStore(path)
+            with store._transaction() as connection:
+                rows = [tuple(row) for row in connection.execute(
+                    "SELECT hostname,path,sha256 FROM classes ORDER BY hostname")]
+            for host, relative, digest in rows:
+                _hostname(host)
+                key, value = (path, host), (relative, digest)
+                if key in expected and expected[key] != value:
+                    raise ValueError("capture authority current SQL enrollment binding changed")
+                raw, observed = store._file(relative, digest)
+                enrollment = _load(raw)
+                if (observed["mode"] != "0444" or type(enrollment) is not dict
+                        or enrollment.get("hostname") != host):
+                    raise ValueError("capture authority enrollment bytes or hostname changed")
+                census[key] = value
+            with store._transaction() as connection:
+                after = [tuple(row) for row in connection.execute(
+                    "SELECT hostname,path,sha256 FROM classes ORDER BY hostname")]
+            if after != rows:
+                raise ValueError("capture authority class census changed during authentication")
+            self._check_root(path, old)
+        if any(census.get(key) != value for key, value in expected.items()):
+            raise ValueError("capture authority historical enrollment is absent from its SQL root")
+        self.classes = census
+
+    def _check_root(self, path, old):
+        expected, root_fd, db_fd, identity = old
+        if _records_root(Path(path)) != expected:
+            raise ValueError("capture authority root identity changed")
+        info = os.fstat(root_fd)
+        if (path, info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode) != expected[0]:
+            raise ValueError("capture authority pinned root FD changed")
+        if (self._db_identity(os.fstat(db_fd)) != identity
+                or self._db_identity((Path(path) / "ledger.sqlite3").lstat()) != identity):
+            raise ValueError("capture authority database identity changed")
+
+    def _check_epoch_lock(self):
+        path, descriptor, expected = self.epoch_lock
+        if (self._db_identity(os.fstat(descriptor)) != expected
+                or self._db_identity(path.lstat()) != expected):
+            raise ValueError("capture authority parent lock identity changed")
+
+    def check(self):
+        self._owner()
+        self._check_epoch_lock()
+        if self.records is None or self.collecting:
+            raise ValueError("capture authority has no completed full validation")
+        for path, expected in self.files.items():
+            if _records_file(Path(path), content=True) != expected:
+                raise ValueError("capture authority immutable bytes changed")
+        for path in self.absences:
+            if Path(path).exists() or Path(path).is_symlink():
+                raise ValueError("capture authority forbidden artifact appeared")
+        from .resource_study_lineage import EXCLUDED, check_fence_connection
+        for path, old in self.roots.items():
+            self._check_root(path, old)
+            store = StudyStore(path)
+            with store._transaction() as connection:
+                check_fence_connection(store, connection, expected_sha=self.fences[path])
+                actual = dict(connection.execute("SELECT key,value FROM meta"))
+                if any(actual.get(key) != value for key, value in self.meta[path].items()):
+                    raise ValueError("capture authority current SQL meta binding changed")
+                rows = {r["hostname"]: (r["path"], r["sha256"])
+                        for r in connection.execute("SELECT hostname,path,sha256 FROM classes")}
+                expected = {host: value for (root, host), value in self.classes.items() if root == path}
+                if rows != expected:
+                    raise ValueError("capture authority current SQL enrollment binding changed")
+                for table in ("classes", "attempts", "accepted"):
+                    if connection.execute(f"SELECT 1 FROM {table} WHERE hostname=?", (EXCLUDED,)).fetchone():
+                        raise ValueError("capture authority retired hostname acquired SQL history")
+            self._check_root(path, old)
+        self._owner()
+
+    def finish(self):
+        self._collector(); self.check()
+        token = _AUTHORITY_INPUT_COLLECTOR.set(self)
+        try:
+            with bind_source(self.source_auth), _epochs()._lock(self.parent.root):
+                actual = records(StudyStore(self.parent.root))
+                if not _same(actual, self.records):
+                    raise ValueError("capture authority full closure changed immutable ancestry")
+                self.check()
+                if not _same(_load(self.source_auth.profile), _fresh_verifier_contract()):
+                    raise ValueError("capture authority qualifying Source bytes changed")
+        finally:
+            _AUTHORITY_INPUT_COLLECTOR.reset(token)
+
+    def close(self):
+        self.active = False
+        if self.epoch_lock is not None:
+            os.close(self.epoch_lock[1])
+            self.epoch_lock = None
+        for _, root_fd, db_fd, _ in self.roots.values():
+            os.close(db_fd); os.close(root_fd)
+        self.roots.clear(); self.files.clear(); self.classes.clear(); self.absences.clear()
+        self.meta.clear(); self.fences.clear(); self.records = None
+        if self.owns_source:
+            self.source_auth.active = False
+
+
+@contextmanager
+def bind_capture_authority(auth, *, writer_root=None):
+    if auth is None:
+        if _CAPTURE_AUTHORITY.get() is not None:
+            raise ValueError("capture authority binding cannot be dropped")
+        yield
+        return
+    if type(auth) is not _CaptureAuthority:
+        raise ValueError("foreign capture authority handle")
+    auth._owner()
+    if writer_root is None:
+        if threading.get_ident() != auth.owner_thread:
+            raise ValueError("capture worker requires its explicit owning root")
+        writer = None
+    else:
+        writer = str(Path(writer_root).absolute())
+        if writer not in auth.writers:
+            raise ValueError("capture worker has a foreign owning root")
+    old = _CAPTURE_AUTHORITY.get(); binding = (auth, threading.get_ident(), writer)
+    if old is not None and old != binding:
+        raise ValueError("capture authorities cannot nest or widen")
+    token = _CAPTURE_AUTHORITY.set(binding)
+    try:
+        with bind_source(auth.source_auth):
+            yield
+    finally:
+        _CAPTURE_AUTHORITY.reset(token)
+
+
+@contextmanager
+def capture_authority_scope(root, docker_owner):
+    if _CAPTURE_AUTHORITY.get() is not None or _AUTHORITY_INPUT_COLLECTOR.get() is not None:
+        raise ValueError("capture authority scope cannot nest")
+    if sys.platform != "linux":
+        yield None
+        return
+    auth = _CaptureAuthority(root, docker_owner)
+    if auth.records is None:
+        auth.close()
+        yield None
+        return
+    body_error = None
+    try:
+        with bind_capture_authority(auth):
+            try:
+                yield auth
+            except BaseException as error:
+                body_error = error
+                raise
+            finally:
+                try:
+                    auth.finish()
+                except BaseException as failure:
+                    if body_error is None:
+                        raise
+                    body_error.add_note("Capture authority closure also refused: " + str(failure))
+    finally:
+        auth.close()
+
+
+def require_capture_membership(store, parent):
+    """A bound owning root cannot escape through an unbound fallback."""
+    binding = _CAPTURE_AUTHORITY.get()
+    if binding is None:
+        return
+    if (type(binding) is not tuple or len(binding) != 3
+            or type(binding[0]) is not _CaptureAuthority or binding[1] != threading.get_ident()):
+        raise ValueError("capture authority callback is foreign or unbound")
+    auth = binding[0]
+    auth._owner()
+    if str(store.root) in auth.writers and parent is None:
+        raise ValueError("capture authority owning root lost its membership")
+
+
+@contextmanager
+def capture_records_scope(parent, *, writer_root):
+    binding = _CAPTURE_AUTHORITY.get()
+    if binding is None:
+        # Caller retains its original _records position and short circuits.
+        yield None
+        return
+    if (type(binding) is not tuple or len(binding) != 3
+            or type(binding[0]) is not _CaptureAuthority or binding[1] != threading.get_ident()):
+        raise ValueError("capture authority callback is foreign or unbound")
+    auth = binding[0]
+    if parent.root != auth.parent.root:
+        raise ValueError("capture authority callback has a foreign parent")
+    writer = str(Path(writer_root).absolute())
+    if writer not in auth.writers or binding[2] not in (None, writer):
+        raise ValueError("capture authority callback has a foreign owning root")
+    auth.check(); body_error = None
+    try:
+        # The prototype deliberately copies the complete private value.
+        yield deepcopy(auth.records)
+    except BaseException as error:
+        body_error = error
+        raise
+    finally:
+        try:
+            auth.check()
+        except BaseException as failure:
+            if body_error is None:
+                raise
+            body_error.add_note("Capture authority callback closure also refused: " + str(failure))
 
 
 class _RecordsRead:
@@ -1631,12 +2037,13 @@ def counts_snapshot(store, cells):
     keys = [(_hostname(cell[0]), _mode(cell[1])) for cell in cells]
     if len(keys) != len(set(keys)): raise ValueError("scheduling cell scope repeats")
     e = _epochs(); parent = e._membership(store)
+    require_capture_membership(store, parent)
     present = (store.root / MARKER).exists() or (store.root / MARKER).is_symlink()
     if parent is None:
         if present: raise ValueError("runtime cohort marker lacks epoch parent")
         return None
-    with e._lock(parent.root):
-        current = e._records(parent)
+    with e._lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
+        current = e._records(parent) if captured_records is None else captured_records
         if not current or current[-1]["record_type"] != ADMISSION:
             if present: raise ValueError("runtime cohort marker has no committed admission")
             return None

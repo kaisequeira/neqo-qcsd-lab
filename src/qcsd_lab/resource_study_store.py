@@ -34,10 +34,21 @@ RESOURCES = 20
 SESSIONS = 400
 TARGET = CLASSES * len(MODES) * SESSIONS
 _PLAN_READ_SCOPE = ContextVar("resource-study-records-plan-read", default=None)
+_AUTHORITY_INPUT_COLLECTOR = ContextVar("resource-study-capture-authority-inputs", default=None)
 RECORD = "qcsd-resource-domain-session-verification-v1"
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _ACTIVE = ("reserved", "captured", "unverified")
+
+
+def _observe_authority(kind, *values):
+    collector = _AUTHORITY_INPUT_COLLECTOR.get()
+    if collector is None:
+        return
+    from .resource_study_cohorts import _CaptureAuthority
+    if type(collector) is not _CaptureAuthority:
+        raise ValueError("foreign capture authority input collector")
+    getattr(collector, "observe_" + kind)(*values)
 
 
 class DuplicateSession(ValueError):
@@ -190,6 +201,7 @@ class StudyStore:
         observed = {"sha256": _sha(raw), "mode": f"{stat.S_IMODE(info.st_mode):04o}"}
         if digest is not None and observed["sha256"] != _digest(digest):
             raise ValueError("study file SHA256 changed: " + relative)
+        _observe_authority("file", path, raw)
         return raw, observed
 
     def _files(self, refs):
@@ -235,6 +247,7 @@ class StudyStore:
                 raise ValueError("immutable enrollment authority or file metadata changed")
 
     def _connect(self):
+        _observe_authority("store", self)
         _unlinked(self.root, directory=True)
         _unlinked(self.database)
         for suffix in ("-wal", "-shm", "-journal"):

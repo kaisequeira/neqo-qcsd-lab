@@ -1,45 +1,14 @@
-"""Exact Source017/018/019/045 profiles for Source051 execution.
+"""Exact dated Source017/018/019/045/048/051 profiles for Source055 execution.
 
-The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source051 reader. This
-registry permits the reviewed allocator/control changes and call-local pure
-network validation reuse, with bounded owned kernel-thread teardown after the
-original Python pool join. The new guarded local-only BuFLO terminal protocol
-has explicit summary5/state4 readers; all legacy terminal readers remain whole.
-Its explicit event reader also accepts typed physical partial advertisements
-without inventing a whole-slot advertisement timestamp or realization.
-The retained summary5 reader binds ACK-start reopening to those exact traces.
-Its typed stop receipt binds suppressed incoming ticks to the original ACK64 schedule.
-The evaluation reader joins that receipt to both final direction metrics.
-Typed startup ACKs preserve the Native serializer's omitted false FIN default.
-The prospective resource-domain BuFLO branch binds an explicit prepared and
-sustained identity-body cap to a distinct enrollment sidecar and Native
-schema-four manifest; all twenty application resources and other modes remain.
-The preparation adapter retains the original four-field acquisition job and
-passes the cap through a separate prepare-only Native CLI option. Its returned
-typed declaration must match that requested cap.
-The outgoing terminal reader separately binds the semantic provisional TAI
-timestamp and physical packet MONOTONIC timestamp to a complete typed kernel
-proof and the exact initial epoch midpoint. Legacy exact joins, independent
-post-veth evidence and all physical realization windows remain unchanged.
-The analysis metrics reader permits empty full-consumption timestamps only
-for the exact retired primary slot reopened by the unchanged complete
-terminal-primary policy, FIN, owned-range and whole-run ledger validator.
-Its raw missed/ReceiveCreditRetired classification remains visible; no full
-consumption timestamp or whole-cell realization is invented. The live
-Source042 writer and its installed Native/runtime remain separate and unchanged.
-The original network, primary-resource, cadence and kernel predicates remain.
-Source051 tolerates ESRCH alongside ENOENT only when an enumerated proc task
-vanishes during its status/stat read. Enumeration, other scan errors and the
-runtime-evidence validator remain strict. The exact Source045 execution map
-is retained separately; its old monitor and helper are never relabelled.
-Neither
-compatibility nor this module qualifies a receipt or grants ledger authority.
-The caller still executes every original raw predicate and authenticates its
-actual complete execution graph before and after the operation.
-
-Only immutable supported-profile bytes are retained in each qualified reader.
-No head, SQL row, reservation, receipt, raw result or scientific proof is cached.
+Source055 preserves the Source051 scientific readers and ESRCH monitor while
+reusing the exact Source048 capture-flight authority implementation. Historical
+admission and producer identities remain exact dated profiles. The helper
+retains only source-profile bytes; the separate flight scope owns a private
+immutable ancestry copy, rehashes every bound authority file at each callback,
+and freshly checks SQL, roots, locks and source guards before and after use.
+Full original ancestry validation remains at entry/exit and on noncapture calls.
+No accepted-row decision, count, reservation, raw proof or scientific credit is
+cached or issued by compatibility.
 """
 from __future__ import annotations
 
@@ -52,8 +21,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = "051"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-045-051-reader-execution-binding-v1"
+EXECUTION_KIND = "055"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-045-048-051-055-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -266,6 +235,37 @@ PRIOR_ANALYSIS_EXECUTION_FILES = {
     'resource_study_reader_compatibility.py': '33fca2234bac94f484a0a917564f4e2ccbd83d0eb86bc74aa2fca9c941277d7a',
 }
 
+# Exact dated Source048 flight-authority and Source051 monitor profiles.
+# Their original helper and monitor bytes remain distinct from current055.
+PRIOR_FLIGHT_EXECUTION_FILES = {'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
+ 'buflo_handoff.py': 'cc667caa2f987550b2affd2280d59054838d480108c2fac6d1f145e7e960f418',
+ 'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
+ 'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
+ 'resource_study.py': 'ab0826f8a1cf0b1b2dc87b627f0db04ae79922a63b49d4f88f38b151ce8f3117',
+ 'resource_study_cohorts.py': '1bbc93c44930c0498ec399d7136661009106fee8710fe229ef38f93fcbafa653',
+ 'resource_study_epochs.py': '31ca54fd09cfc05c6ac94c1e11855638acfba8dd7d165cea0c7347beddebaf8e',
+ 'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
+ 'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
+ 'resource_study_reader_compatibility.py': 'b311f12def021f4f7becaccaa62a9bf74994e8b07f10878176e64f11a2ba79da',
+ 'resource_study_runtime.py': '8b4628cb5f25e9db9181e32373f52364b21c22626a5baf0e7aa73a01b6b889c2',
+ 'resource_study_store.py': '9be2314336482cbceded42b61d70a161add53c1dd74f06d474ce711b0f9656fb',
+ 'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235'}
+
+PRIOR_MONITOR_EXECUTION_FILES = {'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
+ 'buflo_handoff.py': 'cc667caa2f987550b2affd2280d59054838d480108c2fac6d1f145e7e960f418',
+ 'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
+ 'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
+ 'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf',
+ 'resource_study.py': '49058ed6a5ba1f7fc5fe73ece77ee8b2e2e99fdb2079de5fee9b06fa7d150d03',
+ 'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
+ 'resource_study_epochs.py': '2a1b64cd23e45912b577f6fbb00bdcdc5587e824992b20696614b38d92e1f9e7',
+ 'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
+ 'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
+ 'resource_study_reader_compatibility.py': 'c7d4f5a9983b7f09f82f0279188136b287662adbf41a303630e8cc01eb582e93',
+ 'resource_study_runtime.py': 'd5c299a273c264c0b8e4c65cc86e43e22707ce23a3399a1f2a26d19623d8c923',
+ 'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
+ 'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235'}
+
 # Source029 waits finitely for the exact joined pool's kernel-thread teardown.
 # Source028 reuses successful pure network validation within one records call.
 # Source027 checks the actual executor's owned threads after joining and keeps
@@ -277,22 +277,21 @@ PRIOR_ANALYSIS_EXECUTION_FILES = {
 # An empty mapping refuses execution; no prospective hash is accepted.
 # Source042 binds both outgoing clock frames to the exact modern kernel proof.
 # Source045 analysis metrics retain the strictly validated retired primary cell.
-# Source051 binds only the prospective per-task ESRCH monitor correction.
-APPROVED_EXECUTION_FILES = {
-    'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
-    'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
-    'resource_study.py': '49058ed6a5ba1f7fc5fe73ece77ee8b2e2e99fdb2079de5fee9b06fa7d150d03',
-    'resource_study_runtime.py': 'd5c299a273c264c0b8e4c65cc86e43e22707ce23a3399a1f2a26d19623d8c923',
-    'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
-    'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
-    'buflo_handoff.py': 'cc667caa2f987550b2affd2280d59054838d480108c2fac6d1f145e7e960f418',
-    'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
-    'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235',
-    'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
-    'resource_study_epochs.py': '2a1b64cd23e45912b577f6fbb00bdcdc5587e824992b20696614b38d92e1f9e7',
-    'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
-    'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf',
-}
+# Source051's per-task ESRCH monitor correction remains byte whole.
+# Source055 reuses the exact Source048 five-file flight-authority implementation.
+APPROVED_EXECUTION_FILES = {'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
+ 'buflo_handoff.py': 'cc667caa2f987550b2affd2280d59054838d480108c2fac6d1f145e7e960f418',
+ 'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
+ 'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
+ 'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf',
+ 'resource_study.py': 'ab0826f8a1cf0b1b2dc87b627f0db04ae79922a63b49d4f88f38b151ce8f3117',
+ 'resource_study_cohorts.py': '1bbc93c44930c0498ec399d7136661009106fee8710fe229ef38f93fcbafa653',
+ 'resource_study_epochs.py': '31ca54fd09cfc05c6ac94c1e11855638acfba8dd7d165cea0c7347beddebaf8e',
+ 'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
+ 'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
+ 'resource_study_runtime.py': '8b4628cb5f25e9db9181e32373f52364b21c22626a5baf0e7aa73a01b6b889c2',
+ 'resource_study_store.py': '9be2314336482cbceded42b61d70a161add53c1dd74f06d474ce711b0f9656fb',
+ 'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235'}
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -341,6 +340,20 @@ def prior_analysis_execution_contract():
     return _profile(files)
 
 
+def prior_flight_execution_contract():
+    """Exact dated Source048 graph with its original monitor and helper."""
+    files = dict(LEGACY_FILES)
+    files.update(PRIOR_FLIGHT_EXECUTION_FILES)
+    return _profile(files)
+
+
+def prior_monitor_execution_contract():
+    """Exact dated Source051 graph, never an alias for Source055 execution."""
+    files = dict(LEGACY_FILES)
+    files.update(PRIOR_MONITOR_EXECUTION_FILES)
+    return _profile(files)
+
+
 def _self_sha256():
     path = Path(__file__)
     if (not path.is_absolute() or path.resolve(strict=True) != path
@@ -372,7 +385,7 @@ def execution_files():
                                          "resource_study_epochs.py", "process_scheduler.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source051 reader compatibility registry is not sealed")
+        raise ValueError("Source055 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -391,6 +404,8 @@ class _QualifiedExecution:
             _encoded(prior_execution_contract()),
             _encoded(prior_capture_execution_contract()),
             _encoded(prior_analysis_execution_contract()),
+            _encoded(prior_flight_execution_contract()),
+            _encoded(prior_monitor_execution_contract()),
             self._profile,
         )
 
@@ -399,21 +414,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source051 profile, never a legacy alias.
+    """Authenticate the exact approved Source055 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source051 execution reader")
+        raise ValueError("unsupported or changed Source055 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source051 execution reader required")
+        raise ValueError("qualified Source055 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -432,7 +447,7 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles, dated Source045 execution or reviewed Source051 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles, dated Source045/048/051 execution or reviewed Source055 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,
@@ -450,6 +465,7 @@ def execution_binding(admission, qualified):
         "buflo_outgoing_physical_clock_binding_changed": True,
         "buflo_terminal_primary_partial_metrics_reader_changed": True,
         "capture_scheduler_task_exit_race_monitor_changed": True,
+        "capture_flight_authority_projection_changed": True,
         "prospective_buflo_terminal_protocol_changed": True,
         "scientific_truth_conditions_changed": True,
         "historical_receipts_requalified_by_compatibility": False,

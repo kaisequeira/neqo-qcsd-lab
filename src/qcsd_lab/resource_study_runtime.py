@@ -15,7 +15,9 @@ import os
 from pathlib import Path
 import secrets
 import socket
+import stat
 import subprocess
+import sys
 import threading
 import time
 from typing import Any
@@ -197,6 +199,36 @@ def public_ipv4(hostname: str) -> dict:
             "observed_at_unix_ns": time.time_ns(), "capture_position": "client-eth0-before-nat"}
 
 
+class _DockerLockOwner:
+    """Actual FD, with read-only Linux fdinfo FLOCK ownership verification."""
+    def __init__(self, path, handle):
+        self.path, self.handle, self.pid, self.active = path, handle, os.getpid(), True
+        self.identity = self._identity(os.fstat(handle.fileno()))
+        self.check()
+
+    @staticmethod
+    def _identity(info):
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("Docker lifecycle lock is not one regular file")
+        return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode, info.st_nlink)
+
+    def check(self):
+        if not self.active or self.pid != os.getpid() or self.handle.closed:
+            raise ValueError("Docker lifecycle ownership is closed or foreign")
+        if (self.path.resolve(strict=True) != self.path
+                or any(p.is_symlink() for p in (self.path, *self.path.parents))
+                or self._identity(self.path.lstat()) != self.identity
+                or self._identity(os.fstat(self.handle.fileno())) != self.identity):
+            raise ValueError("Docker lifecycle lock FD/path identity changed")
+        if sys.platform == "linux":
+            rows = Path(f"/proc/self/fdinfo/{self.handle.fileno()}").read_text().splitlines()
+            device = f"{os.major(self.identity[0]):02x}:{os.minor(self.identity[0]):02x}:{self.identity[1]}"
+            expected = ["FLOCK", "ADVISORY", "WRITE", str(self.pid), device, "0", "EOF"]
+            if not any(row.startswith("lock:") and row.split()[2:] == expected for row in rows):
+                raise ValueError("Docker lifecycle kernel FLOCK ownership differs")
+
+
+
 @contextmanager
 def docker_lock():
     directory = Path.home() / ".cache/qcsd-resource-study"
@@ -206,9 +238,11 @@ def docker_lock():
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RuntimeError("another resource-study Docker lifecycle is active") from error
+        owner = _DockerLockOwner(directory / "docker.lock", handle)
         try:
-            yield
+            yield owner
         finally:
+            owner.active = False
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
@@ -461,9 +495,23 @@ class CaptureRuntime:
                     raise
                 body_error.add_note("Coordinator affinity closure also refused: " + str(failure))
 
+    @contextmanager
+    def capture_authority_scope(self):
+        if type(self) not in (CaptureRuntime, MultiRootCaptureRuntime):
+            yield None
+            return
+        from .resource_study_cohorts import capture_authority_scope
+        roots = list(self.contexts) if type(self) is MultiRootCaptureRuntime else self.root
+        with capture_authority_scope(roots, self._docker_owner) as auth:
+            self._capture_authority = auth
+            try:
+                yield auth
+            finally:
+                del self._capture_authority
+
     def __enter__(self):
         self.lock = docker_lock()
-        self.lock.__enter__()
+        self._docker_owner = self.lock.__enter__()
         try:
             self.plan = load(self.root / "study.json")
             assignments = validate_network_plan(self.plan, require=True)
@@ -783,7 +831,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
 
     def __enter__(self):
         self.lock = docker_lock()
-        self.lock.__enter__()
+        self._docker_owner = self.lock.__enter__()
         try:
             for root, context in self.contexts.items():
                 if (sha256_file(root / "study.json") != context["study_sha256"]

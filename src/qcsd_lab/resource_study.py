@@ -474,13 +474,15 @@ def tamaraw_retry_reason(mode: str, result: dict, error: Exception, *,
 def _capture_executor(backend, workers):
     """Construct the pool after real runtime auxiliary confinement, join first."""
     with backend:
-        scope = getattr(backend, "coordinator_affinity_scope", None)
-        # Existing injected test backends have no physical topology. The
-        # public CLI always constructs CaptureRuntime and its strict scope.
-        with (nullcontext() if scope is None else scope()) as observe_executor:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                with (nullcontext() if observe_executor is None else observe_executor(executor)):
-                    yield executor
+        authority = getattr(backend, "capture_authority_scope", None)
+        with (nullcontext() if authority is None else authority()):
+            scope = getattr(backend, "coordinator_affinity_scope", None)
+            # Existing injected test backends have no physical topology. The
+            # public CLI always constructs CaptureRuntime and its strict scope.
+            with (nullcontext() if scope is None else scope()) as observe_executor:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    with (nullcontext() if observe_executor is None else observe_executor(executor)):
+                        yield executor
 
 
 def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
@@ -684,9 +686,9 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
         return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": False}
 
-    def chunk(worker, cell, allowance, initial_count):
-        from .resource_study_cohorts import bind_source
-        with bind_source(_source_auth):
+    def chunk(worker, cell, allowance, initial_count, capture_auth):
+        from .resource_study_cohorts import bind_source, bind_capture_authority
+        with bind_source(_source_auth), bind_capture_authority(capture_auth, writer_root=root):
             try:
                 return capture_chunk(worker, cell, allowance, initial_count)
             finally:
@@ -711,7 +713,8 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 worker = available.pop(0)
                 attempts += allowance
                 busy.add(cell[0])
-                futures[executor.submit(chunk, worker, cell, allowance, counts[cell])] = worker
+                futures[executor.submit(chunk, worker, cell, allowance, counts[cell],
+                    getattr(backend, "_capture_authority", None))] = worker
             if not futures:
                 break
             done, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
@@ -1235,9 +1238,9 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                 return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
         return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": False}
 
-    def chunk(worker, cell, allowance, initial_count):
-        from .resource_study_cohorts import bind_source
-        with bind_source(_source_auth):
+    def chunk(worker, cell, allowance, initial_count, capture_auth):
+        from .resource_study_cohorts import bind_source, bind_capture_authority
+        with bind_source(_source_auth), bind_capture_authority(capture_auth, writer_root=jobs[cell]["root"]):
             try:
                 return capture_chunk(worker, cell, allowance, initial_count)
             finally:
@@ -1262,7 +1265,8 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                 worker = available.pop(0)
                 attempts += allowance
                 busy.add(cell[0])
-                futures[executor.submit(chunk, worker, cell, allowance, counts[cell])] = worker
+                futures[executor.submit(chunk, worker, cell, allowance, counts[cell],
+                    getattr(backend, "_capture_authority", None))] = worker
             if not futures:
                 break
             done, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
