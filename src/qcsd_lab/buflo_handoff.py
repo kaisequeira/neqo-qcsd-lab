@@ -1619,6 +1619,8 @@ def _direction_algorithm_metrics(
     direction: str,
     runtime_kind: str,
     buflo_period_us: int = 20_000,
+    run: Mapping[str, Any] | None = None,
+    runner_directory: Path | None = None,
 ) -> dict[str, Any]:
     if (type(buflo_period_us) is not int or buflo_period_us not in {20_000, 64_000}
         or runtime_kind != "buflo" and buflo_period_us != 20_000):
@@ -1643,6 +1645,26 @@ def _direction_algorithm_metrics(
         action_time_us = _csv_unsigned(row["action_time_us"], label="schedule action time")
         if advertised_at_us < action_time_us or delay_us != advertised_at_us - action_time_us:
             raise ValueError("study handoff incoming credit advertisement timing is invalid")
+        if (runtime_kind == "buflo" and consumed == consumption_delay == ""
+                and run is not None and runner_directory is not None):
+            from .capture_acceptance_policy import validate_terminal_primary_partial_evidence
+            resolved = run.get("resolved_configuration") if isinstance(run, Mapping) else None
+            defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+            if not isinstance(defense, Mapping) or defense.get("kind") != "buflo":
+                raise ValueError("terminal primary partial metrics require actual BuFLO")
+            partial = validate_terminal_primary_partial_evidence(
+                run, runner_directory=runner_directory, schedule_rows=list(rows)
+            )
+            if (partial.get("terminal_primary_partial_cells") != 1
+                    or partial.get("terminal_primary_partial_cell_size") != 1_200
+                    or partial["terminal_primary_partial_proof"]["slot"] != _csv_unsigned(
+                        row["slot_id"], label="incoming terminal primary partial slot"
+                    )):
+                raise ValueError("incoming blank consumption lacks its exact validated primary partial slot")
+            # This is still a raw missed/ReceiveCreditRetired cell. Its exact
+            # positive split is proved above; it was advertised, not fully consumed.
+            credit_delays.append(delay_us)
+            continue
         consumed_at_us = _csv_unsigned(
             consumed,
             label="incoming credit consumed time",
@@ -3313,7 +3335,14 @@ def _algorithm_diagnostics(
         "directions": {
             direction: _direction_algorithm_metrics(
                 schedule_rows, direction=direction, runtime_kind=runtime_kind,
-                buflo_period_us=buflo_period_us
+                buflo_period_us=buflo_period_us, run=run,
+                runner_directory=(
+                    events_path.parent
+                    if events_path == events_path.parent / "events.csv"
+                    and schedule_path == events_path.parent / "schedule.csv"
+                    and packets_path == events_path.parent / "packets.csv"
+                    else None
+                ),
             )
             for direction in ("outgoing", "incoming")
         },
