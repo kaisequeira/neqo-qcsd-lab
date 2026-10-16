@@ -1101,7 +1101,7 @@ class CaptureSchedulerMonitor:
                     tgid = int(selected["Tgid"])
                     cpus = _cpu_list(selected["Cpus_allowed_list"])
                     process_group = _stat_process_group(task_path / "stat")
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
                     continue
                 except (KeyError, OSError, ValueError) as error:
                     self._record_scan_error(

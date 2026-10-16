@@ -1,7 +1,7 @@
-"""Exact Source017/018/019 admission-reader compatibility for Source045 analysis execution.
+"""Exact Source017/018/019/045 profiles for Source051 execution.
 
 The old contract identifies the reader bound to an immutable admission. It is
-never returned as the source identity of the executing Source045 analysis reader. This
+never returned as the source identity of the executing Source051 reader. This
 registry permits the reviewed allocator/control changes and call-local pure
 network validation reuse, with bounded owned kernel-thread teardown after the
 original Python pool join. The new guarded local-only BuFLO terminal protocol
@@ -29,6 +29,10 @@ Its raw missed/ReceiveCreditRetired classification remains visible; no full
 consumption timestamp or whole-cell realization is invented. The live
 Source042 writer and its installed Native/runtime remain separate and unchanged.
 The original network, primary-resource, cadence and kernel predicates remain.
+Source051 tolerates ESRCH alongside ENOENT only when an enumerated proc task
+vanishes during its status/stat read. Enumeration, other scan errors and the
+runtime-evidence validator remain strict. The exact Source045 execution map
+is retained separately; its old monitor and helper are never relabelled.
 Neither
 compatibility nor this module qualifies a receipt or grants ledger authority.
 The caller still executes every original raw predicate and authenticates its
@@ -48,8 +52,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = "045"
-BINDING_TYPE = "qcsd-resource-domain-017-018-019-045-reader-execution-binding-v1"
+EXECUTION_KIND = "051"
+BINDING_TYPE = "qcsd-resource-domain-017-018-019-045-051-reader-execution-binding-v1"
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -244,6 +248,24 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
     "resource_study_reader_compatibility.py": "e30d340542260c0f372582d95f063b61d984cd4f7bf55e1b68eb3f1e7499714c",
 }
 
+# Exact Source045 analysis execution, including its own frozen helper identity.
+# This complete historical graph retains the original monitor bytes.
+PRIOR_ANALYSIS_EXECUTION_FILES = {
+    'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
+    'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
+    'resource_study.py': '49058ed6a5ba1f7fc5fe73ece77ee8b2e2e99fdb2079de5fee9b06fa7d150d03',
+    'resource_study_runtime.py': 'd5c299a273c264c0b8e4c65cc86e43e22707ce23a3399a1f2a26d19623d8c923',
+    'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
+    'fidelity.py': 'cac68404e45cc57005add05ddf16b7a5c81819dc9a04c92dbe900d7960dc103f',
+    'buflo_handoff.py': 'cc667caa2f987550b2affd2280d59054838d480108c2fac6d1f145e7e960f418',
+    'buflo_evaluation.py': '59c7398c9b1a85e9ac1382bc9d0df7dbcd46bd9bc157860d45afc7cbe775a50d',
+    'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235',
+    'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
+    'resource_study_epochs.py': '2a1b64cd23e45912b577f6fbb00bdcdc5587e824992b20696614b38d92e1f9e7',
+    'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
+    'resource_study_reader_compatibility.py': '33fca2234bac94f484a0a917564f4e2ccbd83d0eb86bc74aa2fca9c941277d7a',
+}
+
 # Source029 waits finitely for the exact joined pool's kernel-thread teardown.
 # Source028 reuses successful pure network validation within one records call.
 # Source027 checks the actual executor's owned threads after joining and keeps
@@ -255,6 +277,7 @@ PRIOR_CAPTURE_EXECUTION_FILES = {
 # An empty mapping refuses execution; no prospective hash is accepted.
 # Source042 binds both outgoing clock frames to the exact modern kernel proof.
 # Source045 analysis metrics retain the strictly validated retired primary cell.
+# Source051 binds only the prospective per-task ESRCH monitor correction.
 APPROVED_EXECUTION_FILES = {
     'resource_study_cohorts.py': '07256a1008c8b4a1f7685aeebafaeb8717aad771ce27d47cc088352956ebcea8',
     'resource_study_store.py': '76f49cb2f9e1a5788e4af073c7242125b3a689b414210e856fad0ed51a93ae53',
@@ -268,6 +291,7 @@ APPROVED_EXECUTION_FILES = {
     'resource_study_native.py': 'fbd8e9424720632e37b3f8ae6c8e022d5f451542ea49cc381abd10e7ca42cd41',
     'resource_study_epochs.py': '2a1b64cd23e45912b577f6fbb00bdcdc5587e824992b20696614b38d92e1f9e7',
     'capture_acceptance_policy.py': 'b0a6a61cbf177e843567c50bf928d60b9e3ad9eca113a68831114dd2876817c9',
+    'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf',
 }
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -310,6 +334,13 @@ def prior_capture_execution_contract():
     return _profile(files)
 
 
+def prior_analysis_execution_contract():
+    """Exact Source045 170-file profile, never the current execution identity."""
+    files = dict(LEGACY_FILES)
+    files.update(PRIOR_ANALYSIS_EXECUTION_FILES)
+    return _profile(files)
+
+
 def _self_sha256():
     path = Path(__file__)
     if (not path.is_absolute() or path.resolve(strict=True) != path
@@ -338,10 +369,10 @@ def execution_files():
                                          "resource_study.py", "resource_study_runtime.py", "resource_study_network.py",
                                          "fidelity.py", "buflo_handoff.py", "buflo_evaluation.py", "resource_study_verify.py",
                                          "capture_acceptance_policy.py", "resource_study_native.py",
-                                         "resource_study_epochs.py"}
+                                         "resource_study_epochs.py", "process_scheduler.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source045 reader compatibility registry is not sealed")
+        raise ValueError("Source051 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -359,6 +390,7 @@ class _QualifiedExecution:
             _encoded(legacy_contract()),
             _encoded(prior_execution_contract()),
             _encoded(prior_capture_execution_contract()),
+            _encoded(prior_analysis_execution_contract()),
             self._profile,
         )
 
@@ -367,21 +399,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source045 profile, never a legacy alias.
+    """Authenticate the exact approved Source051 profile, never a legacy alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source045 execution reader")
+        raise ValueError("unsupported or changed Source051 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source045 execution reader required")
+        raise ValueError("qualified Source051 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -400,7 +432,7 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles or reviewed Source045 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles, dated Source045 execution or reviewed Source051 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
         "allocator_control_implementation_changed": True,
         "shared_two_root_capture_launcher_changed": True,
@@ -417,6 +449,7 @@ def execution_binding(admission, qualified):
         "buflo_capped_chaff_selection_changed": True,
         "buflo_outgoing_physical_clock_binding_changed": True,
         "buflo_terminal_primary_partial_metrics_reader_changed": True,
+        "capture_scheduler_task_exit_race_monitor_changed": True,
         "prospective_buflo_terminal_protocol_changed": True,
         "scientific_truth_conditions_changed": True,
         "historical_receipts_requalified_by_compatibility": False,
