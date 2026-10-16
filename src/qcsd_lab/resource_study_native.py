@@ -704,7 +704,9 @@ def _mode_settings(paths: Mapping[str, Path | None]) -> dict[str, dict[str, Any]
 
 def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
                    client: str | Path = DEFAULT_CLIENT,
-                   runtime: Mapping[str, Any], buflo_chaff_cap_bytes: int | None = None) -> dict[str, Any]:
+                   runtime: Mapping[str, Any], buflo_chaff_cap_bytes: int | None = None,
+                   frozen_application_manifest: str | Path | None = None,
+                   frozen_application_manifest_sha256: str | None = None) -> dict[str, Any]:
     """Freeze20 real GET URLs, with an ordinary lane independent of chaff failures.
 
     Pools are probed in their given order until20 individually complete URLs
@@ -717,6 +719,14 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     if len(pool["resources"]) < RESOURCES_PER_SESSION:
         raise ValueError("candidate pool has fewer than20 distinct same-host URLs")
     executable, bound = _runtime(runtime, client)
+    frozen_raw = frozen_value = None
+    if frozen_application_manifest is not None or frozen_application_manifest_sha256 is not None:
+        if frozen_application_manifest is None or frozen_application_manifest_sha256 is None:
+            raise ValueError("frozen application manifest requires both path and SHA")
+        from .resource_study_selection import _read, validate_frozen_application_manifest_bytes
+        frozen_raw = _read(frozen_application_manifest, frozen_application_manifest_sha256)
+        frozen_value = validate_frozen_application_manifest_bytes(frozen_raw, hostname,
+            [resource["url"] for resource in pool["resources"]])
     root = _new_directory(output)
     probe = probe_urls(hostname, [resource["url"] for resource in pool["resources"]],
         root / "probe", client=executable, stop_after=RESOURCES_PER_SESSION, runtime=bound)
@@ -734,10 +744,13 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         runtime=bound, client_sha256=bound["client_sha256"], timeout=120,
         max_response_bytes=MAX_RESPONSE_BYTES)
     lengths = {row["url"]: row["bytes"] for row in responses}
-    manifest = native_manifest(hostname, urls20, lengths)
-    for resource in manifest["resources"]:
-        resource["headers"] = [pair[:] for pair in REQUEST_HEADERS]
-    manifest["resources"][0]["type"] = "Document"
+    if frozen_value is None:
+        manifest = native_manifest(hostname, urls20, lengths)
+        for resource in manifest["resources"]:
+            resource["headers"] = [pair[:] for pair in REQUEST_HEADERS]
+        manifest["resources"][0]["type"] = "Document"
+    else:
+        manifest = frozen_value
     from . import capture_acceptance_policy as acceptance
     expected = [{key: row[key] for key in ("resource_id", "status", "bytes", "body_sha256")}
                 for row in responses]
@@ -759,7 +772,11 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         acceptance.FIELD: acceptance.CADENCE64_ACK_START_POLICY,
         acceptance.BUFLO_KERNEL_PREPARATION_FIELD: acceptance.CADENCE64_KERNEL_PREPARATION_POLICY,
         "outer_response_contract": "every-selected-resource-complete-nonempty-http2xx-h3-v1"}
-    manifest_path = _write(root / "resources.json", manifest)
+    if frozen_raw is not None:
+        from .resource_study_selection import frozen_application_manifest_declaration
+        preparation["frozen_application_manifest"] = frozen_application_manifest_declaration(frozen_application_manifest_sha256)
+    manifest_path = _write(root / "resources.json", manifest if frozen_raw is None else frozen_raw,
+                           raw=frozen_raw is not None)
     prepared = _write(root / "prepared-workload.json", {"preparation": preparation, **manifest})
     paths: dict[str, Path | None] = {"manifest": manifest_path, "prepared_workload": prepared,
         "expected_responses": _write(root / "expected-responses.json", {"responses": expected}),
@@ -967,16 +984,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("_prepare", "_capture", "_probe"))
     parser.add_argument("--job", type=Path, required=True)
     parser.add_argument("--buflo-chaff-cap-bytes", type=int)
+    parser.add_argument("--frozen-application-manifest", type=Path)
+    parser.add_argument("--frozen-application-manifest-sha256")
     args = parser.parse_args(argv)
     if args.buflo_chaff_cap_bytes is not None and args.action != "_prepare":
         parser.error("--buflo-chaff-cap-bytes is only valid for _prepare")
+    frozen_requested = args.frozen_application_manifest is not None or args.frozen_application_manifest_sha256 is not None
+    if frozen_requested and (args.action != "_prepare" or args.frozen_application_manifest is None
+                             or args.frozen_application_manifest_sha256 is None):
+        parser.error("frozen application manifest needs paired path/SHA only with _prepare")
     cap = _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
     job = _object(args.job)
     if args.action == "_prepare":
         if "buflo_chaff_cap_bytes" in job:
             raise ValueError("the immutable preparation job has no cap field; use the explicit CLI option")
+        if "frozen_application_manifest" in job or "frozen_application_manifest_sha256" in job:
+            raise ValueError("the immutable preparation job has no frozen-manifest field; use explicit CLI options")
         if cap is not None:
             job = {**job, "buflo_chaff_cap_bytes": cap}
+        if frozen_requested:
+            job = {**job, "frozen_application_manifest": args.frozen_application_manifest,
+                   "frozen_application_manifest_sha256": args.frozen_application_manifest_sha256}
     function = {"_prepare": prepare_domain, "_capture": capture_session, "_probe": probe_urls}[args.action]
     result = function(**job)
     sys.stdout.buffer.write(canonical_json(result))

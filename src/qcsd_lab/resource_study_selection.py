@@ -259,6 +259,109 @@ def freeze_selection(root, selected):
     return {"manifest_path": relative, "manifest_sha256": selected["sha256"]}
 
 
+
+FROZEN_APPLICATION_MANIFEST_TYPE = "qcsd-resource-domain-frozen-application-manifest-v1"
+FROZEN_APPLICATION_MANIFEST_POLICY = "same-C019-application-bytes-fresh-complete-GET-and-chaff-v1"
+FROZEN_APPLICATION_MANIFEST_FIELDS = {"record_type", "schema_version", "policy", "manifest_sha256",
+                                      "scientific_credit", "manifest_path", "context_sha256"}
+
+
+def frozen_application_manifest_declaration(digest):
+    return {"record_type": FROZEN_APPLICATION_MANIFEST_TYPE, "schema_version": 1,
+            "policy": FROZEN_APPLICATION_MANIFEST_POLICY, "manifest_sha256": _digest(digest),
+            "scientific_credit": False}
+
+
+def validate_frozen_application_manifest_bytes(raw, hostname, urls):
+    """Validate the existing Native resource schema; never regenerate its bytes."""
+    from .resource_study_native import REQUEST_HEADERS
+    value = _json(raw)
+    rows = value.get("resources")
+    if (set(value) != {"resources"} or type(rows) is not list or len(rows) != 20
+            or any(type(row) is not dict or type(row.get("id")) is not int for row in rows)
+            or [row["id"] for row in rows] != list(range(20))
+            or [row.get("url") for row in rows] != list(urls)
+            or any(type(row.get("data_length")) is not int or row["data_length"] <= 0
+                   or row.get("content_length") != row["data_length"] for row in rows)):
+        raise ValueError("frozen application manifest differs from the exact twenty Native resources")
+    expected = inputs.native_manifest(hostname, urls, {row["url"]: row["data_length"] for row in rows})
+    for row in expected["resources"]: row["headers"] = [pair[:] for pair in REQUEST_HEADERS]
+    expected["resources"][0]["type"] = "Document"
+    if inputs.canonical_json(value) != inputs.canonical_json(expected):
+        raise ValueError("frozen application manifest changed its original Native request fields")
+    return value
+
+
+def _frozen_application_manifest_context(root, hostname, urls, digest):
+    from . import resource_study_cohorts as cohorts
+    from .resource_study_lineage import INCLUDED
+    if hostname == INCLUDED:
+        raise ValueError("frozen application manifests cannot replace the literal-reserve reader")
+    plan = _json(_read(_path(root) / "study.json"))
+    context, context_sha = cohorts._input_context(_path(root), plan)
+    definition = cohorts._input_cells(context, hostname)[0]["definition"]
+    if (definition["workload_sha256"] != _digest(digest)
+            or inputs.canonical_json(definition["urls"]) != inputs.canonical_json(list(urls))
+            or inputs.canonical_json(definition["network"]["assignment"])
+                != inputs.canonical_json(plan["class_network"]["assignments"][hostname])):
+        raise ValueError("frozen application manifest lacks its same-host C019 workload and address")
+    return context_sha
+
+
+def freeze_application_manifest(root, hostname, path, digest, urls):
+    """Freeze an explicit donor byte copy only after the original live context gate."""
+    from .resource_study_store import _create
+    context_sha = _frozen_application_manifest_context(root, hostname, urls, digest)
+    raw = _read(path, digest)
+    validate_frozen_application_manifest_bytes(raw, hostname, urls)
+    relative = f"inputs/frozen-application-manifests/{digest}.json"
+    target = _relative(root, relative)
+    if target.exists():
+        if _read(target, digest) != raw: raise ValueError("frozen application byte copy differs")
+    else:
+        _create(target, raw)
+    if _read(target, digest) != raw: raise ValueError("frozen application copy changed")
+    return {**frozen_application_manifest_declaration(digest),
+            "manifest_path": relative, "context_sha256": context_sha}
+
+
+def read_frozen_application_manifest(root, hostname, urls, binding):
+    if (type(binding) is not dict or set(binding) != FROZEN_APPLICATION_MANIFEST_FIELDS
+            or type(binding["schema_version"]) is not int or binding["schema_version"] != 1
+            or binding["scientific_credit"] is not False
+            or {key: binding[key] for key in frozen_application_manifest_declaration(binding.get("manifest_sha256"))}
+                != frozen_application_manifest_declaration(binding.get("manifest_sha256"))):
+        raise ValueError("typed frozen application manifest binding differs")
+    digest = _digest(binding["manifest_sha256"])
+    if (binding["manifest_path"] != f"inputs/frozen-application-manifests/{digest}.json"
+            or binding["context_sha256"] != _frozen_application_manifest_context(root, hostname, urls, digest)):
+        raise ValueError("frozen application manifest context/path differs")
+    raw = _read(_relative(root, binding["manifest_path"]), digest)
+    return raw, validate_frozen_application_manifest_bytes(raw, hostname, urls)
+
+
+def _validate_frozen_application_manifest_proof(root, enrollment, prepared):
+    from .resource_study_cohorts import INPUT_CONTEXT
+    declaration = prepared.get("preparation", {}).get("frozen_application_manifest")
+    binding = enrollment.get("frozen_application_manifest")
+    if binding is None and declaration is None:
+        if ("frozen_application_manifest" in enrollment
+                or any(name.startswith("inputs/frozen-application-manifests/") for name in enrollment["files"])):
+            raise ValueError("partial frozen application manifest proof")
+        return {}
+    raw, value = read_frozen_application_manifest(root, enrollment["hostname"], enrollment["urls"], binding)
+    if (declaration != frozen_application_manifest_declaration(binding["manifest_sha256"])
+            or enrollment["workload_sha256"] != binding["manifest_sha256"]
+            or _read(_relative(root, enrollment["workload_path"]), binding["manifest_sha256"]) != raw
+            or prepared["resources"] != value["resources"]):
+        raise ValueError("frozen application manifest bytes/preparation declaration differ")
+    proof = {binding["manifest_path"]: binding["manifest_sha256"], INPUT_CONTEXT: binding["context_sha256"]}
+    for name, digest in proof.items():
+        if enrollment["files"].get(name) != digest: raise ValueError("frozen application input is not inventoried")
+        _read(_relative(root, name), digest)
+    return proof
+
+
 def _binding(enrollment):
     value = enrollment.get("resource_selection")
     if (not isinstance(value, dict) or set(value) != BINDING_FIELDS or value["record_type"] != BINDING
@@ -273,10 +376,16 @@ def selection_artifact_paths(enrollment):
     if "resource_selection" not in enrollment:
         return {}
     value = _binding(enrollment)
-    return {"resource_selection_manifest": value["manifest_path"],
+    result = {"resource_selection_manifest": value["manifest_path"],
             "resource_selection_job": value["job_path"],
             **{f"resource_selection_context_{index:03d}": path
                for index, path in enumerate(sorted(value["context_files"]))}}
+    if "frozen_application_manifest" in enrollment:
+        from .resource_study_cohorts import INPUT_CONTEXT
+        binding = enrollment["frozen_application_manifest"]
+        result.update(resource_selection_frozen_application_manifest=binding["manifest_path"],
+                      resource_selection_frozen_application_context=INPUT_CONTEXT)
+    return result
 
 
 def bind_preparation(root, enrollment, binding, job_path):
@@ -305,6 +414,8 @@ def bind_preparation(root, enrollment, binding, job_path):
 def validate_selection_proof(root, enrollment, receipt=None):
     """Join frozen pool/selection/job/actual input/workload; no raw-run replay."""
     if "resource_selection" not in enrollment:
+        if "frozen_application_manifest" in enrollment:
+            raise ValueError("frozen application manifest needs original explicit selection proof")
         paths = (receipt or {}).get("artifact_paths", {})
         if (any(name.startswith("resource_selection_") for name in enrollment)
                 or any(name.startswith("resource_selection_") for name in paths)
@@ -355,6 +466,7 @@ def validate_selection_proof(root, enrollment, receipt=None):
             or preparation.get("runtime") != enrollment["runtime"]
             or files[enrollment["workload_path"]] != enrollment["workload_sha256"]):
         raise ValueError("selected workload/runtime provenance differs")
+    proof.update(_validate_frozen_application_manifest_proof(root, enrollment, prepared))
     if receipt is not None:
         required = selection_artifact_paths(enrollment)
         paths, inventory = receipt.get("artifact_paths", {}), receipt.get("files", {})

@@ -197,12 +197,18 @@ def _selection_unused(store, hostname):
 
 def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            resource_selection: Path | None = None, resource_selection_sha256: str | None = None,
-           buflo_chaff_cap_bytes: int | None = None) -> dict:
+           buflo_chaff_cap_bytes: int | None = None,
+           frozen_application_manifest: Path | None = None,
+           frozen_application_manifest_sha256: str | None = None) -> dict:
     cap = None
     if buflo_chaff_cap_bytes is not None:
         from .resource_study_native import _buflo_chaff_cap
         cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
     selection_requested = _selection_request(resource_selection, resource_selection_sha256, hostnames)
+    frozen_manifest_requested = frozen_application_manifest is not None or frozen_application_manifest_sha256 is not None
+    if frozen_manifest_requested and (frozen_application_manifest is None
+            or frozen_application_manifest_sha256 is None or not selection_requested or len(hostnames) != 1):
+        raise ValueError("frozen application manifest needs paired SHA/path and exact single-host selection")
     store = StudyStore(root)
     from .resource_study_epochs import check_enrollment_selection
     check_enrollment_selection(store, hostnames)
@@ -231,6 +237,11 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
             raise ValueError("hostname is outside the prospective selected50")
         from .resource_study_cohorts import require_input_selection
         require_input_selection(store, hostname, selection)
+        frozen_manifest = None
+        if frozen_manifest_requested:
+            from .resource_study_selection import freeze_application_manifest
+            frozen_manifest = freeze_application_manifest(root, hostname, frozen_application_manifest,
+                frozen_application_manifest_sha256, selection["manifest"]["urls"])
         if selection is not None:
             candidate = deepcopy(candidate)
             candidate["urls"] = list(selection["manifest"]["urls"])
@@ -238,8 +249,12 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         attempt = root / "enrollment-attempts" / hostname / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         try:
             require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
-            enrollment = (backend.prepare(candidate, attempt, buflo_chaff_cap_bytes=cap)
-                          if cap is not None else backend.prepare(candidate, attempt))
+            if frozen_manifest is not None:
+                enrollment = backend.prepare(candidate, attempt, frozen_application_manifest=frozen_manifest,
+                    **({"buflo_chaff_cap_bytes": cap} if cap is not None else {}))
+            else:
+                enrollment = (backend.prepare(candidate, attempt, buflo_chaff_cap_bytes=cap)
+                              if cap is not None else backend.prepare(candidate, attempt))
             selected = enrollment.get("urls", [])
             if (enrollment.get("hostname") != hostname or len(selected) != 20
                     or len(set(selected)) != 20 or any(url not in candidate["urls"] for url in selected)
@@ -807,6 +822,9 @@ def parser():
             child.add_argument("--resource-selection", type=Path,
                                help="immutable exact twenty-URL selection from the authenticated class pool")
             child.add_argument("--resource-selection-sha256", help="SHA-256 of the exact selection manifest bytes")
+            child.add_argument("--frozen-application-manifest", type=Path,
+                               help="explicit same-host C019 donor Native application manifest; preserve exact bytes")
+            child.add_argument("--frozen-application-manifest-sha256")
             child.add_argument("--buflo-chaff-cap-bytes", type=int,
                                help="prospective BuFLO-only prepared and sustained identity-body cap (1200..1048576); other mode inputs remain unchanged")
             child.add_argument("--epoch-of", type=Path)
@@ -857,6 +875,13 @@ def main(argv=None):
                 _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
                 if not args.enroll or args.runtime is None or not args.hostname:
                     raise ValueError("capped BuFLO selection requires live --enroll, --runtime and --hostname")
+            frozen_manifest_requested = args.frozen_application_manifest is not None or args.frozen_application_manifest_sha256 is not None
+            if frozen_manifest_requested and (args.frozen_application_manifest is None
+                    or args.frozen_application_manifest_sha256 is None or not args.enroll or args.runtime is None
+                    or len(args.hostname) != 1 or args.resource_selection is None
+                    or args.resource_selection_sha256 is None or not (root / "inputs/runtime-cohort-input-context.json").is_file()
+                    or args.stable_map_parent is not None or args.epoch_of is not None or args.epoch_change is not None):
+                raise ValueError("frozen application manifest requires an initialized C019 root and exact live selection")
             stable_initialized = False
             if args.stable_map_parent is not None:
                 if (len(args.inventory) != 1 or args.class_network_pool is not None
@@ -904,6 +929,9 @@ def main(argv=None):
                 output = (enroll(root, runtime, args.hostname,
                     resource_selection=args.resource_selection,
                     resource_selection_sha256=args.resource_selection_sha256,
+                    **({"frozen_application_manifest": args.frozen_application_manifest,
+                        "frozen_application_manifest_sha256": args.frozen_application_manifest_sha256}
+                       if frozen_manifest_requested else {}),
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}))
                     if selection_requested else enroll(root, runtime, args.hostname,
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {})))

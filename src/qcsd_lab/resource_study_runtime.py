@@ -275,7 +275,13 @@ class PreparationRuntime:
     def __init__(self, root: Path, runtime: dict):
         self.root, self.runtime = root.absolute(), runtime
 
-    def prepare(self, candidate: dict, output: Path, *, buflo_chaff_cap_bytes: int | None = None) -> dict:
+    def prepare(self, candidate: dict, output: Path, *, buflo_chaff_cap_bytes: int | None = None,
+                frozen_application_manifest: dict | None = None) -> dict:
+        frozen_raw = None
+        if frozen_application_manifest is not None:
+            from .resource_study_selection import read_frozen_application_manifest
+            frozen_raw, _ = read_frozen_application_manifest(self.root, candidate["hostname"],
+                candidate["urls"], frozen_application_manifest)
         output.mkdir(parents=True, exist_ok=False)
         dns = public_ipv4(candidate["hostname"])
         _put(output / "dns.json", dns)
@@ -288,6 +294,10 @@ class PreparationRuntime:
             )
             cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
             native_prepare_options = ("--buflo-chaff-cap-bytes", str(cap))
+        if frozen_application_manifest is not None:
+            native_prepare_options += ("--frozen-application-manifest",
+                str(self.root / frozen_application_manifest["manifest_path"]),
+                "--frozen-application-manifest-sha256", frozen_application_manifest["manifest_sha256"])
         _put(output / "job.json", job)
         with docker_lock():
             _runtime_check(self.runtime)
@@ -308,6 +318,16 @@ class PreparationRuntime:
                     or selection != {"schema_version": 1, "record_type": BUFLO_CAPPED_SELECTION_TYPE,
                                      "selection_policy": BUFLO_CAPPED_SELECTION_POLICY, "cap_bytes": cap}):
                 raise ValueError("prepared BuFLO cap declaration differs from the explicit Native CLI option")
+        if frozen_application_manifest is not None:
+            from .resource_study_selection import frozen_application_manifest_declaration, read_frozen_application_manifest
+            if (read_frozen_application_manifest(self.root, candidate["hostname"], candidate["urls"],
+                    frozen_application_manifest)[0] != frozen_raw
+                    or Path(enrollment["workload_path"]).read_bytes() != frozen_raw
+                    or enrollment["workload_sha256"] != frozen_application_manifest["manifest_sha256"]
+                    or load(Path(enrollment["paths"]["prepared_workload"]))["preparation"].get("frozen_application_manifest")
+                        != frozen_application_manifest_declaration(frozen_application_manifest["manifest_sha256"])):
+                raise ValueError("Native preparation changed the explicit frozen application manifest")
+            enrollment["frozen_application_manifest"] = dict(frozen_application_manifest)
         enrollment["workload_path"] = Path(enrollment["workload_path"]).relative_to(self.root).as_posix()
         enrollment["paths"] = {key: Path(value).relative_to(self.root).as_posix() if value else None
                                for key, value in enrollment["paths"].items()}
@@ -315,6 +335,10 @@ class PreparationRuntime:
         enrollment["files"] = {(output / "prepared" / relative).relative_to(self.root).as_posix(): digest
                                for relative, digest in enrollment["files"].items()}
         enrollment["files"][(output / "dns.json").relative_to(self.root).as_posix()] = sha256_file(output / "dns.json")
+        if frozen_application_manifest is not None:
+            from .resource_study_cohorts import INPUT_CONTEXT
+            enrollment["files"][frozen_application_manifest["manifest_path"]] = frozen_application_manifest["manifest_sha256"]
+            enrollment["files"][INPUT_CONTEXT] = frozen_application_manifest["context_sha256"]
         enrollment["source_occurrences"] = candidate.get("source_occurrences", [])
         for relative in enrollment["files"]:
             (self.root / relative).chmod(0o444)
