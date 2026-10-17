@@ -394,6 +394,13 @@ def _router_capture_seconds(enrollment: Mapping[str, Any]) -> int:
         raise ValueError("router capture bound differs from the explicit enrolled BuFLO duration")
     return limits["capture_seconds"]
 
+def _capture_call_timeout_seconds(mode: str, enrollment: Mapping[str, Any]) -> int:
+    """Preserve the outer 110-second allowance beyond the enrolled router bound."""
+    if mode != "buflo":
+        return 850
+    return _router_capture_seconds(enrollment) + 110
+
+
 class CaptureRuntime:
     def __init__(self, root: Path, runtime: dict, workers: int, *, hostnames=None):
         if type(workers) is not int or workers < 2:
@@ -800,7 +807,8 @@ class CaptureRuntime:
             "--bounding-set=-all,+net_raw,+net_admin,+setpcap", "--inh-caps=+net_raw,+net_admin,+setpcap",
             "--ambient-caps=+net_raw,+net_admin,+setpcap", "--no-new-privs",
             "/opt/qcsd-venv/bin/python3", "-I", "-B", "-m", "qcsd_lab.resource_study_native", "_capture",
-            "--job", str(directory / "job.json"), timeout=850)
+            "--job", str(directory / "job.json"),
+            timeout=_capture_call_timeout_seconds(attempt["mode"], enrollment))
         result = json.loads(output.splitlines()[-1])
         _put(directory / "native-adapter.json", result)
         if (directory / "capture").is_dir():
@@ -1083,7 +1091,8 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             "--bounding-set=-all,+net_raw,+net_admin,+setpcap", "--inh-caps=+net_raw,+net_admin,+setpcap",
             "--ambient-caps=+net_raw,+net_admin,+setpcap", "--no-new-privs",
             "/opt/qcsd-venv/bin/python3", "-I", "-B", "-m", "qcsd_lab.resource_study_native", "_capture",
-            "--job", str(directory / "job.json"), timeout=850)
+            "--job", str(directory / "job.json"),
+            timeout=_capture_call_timeout_seconds(attempt["mode"], enrollment))
         result = json.loads(output.splitlines()[-1])
         _put(directory / "native-adapter.json", result)
         if (directory / "capture").is_dir():

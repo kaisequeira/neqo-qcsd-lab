@@ -29,6 +29,9 @@ from . import resource_study_reader_compatibility as reader_compatibility
 ADMISSION = "qcsd-resource-domain-runtime-cohort-admission-v1"
 DECLARATION = "qcsd-resource-domain-compatible-runtime-declaration-v1"
 FIRST_MODE_DECLARATION = "qcsd-resource-domain-first-mode-cohort-declaration-v1"
+BUDGET_DECLARATION = "qcsd-resource-domain-buflo-budget-amendment-declaration-v1"
+BUDGET_STRATA = "qcsd-resource-domain-buflo-budget-science-strata-v1"
+BUDGET_AMENDMENT = "prospective per-cell 640-to-1280 BuFLO budget; separately labelled science strata; unchanged original application workload; shared400 quota; historical credit unchanged"
 COMPOSITION = "qcsd-resource-domain-runtime-cohort-composition-v1"
 SNAPSHOT = "qcsd-resource-domain-runtime-cohort-retained-accepted-v1"
 MARKER_TYPE = "qcsd-resource-domain-runtime-cohort-membership-v1"
@@ -1222,6 +1225,124 @@ def compatibility_template(parent, cohort_root, *, affected_hostnames=(), affect
         return _declaration(parent, new, e._records(parent), list(affected_hostnames), list(affected_modes))
 
 
+def _budget_science(old):
+    """Only the explicitly approved640-to1280 budget/settings delta is legal."""
+    from . import buflo_duration_budget as budget
+    try:
+        settings = old["settings"]
+        if (not _same(settings["parameters"], budget.CADENCE64_PARAMETERS)
+                or settings["parameters_sha256"] != budget.CADENCE64_PARAMETER_SHA256
+                or not _same([settings["timeout_seconds"], settings["capture_seconds"]], [680, 740])
+                or old["policies"]["buflo_duration_policy"] != budget.CADENCE64_POLICY
+                or not _same(settings["policies"], old["policies"])):
+            raise ValueError("budget amendment requires the exact original640 BuFLO science")
+        result = deepcopy(old)
+        result["policies"]["buflo_duration_policy"] = budget.CADENCE64_1280_POLICY
+        result["settings"].update(parameters=deepcopy(budget.CADENCE64_1280_PARAMETERS),
+            parameters_sha256=budget.CADENCE64_1280_PARAMETER_SHA256,
+            timeout_seconds=1320, capture_seconds=1380)
+        result["settings"]["policies"] = deepcopy(result["policies"])
+        return result
+    except (KeyError, TypeError) as error:
+        raise ValueError("budget amendment has malformed original640 science") from error
+
+
+def _budget_strata(old, science, member_id):
+    from . import buflo_duration_budget as budget
+    if "science_strata" in old or not _same(_budget_science(old["science"]), science):
+        raise ValueError("budget amendment requires one prospective exact640-to1280 transition")
+    return {"record_type": BUDGET_STRATA, "schema_version": 1, "shared_quota": 400,
+        "strata": [
+            {"policy": budget.CADENCE64_POLICY, "science": deepcopy(old["science"]),
+             "members": [member["cohort_id"] for member in old["members"]]},
+            {"policy": budget.CADENCE64_1280_POLICY, "science": deepcopy(science), "members": [member_id]}]}
+
+
+def _stratum_sciences(entry):
+    """Validate the closed ledger, retaining every historical full science value."""
+    base = {"hostname", "mode", "science", "members", "writer"}
+    if "science_strata" not in entry:
+        if set(entry) != base: raise ValueError("runtime cohort entry fields differ")
+        return {member["cohort_id"]: entry["science"] for member in entry["members"]}
+    from . import buflo_duration_budget as budget
+    value = entry["science_strata"]
+    if (set(entry) != base | {"science_strata"} or entry["mode"] != "buflo"
+            or type(value) is not dict or set(value) != {"record_type", "schema_version", "shared_quota", "strata"}
+            or value["record_type"] != BUDGET_STRATA or type(value["schema_version"]) is not int
+            or value["schema_version"] != 1 or type(value["shared_quota"]) is not int or value["shared_quota"] != 400
+            or type(value["strata"]) is not list or len(value["strata"]) != 2):
+        raise ValueError("BuFLO budget strata require the exact typed two-stratum shared400 ledger")
+    sciences, assigned = {}, []
+    for stratum, policy in zip(value["strata"], (budget.CADENCE64_POLICY, budget.CADENCE64_1280_POLICY)):
+        if (type(stratum) is not dict or set(stratum) != {"policy", "science", "members"}
+                or stratum["policy"] != policy or type(stratum["members"]) is not list or not stratum["members"]
+                or any(type(identity) is not str for identity in stratum["members"])):
+            raise ValueError("BuFLO budget stratum label/member schema differs")
+        assigned.extend(stratum["members"])
+        sciences.update({identity: stratum["science"] for identity in stratum["members"]})
+    if (len(assigned) != len(set(assigned)) or assigned != [member["cohort_id"] for member in entry["members"]]
+            or entry["writer"] not in value["strata"][1]["members"]
+            or not _same(_budget_science(value["strata"][0]["science"]), value["strata"][1]["science"])
+            or not _same(entry["science"], value["strata"][1]["science"])):
+        raise ValueError("BuFLO budget strata rewrite science, member ancestry, or current writer")
+    return sciences
+
+
+def _budget_declaration(parent, new, records, hosts, modes):
+    e = _epochs()
+    if not records or records[-1].get("class_transition") is None or modes != ["buflo"]:
+        raise ValueError("budget amendment requires stable selected50 and explicit BuFLO-only scope")
+    cells = {e._key(cell): cell for cell in records[-1]["cells"]}
+    keys = _scope_keys(cells, hosts, modes)
+    contract = verifier_contract()
+    registry = records[-1]["cohorts"] if records[-1]["record_type"] == ADMISSION else _initial_registry(records[-1], contract)
+    affected = []
+    for key in sorted(keys):
+        old, candidate = cells[key], e._cell(new, *key)
+        if ("science_strata" in _entry(registry, key)
+                or not _same(_budget_science(_science(old, records[-1]["class_transition"])),
+                             _science(candidate, records[-1]["class_transition"]))
+                or candidate["definition"]["ready"] is not True):
+            raise ValueError("budget amendment changes more than the exact ready640-to1280 science")
+        affected.append({"hostname": key[0], "mode": key[1],
+            "previous_definition_sha256": old["definition_sha256"], "new_definition_sha256": candidate["definition_sha256"]})
+    return _budget_declaration_value(parent, records[-1], affected, e._sha(_manifest(registry)), contract)
+
+
+def _budget_declaration_value(parent, prior, affected, retained_digest, contract):
+    return {"record_type": BUDGET_DECLARATION, "schema_version": 1,
+        "parent_study_sha256": parent._file("study.json")[1]["sha256"],
+        "predecessor_admission_sha256": _epochs()._sha(prior),
+        "selected_hostnames": prior["class_transition"]["class_selection"]["selected_hostnames"],
+        "affected": affected, "retained_accepted_manifest_sha256": retained_digest,
+        "verifier": contract, "stable_lineage_projection": _projection(prior["class_transition"]),
+        "budget_change_authorized": False, "methodology_amendment": BUDGET_AMENDMENT,
+        "two_budget_strata_shared400": True, "historical_credit_preserved": True, "rationale": ""}
+
+
+def _validate_budget_declaration(value, expected):
+    if (type(value) is not dict or set(value) != set(expected)
+            or value.get("budget_change_authorized") is not True
+            or value.get("two_budget_strata_shared400") is not True
+            or value.get("historical_credit_preserved") is not True
+            or type(value.get("rationale")) is not str or not value["rationale"].strip()):
+        raise ValueError("explicit two-stratum BuFLO budget methodology amendment is required")
+    actual = dict(value); actual.update(budget_change_authorized=False, rationale="")
+    if not _same(actual, expected):
+        raise ValueError("budget amendment changed parent, scope, science, retained credit, or qualifying reader")
+
+
+def budget_template(parent, cohort_root, *, affected_hostnames=(), affected_modes=()):
+    e = _epochs()
+    parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
+    with e._lock(parent.root):
+        return _budget_declaration(parent, new, e._records(parent), list(affected_hostnames), list(affected_modes))
+
+
+def create_budget_amendment(parent, cohort_root, declaration_path, declaration_sha256):
+    return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=False, budget=True)
+
+
 def _initialization_inputs(current, source, candidates):
     """Authenticate immutable preparation inputs, never enrollment or evidence.
 
@@ -1614,7 +1735,7 @@ def create_first_modes(parent, cohort_root, declaration_path, declaration_sha256
     return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=True)
 
 
-def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first):
+def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False):
     e = _epochs()
     from .resource_study_lineage import prepare_fences, publication_scope, validate_cells, no_retired_history
     parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
@@ -1630,8 +1751,9 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
             raise ValueError("runtime cohort input authority has a stale or foreign actual parent head")
         hosts = sorted({row["hostname"] for row in declaration["affected"]})
         modes = sorted({row["mode"] for row in declaration["affected"]})
-        expected = (_first_declaration if first else _declaration)(parent, new, records, hosts, modes)
-        (_validate_first_declaration if first else _validate_declaration)(declaration, expected)
+        if first and budget: raise ValueError("budget amendment cannot introduce a first mode")
+        expected = (_budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
+        (_validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
         current_plans = [StudyStore(root).plan() for root in
                          sorted({c["root"] for c in records[-1]["cells"]})]
         if not any("class_selection" in plan and _same(e._plan(new), plan) for plan in current_plans):
@@ -1667,6 +1789,12 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
             previous["frozen_accepted"] = {"path": relative, "sha256": e._sha(frozen)}
             candidate = e._cell(new, *key)
             member = _member(candidate, declaration["verifier"])
+            if budget:
+                science = _science(candidate, records[-1]["class_transition"])
+                entry["science_strata"] = _budget_strata(entry, science, member["cohort_id"])
+                entry["science"] = science
+            elif "science_strata" in entry:
+                entry["science_strata"]["strata"][1]["members"].append(member["cohort_id"])
             entry["members"].append(member); entry["writer"] = member["cohort_id"]
             cells[key] = candidate
         validate_cells([m["cell"] for entry in registry for m in entry["members"]], records[-1]["class_transition"])
@@ -1681,7 +1809,7 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
                 _create(store.root / MARKER, canonical_json(value))
             markers[root] = e._sha(value)
         value = {"record_type": ADMISSION, "sequence": len(records), "previous_sha256": e._sha(records[-1]),
-                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": "first-mode" if first else "runtime-cohort",
+                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
                  "affected": [[row["hostname"], row["mode"]] for row in declaration["affected"]],
                  "cells": [cells[key] for key in sorted(cells)], "exclusions": records[-1]["exclusions"],
                  "class_transition": records[-1]["class_transition"], "write_fences": fences,
@@ -1708,12 +1836,13 @@ def _validate_record(parent, records, value, *, contract=None):
     reader_compatibility.require_supported(contract, qualified)
     if type(value) is dict and value.get("change") == "first-mode":
         return _validate_first_record(parent, records, value, contract)
+    budget = type(value) is dict and value.get("change") == "buflo-duration-budget"
     fields = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells",
               "exclusions", "class_transition", "write_fences", "cohorts", "cohort_memberships", "compatibility_declaration"}
     prior = records[-1]
     if (type(value) is not dict or set(value) != fields or value["record_type"] != ADMISSION
             or type(value["sequence"]) is not int or value["sequence"] != len(records)
-            or value["previous_sha256"] != e._sha(prior) or value["change"] != "runtime-cohort"
+            or value["previous_sha256"] != e._sha(prior) or value["change"] != ("buflo-duration-budget" if budget else "runtime-cohort")
             or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
             or not _same(value["class_transition"], prior.get("class_transition"))
             or value["class_transition"] is None or not _same(value["exclusions"], prior["exclusions"])):
@@ -1749,15 +1878,23 @@ def _validate_record(parent, records, value, *, contract=None):
                 "verifier": contract, "compatible_treatment": False,
                 "stable_lineage_projection": _projection(value["class_transition"]),
                 "runtime_is_analysis_stratum": True, "rationale": ""}
-    _validate_declaration(declaration, expected)
+    if budget:
+        if any(key[1] != "buflo" for key in affected):
+            raise ValueError("budget amendment cannot change another mode")
+        expected = _budget_declaration_value(parent, prior, declaration["affected"],
+            declaration["retained_accepted_manifest_sha256"], contract)
+    (_validate_budget_declaration if budget else _validate_declaration)(declaration, expected)
     for key, entry in new_entries.items():
         old = old_entries[key]
         if key not in affected:
             if not _same(entry, old) or not _same(new_cells[key], old_cells[key]):
                 raise ValueError("runtime cohort changed an unaffected cell")
             continue
-        if (set(entry) != {"hostname", "mode", "science", "members", "writer"}
-                or not _same(entry["science"], old["science"]) or len(entry["members"]) != len(old["members"])+1):
+        expected_fields = {"hostname", "mode", "science", "members", "writer"}
+        if budget or "science_strata" in old: expected_fields.add("science_strata")
+        if (set(entry) != expected_fields
+                or not budget and not _same(entry["science"], old["science"])
+                or len(entry["members"]) != len(old["members"])+1):
             raise ValueError("runtime cohort changes logical science or member ancestry")
         for before, after in zip(old["members"], entry["members"][:-1]):
             expected_member = dict(after)
@@ -1770,9 +1907,18 @@ def _validate_record(parent, records, value, *, contract=None):
         candidate = new_cells[key]
         if (not _same(member, _member(candidate, declaration["verifier"]))
                 or entry["members"][-1] is not member or not _same(entry["science"], _science(candidate, value["class_transition"]))
-                or _same(candidate["definition"]["native"], old_cells[key]["definition"]["native"])
+                or not budget and _same(candidate["definition"]["native"], old_cells[key]["definition"]["native"])
                 or candidate["definition"]["ready"] is not True):
             raise ValueError("runtime cohort writer/Native/ready identity differs")
+        if budget:
+            expected_strata = _budget_strata(old, entry["science"], member["cohort_id"])
+            if not _same(entry["science_strata"], expected_strata):
+                raise ValueError("budget amendment rewrites the historical science strata")
+        elif "science_strata" in old:
+            expected_strata = deepcopy(old["science_strata"])
+            expected_strata["strata"][1]["members"].append(member["cohort_id"])
+            if not _same(entry["science_strata"], expected_strata):
+                raise ValueError("Native-only cohort rewrites budget strata")
         row = next((row for row in declaration["affected"] if (row["hostname"], row["mode"]) == key), None)
         if not _same(row, {"hostname": key[0], "mode": key[1],
                           "previous_definition_sha256": old_cells[key]["definition_sha256"],
@@ -1838,6 +1984,7 @@ def _validate_members(parent, value, new_cells, contract):
     qualified = reader_compatibility.qualify_execution(verifier_contract())
     from .resource_study_lineage import validate_cells
     for entry in value["cohorts"]:
+        sciences = _stratum_sciences(entry)
         ids = [m["cohort_id"] for m in entry["members"]]
         if len(ids) != len(set(ids)) or _writer(entry)["cell"] != new_cells[(entry["hostname"], entry["mode"])]:
             raise ValueError("runtime cohort member identity repeats or latest writer differs")
@@ -1846,7 +1993,7 @@ def _validate_members(parent, value, new_cells, contract):
             reader_compatibility.require_supported(member["verifier"], qualified)
             if (set(member) != {"cohort_id", "cell", "verifier", "frozen_accepted"}
                     or member["cohort_id"] != e._sha(cell)
-                    or not _same(_science(cell, value["class_transition"]), entry["science"])
+                    or not _same(_science(cell, value["class_transition"]), sciences[member["cohort_id"]])
                     or not _same(cell, _records_cell(cell))):
                 raise ValueError("runtime cohort enrollment/source/verifier identity changed")
     validate_cells([m["cell"] for entry in value["cohorts"] for m in entry["members"]], value["class_transition"])
@@ -2176,6 +2323,11 @@ def status(parent, *, deep=False, verification_workers=1):
                                  "native": member["cell"]["definition"]["native"], "verifier_sha256": e._sha(member["verifier"])})
                 cells.append({"hostname": key[0], "mode": key[1], "accepted": len(rows), "target": 400,
                               "writer_cohort": entry["writer"], "cohort_count": len(entry["members"])})
+                if "science_strata" in entry:
+                    cells[-1]["budget_science_strata"] = [{"policy": stratum["policy"],
+                        "science_sha256": e._sha(stratum["science"]), "cohort_ids": list(stratum["members"]),
+                        "accepted": sum(member["cohort_id"] in stratum["members"] for member, _, _ in rows)}
+                        for stratum in entry["science_strata"]["strata"]]
                 count += len(rows)
             if not _same(contract, verifier_contract()): raise ValueError("raw verifier source changed during cohort audit")
             complete = len(cells) == 250 and len({c["hostname"] for c in cells}) == 50 and all(c["accepted"] == 400 for c in cells) and count == 100000
@@ -2188,7 +2340,7 @@ def status(parent, *, deep=False, verification_workers=1):
                         for digest, value in sorted(admission_readers.items())},
                     "producer_provenance": "preserved verbatim in each bound source receipt; independent from qualifying reader identity",
                     "complete": complete, "raw_deep_verified": deep, "scientific_credit": deep and complete,
-                    "scope": "explicit compatible Native strata; separate immutable cohort roots; global logical-cell slots",
+                    "scope": "explicit Native and, only where admitted, separately labelled640/1280 budget strata; separate immutable roots; shared logical-cell400 slots",
                     "status_authority": "raw-deep-verified" if deep else "existing-accepted-SQL-index; no fresh raw qualification"}
 
         if not _same(contract, verifier_contract()):
