@@ -1963,6 +1963,12 @@ def _validate_run_binding(
 ) -> None:
     """Bind the runner receipt to every immutable launch input."""
 
+    from . import buflo_fin_permission
+    buflo_fin_permission.validate_source_binding(
+        load_json(application_workload_source) if application_workload_source is not None else {},
+        run_data, selected_policy=getattr(context, buflo_fin_permission.PREPARATION_FIELD, None),
+        runner_directory=runner_directory,
+    )
     from .capture_acceptance_policy import validate_tamaraw_source_binding, validate_front_source_binding, validate_terminal_primary_source_binding
     validate_tamaraw_source_binding(
         load_json(application_workload_source) if application_workload_source is not None else {},
@@ -2505,6 +2511,20 @@ def _client_command(
         ]
         if defense.kind in {"traffic_morphing", "walkie_talkie"}:
             command += ["--workload-id", workload_id]
+    from . import buflo_fin_permission
+    selected_fin_permission = buflo_fin_permission.validate_policy(
+        getattr(context, buflo_fin_permission.PREPARATION_FIELD, None))
+    if selected_fin_permission is not None:
+        if (defense.kind != "buflo" or defense.baseline or context.qcsd_profile != "research-1200"
+            or application_workload_source is None):
+            raise ValueError("BuFLO FIN permission requires explicit research-1200 prepared BuFLO")
+        prepared = load_json(application_workload_source)
+        preparation = prepared.get("preparation")
+        if (not isinstance(preparation, Mapping)
+            or buflo_fin_permission.validate_policy(preparation.get(buflo_fin_permission.PREPARATION_FIELD))
+                != selected_fin_permission):
+            raise ValueError("BuFLO FIN permission launch differs from prepared source")
+        command.append(buflo_fin_permission.CLI_FLAG)
     return command
 
 

@@ -1142,6 +1142,17 @@ def load_study_handoff(root: Path) -> tuple[StudySample, ...]:
 def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any] | None:
     if value is None:
         return None
+    if isinstance(value, dict) and type(value.get("schema_version")) is int and value["schema_version"] == 6:
+        from .buflo_fin_permission import validate_metrics
+        if defense != "buflo" or value.get("runtime_kind") != "buflo" or "buflo_fin_permission_evidence" not in value:
+            raise ValueError("algorithm schema6 requires the explicit independent BuFLO FIN permission proof")
+        validate_metrics(value["buflo_fin_permission_evidence"])
+        # Reuse the whole existing local-abandonment state validator; the new
+        # typed diagnostic and its independent proof remain schema6 on output.
+        original_state = {key: item for key, item in value.items() if key != "buflo_fin_permission_evidence"}
+        original_state["schema_version"] = 5
+        _load_algorithm_diagnostics(original_state, defense=defense)
+        return value
     legacy_keys = {
         "schema_version",
         "mode",

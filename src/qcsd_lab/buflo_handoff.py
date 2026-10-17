@@ -2538,6 +2538,16 @@ def _algorithm_diagnostics(
     require_current_trace = require_latest_cs if runtime_kind == "cs_buflo" else require_current
     if not isinstance(run, Mapping):
         raise ValueError("study handoff runner receipt is invalid")
+    from . import buflo_fin_permission
+    fin_permission_evidence = {}
+    if buflo_fin_permission.validate_run_marker(run) is not None:
+        if (runtime_kind != "buflo" or events_path != events_path.parent / "events.csv"
+            or schedule_path != events_path.parent / "schedule.csv" or packets_path != events_path.parent / "packets.csv"):
+            raise ValueError("BuFLO FIN permission requires one exact new-policy runner directory")
+        fin_permission_evidence = buflo_fin_permission.validate_evidence(run, runner_directory=events_path.parent)
+        from .capture_acceptance_policy import validate_terminal_primary_partial_evidence
+        buflo_fin_permission.validate_retirement_binding(fin_permission_evidence,
+            validate_terminal_primary_partial_evidence(run, runner_directory=events_path.parent))
     buflo_period_us = _buflo_diagnostic_period_us(run, runtime_kind=runtime_kind)
     schedule_rows = _read_extended_runner_csv(
         schedule_path,
@@ -3329,7 +3339,7 @@ def _algorithm_diagnostics(
             or cs_state["local_termination"]["latched"] is not True
         ):
             raise ValueError("study handoff CS-BuFLO translation/termination state is invalid")
-    return {
+    result = {
         "schema_version": (
             5 if runtime_kind == "buflo" and isinstance(buflo_state, Mapping)
                 and buflo_state.get("schema_version") == 4 else
@@ -3396,6 +3406,10 @@ def _algorithm_diagnostics(
         "buflo_state": buflo_state,
         "cs_buflo_state": cs_state,
     }
+    if fin_permission_evidence:
+        result["schema_version"] = 6
+        result["buflo_fin_permission_evidence"] = fin_permission_evidence
+    return result
 
 
 def _validate_handoff_rows(
@@ -3579,9 +3593,11 @@ def _validate_handoff_rows(
             )
             stored_runtime_kind = row.get("runtime_kind")
             supported_stored_schemas = (
-                {3, 4} if stored_runtime_kind in {"buflo", "cs_buflo"} else {3}
+                {3, 4, 6} if stored_runtime_kind == "buflo" else
+                {3, 4} if stored_runtime_kind == "cs_buflo" else {3}
             )
-            if formal and stored_runtime_kind in {"buflo", "cs_buflo"} and stored_schema != 4:
+            if (formal and stored_runtime_kind in {"buflo", "cs_buflo"}
+                    and stored_schema != 4 and not (stored_runtime_kind == "buflo" and stored_schema == 6)):
                 raise ValueError(
                     "formal study handoff requires current candidate algorithm evidence"
                 )
@@ -3598,7 +3614,7 @@ def _validate_handoff_rows(
                 events_path=root / str(row["runner_events_path"]),
                 packets_path=root / str(row["runner_packets_path"]),
                 require_current=(
-                    stored_schema == 4
+                    stored_schema in {4, 6}
                     if stored_runtime_kind == "buflo"
                     else stored_schema in {3, 4}
                 ),

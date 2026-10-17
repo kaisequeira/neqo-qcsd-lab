@@ -590,7 +590,8 @@ def mode_policies() -> dict[str, dict[str, Any]]:
     return {"undefended": dict(common),
         "front": {**common, front.FIELD: front.POLICY, incoming.FIELD: incoming.POLICY},
         "tamaraw": {**common, tamaraw.FIELD: tamaraw.POLICY},
-        "buflo": {**common, "buflo_duration_policy": buflo.CADENCE64_POLICY},
+        "buflo": {**common, "buflo_duration_policy": buflo.CADENCE64_POLICY,
+                  "buflo_fin_permission_policy": "buflo-retained-owned-parser-demand-genuine-fin-permission-release-v1"},
         "cs-buflo": {**common, "parameter_policy": "fixed-cs-buflo-cpsp-live-v1"}}
 
 
@@ -771,6 +772,7 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         acceptance.TERMINAL_PRIMARY_FIELD: acceptance.TERMINAL_PRIMARY_POLICY,
         acceptance.FIELD: acceptance.CADENCE64_ACK_START_POLICY,
         acceptance.BUFLO_KERNEL_PREPARATION_FIELD: acceptance.CADENCE64_KERNEL_PREPARATION_POLICY,
+        "buflo_fin_permission_policy": "buflo-retained-owned-parser-demand-genuine-fin-permission-release-v1",
         "outer_response_contract": "every-selected-resource-complete-nonempty-http2xx-h3-v1"}
     if frozen_raw is not None:
         from .resource_study_selection import frozen_application_manifest_declaration
