@@ -58,6 +58,7 @@ RAW_DEPENDENCIES = (
     'browser_egress_qualification.py',
     'buflo_duration_budget.py',
     'buflo_evaluation.py',
+    'buflo_fin_permission.py',
     'buflo_handoff.py',
     'buflo_reference.py',
     'buflo_study.py',
