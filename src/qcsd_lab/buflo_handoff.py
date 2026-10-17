@@ -2497,7 +2497,7 @@ def _buflo_ack_start_stop_drain_ledger(
 
 
 def _buflo_diagnostic_period_us(run: Mapping[str, Any], *, runtime_kind: str) -> int:
-    from .buflo_duration_budget import CADENCE64_RECEIPT, CADENCE64_PARAMETER_SHA256, RUN_FIELD
+    from .buflo_duration_budget import CADENCE64_POLICY, CADENCE64_1280_POLICY, RUN_FIELD, cadence64_receipt_matches
     from .capture_acceptance_policy import CADENCE64_ACK_START_POLICY, FIELD
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
@@ -2508,16 +2508,15 @@ def _buflo_diagnostic_period_us(run: Mapping[str, Any], *, runtime_kind: str) ->
         or isinstance(raw, Mapping) and raw.get("schema_version") in {13, 14}
         or isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_ACK_START_POLICY
         or isinstance(parameter, Mapping) and isinstance(parameter.get(RUN_FIELD), Mapping)
-        and parameter[RUN_FIELD].get("policy") == CADENCE64_RECEIPT["policy"]
+        and parameter[RUN_FIELD].get("policy") in {CADENCE64_POLICY, CADENCE64_1280_POLICY}
     )
     if not prospective:
         return 20_000
     required, _ = _runner_kernel_tx_requirement(run, runtime_kind=runtime_kind)
     if (not required or not isinstance(wakeups, Mapping) or wakeups.get("schema_version") != 22
         or run.get("method") != "GET" or not isinstance(parameter, Mapping)
-        or parameter.get("sha256") != CADENCE64_PARAMETER_SHA256
         or not isinstance(parameter.get(RUN_FIELD), Mapping)
-        or parameter[RUN_FIELD] != CADENCE64_RECEIPT):
+        or not cadence64_receipt_matches(parameter[RUN_FIELD], parameter.get("sha256"))):
         raise ValueError("64ms diagnostics lack exact declared Native parameter and receipt identity")
     return 64_000
 

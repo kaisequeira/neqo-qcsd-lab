@@ -204,12 +204,16 @@ def _selection_unused(store, hostname):
 def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            resource_selection: Path | None = None, resource_selection_sha256: str | None = None,
            buflo_chaff_cap_bytes: int | None = None,
+           buflo_duration_policy: str | None = None,
            frozen_application_manifest: Path | None = None,
            frozen_application_manifest_sha256: str | None = None) -> dict:
     cap = None
     if buflo_chaff_cap_bytes is not None:
         from .resource_study_native import _buflo_chaff_cap
         cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
+    if buflo_duration_policy is not None:
+        from .buflo_duration_budget import preparation_policy
+        preparation_policy(buflo_duration_policy)
     selection_requested = _selection_request(resource_selection, resource_selection_sha256, hostnames)
     frozen_manifest_requested = frozen_application_manifest is not None or frozen_application_manifest_sha256 is not None
     if frozen_manifest_requested and (frozen_application_manifest is None
@@ -229,6 +233,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         backend = PreparationRuntime(root, runtime)
     candidates = candidate_pool(root)
     completed = {r["hostname"] for r in store.enrolled()}
+    if buflo_duration_policy is not None and completed.intersection(hostnames):
+        raise ValueError("explicit BuFLO duration requires a fresh enrollment; existing policies cannot change")
     if cap is not None and completed.intersection(hostnames):
         raise ValueError("capped BuFLO selection requires a fresh enrollment; existing inputs cannot change")
     results = []
@@ -255,12 +261,14 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         attempt = root / "enrollment-attempts" / hostname / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         try:
             require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
+            duration_option = ({"buflo_duration_policy": buflo_duration_policy}
+                               if buflo_duration_policy is not None else {})
             if frozen_manifest is not None:
                 enrollment = backend.prepare(candidate, attempt, frozen_application_manifest=frozen_manifest,
-                    **({"buflo_chaff_cap_bytes": cap} if cap is not None else {}))
+                    **({"buflo_chaff_cap_bytes": cap} if cap is not None else {}), **duration_option)
             else:
-                enrollment = (backend.prepare(candidate, attempt, buflo_chaff_cap_bytes=cap)
-                              if cap is not None else backend.prepare(candidate, attempt))
+                enrollment = (backend.prepare(candidate, attempt, buflo_chaff_cap_bytes=cap, **duration_option)
+                              if cap is not None else backend.prepare(candidate, attempt, **duration_option))
             selected = enrollment.get("urls", [])
             if (enrollment.get("hostname") != hostname or len(selected) != 20
                     or len(set(selected)) != 20 or any(url not in candidate["urls"] for url in selected)
@@ -831,6 +839,8 @@ def parser():
             child.add_argument("--frozen-application-manifest", type=Path,
                                help="explicit same-host C019 donor Native application manifest; preserve exact bytes")
             child.add_argument("--frozen-application-manifest-sha256")
+            child.add_argument("--buflo-duration-policy",
+                               help="explicit prospective BuFLO duration policy; default640 and existing enrollments remain unchanged")
             child.add_argument("--buflo-chaff-cap-bytes", type=int,
                                help="prospective BuFLO-only prepared and sustained identity-body cap (1200..1048576); other mode inputs remain unchanged")
             child.add_argument("--epoch-of", type=Path)
@@ -876,6 +886,11 @@ def main(argv=None):
             from .resource_study_cohorts import create_first_modes
             output = create_first_modes(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
+            if args.buflo_duration_policy is not None:
+                from .buflo_duration_budget import preparation_policy
+                preparation_policy(args.buflo_duration_policy)
+                if not args.enroll:
+                    raise ValueError("explicit BuFLO duration policy requires fresh live enrollment")
             if args.buflo_chaff_cap_bytes is not None:
                 from .resource_study_native import _buflo_chaff_cap
                 _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
@@ -938,9 +953,11 @@ def main(argv=None):
                     **({"frozen_application_manifest": args.frozen_application_manifest,
                         "frozen_application_manifest_sha256": args.frozen_application_manifest_sha256}
                        if frozen_manifest_requested else {}),
-                    **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}))
+                    **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
+                    **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}))
                     if selection_requested else enroll(root, runtime, args.hostname,
-                    **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {})))
+                    **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
+                    **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {})))
             else:
                 output = StudyStore(root).status()
             if args.epoch_of is not None:

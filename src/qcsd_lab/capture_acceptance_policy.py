@@ -693,15 +693,14 @@ def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
             raise ValueError("BuFLO ACK-start policy changes the fixed outgoing deadline")
         prospective = run[FIELD]["policy"] == CADENCE64_ACK_START_POLICY
         if prospective:
-            from .buflo_duration_budget import CADENCE64_RECEIPT, CADENCE64_PARAMETER_SHA256, RUN_FIELD, validate_receipt
+            from .buflo_duration_budget import RUN_FIELD, validate_receipt, cadence64_receipt_matches
             validate_receipt(parameters.get(RUN_FIELD))
             wakeups = run.get("runner_wakeup_metrics")
             raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
             _require_layered_tx_source_contract(run, raw)
             marker = validate_buflo_kernel_preparation_marker(run.get(BUFLO_KERNEL_PREPARATION_FIELD))
-            if (not _exact_json(parameters[RUN_FIELD], CADENCE64_RECEIPT)
+            if (not cadence64_receipt_matches(parameters[RUN_FIELD], parameters.get("sha256"))
                 or run.get("method") != "GET"
-                or parameters.get("sha256") != CADENCE64_PARAMETER_SHA256
                 or not isinstance(parameters.get("path"), str) or not parameters["path"]
                 or defense.get("parameters") != parameters["path"]
                 or parameters.get("implementation_scope") != "client_only_quic"

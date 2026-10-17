@@ -581,7 +581,7 @@ def probe_urls(hostname: str, urls: Iterable[str], output: str | Path, *,
     return result
 
 
-def mode_policies() -> dict[str, dict[str, Any]]:
+def mode_policies(*, buflo_duration_policy: str | None = None) -> dict[str, dict[str, Any]]:
     """Expose the existing fixed policies explicitly, before any capture."""
     from . import front_fixed_configuration as front, front_incoming_acceptance as incoming
     from . import tamaraw_fixed_configuration as tamaraw, buflo_duration_budget as buflo
@@ -590,18 +590,21 @@ def mode_policies() -> dict[str, dict[str, Any]]:
     return {"undefended": dict(common),
         "front": {**common, front.FIELD: front.POLICY, incoming.FIELD: incoming.POLICY},
         "tamaraw": {**common, tamaraw.FIELD: tamaraw.POLICY},
-        "buflo": {**common, "buflo_duration_policy": buflo.CADENCE64_POLICY},
+        "buflo": {**common, "buflo_duration_policy": buflo.preparation_policy(buflo_duration_policy)},
         "cs-buflo": {**common, "parameter_policy": "fixed-cs-buflo-cpsp-live-v1"}}
 
 
-def _parameter_bundle(root: Path) -> dict[str, Path]:
+def _parameter_bundle(root: Path, *, buflo_duration_policy: str | None = None) -> dict[str, Path]:
     from . import front_fixed_configuration as front, tamaraw_fixed_configuration as tamaraw
     from . import buflo_duration_budget as buflo
     from .util import LAB_ROOT
+    selected = buflo.preparation_policy(buflo_duration_policy)
+    buflo_raw = (buflo.cadence64_1280_parameter_bytes() if selected == buflo.CADENCE64_1280_POLICY
+                 else buflo.cadence64_parameter_bytes())
     source = _regular(LAB_ROOT / "config/defense-params/cs-buflo-cpsp-live.json")
     return {"front_config": _write(root / "params/front.toml", front.configuration_bytes(), raw=True),
         "tamaraw_config": _write(root / "params/tamaraw.toml", tamaraw.configuration_bytes(), raw=True),
-        "buflo_parameters": _write(root / "params/buflo.json", buflo.cadence64_parameter_bytes(), raw=True),
+        "buflo_parameters": _write(root / "params/buflo.json", buflo_raw, raw=True),
         "cs_buflo_parameters": _write(root / "params/cs-buflo.json", source.read_bytes(), raw=True)}
 
 
@@ -682,12 +685,15 @@ def _files(root: Path) -> dict[str, str]:
     return result
 
 
-def _mode_settings(paths: Mapping[str, Path | None]) -> dict[str, dict[str, Any]]:
+def _mode_settings(paths: Mapping[str, Path | None], *,
+                   buflo_duration_policy: str | None = None) -> dict[str, dict[str, Any]]:
     from . import front_fixed_configuration as front, tamaraw_fixed_configuration as tamaraw
     from . import buflo_duration_budget as buflo
     common = {"profile": "research-1200", "request_policy": "as-defined",
               "max_response_bytes": MAX_RESPONSE_BYTES, "udp_payload_ceiling": 1200}
-    settings = {mode: {**common, "policies": mode_policies()[mode]} for mode in MODES}
+    selected = buflo.preparation_policy(buflo_duration_policy)
+    limits = buflo.capture_limits("buflo", {"timeout_seconds": 120, "capture_seconds": 180}, policy=selected)
+    settings = {mode: {**common, "policies": mode_policies(buflo_duration_policy=selected)[mode]} for mode in MODES}
     settings["undefended"].update(defense="none", timeout_seconds=120, capture_seconds=180)
     for mode, module, key in (("front", front, "front_config"),
                                ("tamaraw", tamaraw, "tamaraw_config")):
@@ -696,15 +702,18 @@ def _mode_settings(paths: Mapping[str, Path | None]) -> dict[str, dict[str, Any]
             timeout_seconds=120, capture_seconds=180)
     for mode, key in (("buflo", "buflo_parameters"), ("cs-buflo", "cs_buflo_parameters")):
         settings[mode].update(parameters_sha256=sha256_file(paths[key]),
-            parameters=_object(paths[key]), timeout_seconds=680 if mode == "buflo" else 120,
-            capture_seconds=740 if mode == "buflo" else 180)
+            parameters=_object(paths[key]), timeout_seconds=limits["timeout_seconds"] if mode == "buflo" else 120,
+            capture_seconds=limits["capture_seconds"] if mode == "buflo" else 180)
     buflo.validate_parameters(settings["buflo"]["parameters"])
+    if settings["buflo"]["parameters"][buflo.PARAMETER_FIELD] != selected:
+        raise ValueError("enrolled BuFLO parameters differ from the explicit duration policy")
     return settings
 
 
 def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
                    client: str | Path = DEFAULT_CLIENT,
                    runtime: Mapping[str, Any], buflo_chaff_cap_bytes: int | None = None,
+                   buflo_duration_policy: str | None = None,
                    frozen_application_manifest: str | Path | None = None,
                    frozen_application_manifest_sha256: str | None = None) -> dict[str, Any]:
     """Freeze20 real GET URLs, with an ordinary lane independent of chaff failures.
@@ -714,6 +723,8 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     and failed qualifier remains retained. There is no resource substitution
     after enrollment, no fitter, and no HTML or cross-origin claim.
     """
+    from . import buflo_duration_budget as buflo
+    selected_duration = buflo.preparation_policy(buflo_duration_policy)
     cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
     pool = _manifest(hostname, urls, require_twenty=False)
     if len(pool["resources"]) < RESOURCES_PER_SESSION:
@@ -773,6 +784,8 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         acceptance.BUFLO_KERNEL_PREPARATION_FIELD: acceptance.CADENCE64_KERNEL_PREPARATION_POLICY,
         "buflo_fin_permission_policy": "buflo-retained-owned-parser-demand-genuine-fin-permission-release-v1",
         "outer_response_contract": "every-selected-resource-complete-nonempty-http2xx-h3-v1"}
+    if buflo_duration_policy is not None:
+        preparation["buflo_duration_policy"] = selected_duration
     if frozen_raw is not None:
         from .resource_study_selection import frozen_application_manifest_declaration
         preparation["frozen_application_manifest"] = frozen_application_manifest_declaration(frozen_application_manifest_sha256)
@@ -781,7 +794,7 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     prepared = _write(root / "prepared-workload.json", {"preparation": preparation, **manifest})
     paths: dict[str, Path | None] = {"manifest": manifest_path, "prepared_workload": prepared,
         "expected_responses": _write(root / "expected-responses.json", {"responses": expected}),
-        **_parameter_bundle(root)}
+        **_parameter_bundle(root, buflo_duration_policy=selected_duration)}
     qualified = _qualify(prepared, manifest["resources"], responses,
                          _new_directory(root / "qualification"), executable, bound)
     paths["chaff_core"] = _write(root / "chaff-core.json", qualified["core"]) if qualified["core"] else None
@@ -796,8 +809,8 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     enrollment = {"schema_version": 1, "role": ROLE, "hostname": probe["hostname"],
         "urls": urls20, "workload_path": "resources.json", "workload_sha256": sha256_file(manifest_path),
         "paths": {key: value.relative_to(root).as_posix() if value else None for key, value in paths.items()},
-        "files": _files(root), "runtime": bound, "mode_policies": mode_policies(),
-        "mode_settings": _mode_settings(paths),
+        "files": _files(root), "runtime": bound, "mode_policies": mode_policies(buflo_duration_policy=selected_duration),
+        "mode_settings": _mode_settings(paths, buflo_duration_policy=selected_duration),
         "mode_readiness": {mode: mode == "undefended" or qualified["error"] is None for mode in MODES},
         "qualification_error": qualified["error"], "scientific_credit": False}
     if cap is not None:
@@ -831,10 +844,15 @@ def _enrollment(directory: str | Path, hostname: str, runtime: Mapping[str, Any]
     enrollment = _object(root / "enrollment.json")
     canonical_host = urlsplit(native_manifest(hostname, [f"https://{hostname}/"], require_twenty=False)
                               ["resources"][0]["url"]).hostname
+    from . import buflo_duration_budget as buflo
+    recorded_policies = enrollment.get("mode_policies")
+    selected_duration = buflo.preparation_policy(
+        recorded_policies.get("buflo", {}).get("buflo_duration_policy")
+        if isinstance(recorded_policies, Mapping) and isinstance(recorded_policies.get("buflo"), Mapping) else None)
     if (enrollment.get("schema_version") != 1 or enrollment.get("role") != ROLE
             or enrollment.get("hostname") != canonical_host
             or not _same_native_runtime(enrollment.get("runtime"), runtime)
-            or enrollment.get("mode_policies") != mode_policies()):
+            or enrollment.get("mode_policies") != mode_policies(buflo_duration_policy=selected_duration)):
         raise ValueError("enrollment host, role, runtime or fixed policies changed")
     files = enrollment.get("files")
     if not isinstance(files, dict) or not files:
@@ -859,7 +877,7 @@ def _enrollment(directory: str | Path, hostname: str, runtime: Mapping[str, Any]
         raise ValueError("enrollment workload digest changed")
     native_manifest(canonical_host, enrollment["urls"])
     actual_paths = {key: root / value if value else None for key, value in enrollment["paths"].items()}
-    if enrollment.get("mode_settings") != _mode_settings(actual_paths):
+    if enrollment.get("mode_settings") != _mode_settings(actual_paths, buflo_duration_policy=selected_duration):
         raise ValueError("enrollment mode settings differ from actual fixed input bytes")
     if "buflo_chaff_selection" in enrollment:
         validate_buflo_capped_enrollment(root, enrollment)
@@ -870,8 +888,9 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
     from . import capture_session as collector
     from . import buflo_duration_budget as buflo
     policies = enrollment["mode_policies"][mode]
+    selected_duration = buflo.preparation_policy(policies.get("buflo_duration_policy")) if mode == "buflo" else None
     limits = buflo.capture_limits(mode, {"timeout_seconds": 120, "capture_seconds": 180},
-        policy=buflo.CADENCE64_POLICY if mode == "buflo" else None)
+        policy=selected_duration)
     context = SimpleNamespace(qcsd_profile="research-1200", request_policy="as-defined",
         udp_payload_ceiling=1200, limits=collector.Limits(**limits, max_response_bytes=MAX_RESPONSE_BYTES,
             capture_megabytes=256, max_attempts=1), **policies)
@@ -883,6 +902,10 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
             raise ValueError("prepared BuFLO policy source path is not relative")
         prepared = _object(_regular(root / relative))
         preparation = prepared.get("preparation")
+        declared_duration = preparation.get("buflo_duration_policy") if isinstance(preparation, Mapping) else None
+        if ((selected_duration == buflo.CADENCE64_1280_POLICY and declared_duration != selected_duration)
+                or declared_duration is not None and declared_duration != selected_duration):
+            raise ValueError("prepared BuFLO source lacks the matching explicit duration selector")
         selected = buflo_fin_permission.validate_policy(
             preparation.get(buflo_fin_permission.PREPARATION_FIELD)
             if isinstance(preparation, Mapping) else None)
@@ -906,11 +929,12 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
                 or ".." in Path(relative).parts):
             raise ValueError("enrolled defense parameter path is not relative")
         parameter_path = _regular(root / relative)
-        source_name = {"buflo": "buflo-cadence64-budget640.json",
+        source_name = {"buflo": (Path(buflo.CADENCE64_1280_PARAMETER_PATH).name
+            if selected_duration == buflo.CADENCE64_1280_POLICY else "buflo-cadence64-budget640.json"),
                        "cs-buflo": "cs-buflo-cpsp-live.json"}[mode]
         source = _regular(LAB_ROOT / "config/defense-params" / source_name)
         provenance = _regular(parameter_artifacts.parameter_provenance_path(source))
-        expected_policy = (buflo.CADENCE64_POLICY if mode == "buflo"
+        expected_policy = (selected_duration if mode == "buflo"
                            else "fixed-cs-buflo-cpsp-live-v1")
         policy_field = "buflo_duration_policy" if mode == "buflo" else "parameter_policy"
         if policies.get(policy_field) != expected_policy:
@@ -919,7 +943,9 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
             source, provenance_path=provenance, expected_kind=kind,
             allow_study_candidate=True, expected_qcsd_profile=context.qcsd_profile,
             expected_udp_payload_ceiling=context.udp_payload_ceiling)
-        expected_input_policy = (buflo.CADENCE64_INPUT_POLICY if mode == "buflo"
+        expected_input_policy = (buflo.CADENCE64_1280_INPUT_POLICY
+                                if mode == "buflo" and selected_duration == buflo.CADENCE64_1280_POLICY
+                                else buflo.CADENCE64_INPUT_POLICY if mode == "buflo"
                                 else parameter_artifacts.BUFLO_STUDY_PARAMETER_INPUT_POLICY)
         if (artifact.sha256 != enrollment["files"][relative]
                 or sha256_file(parameter_path) != artifact.sha256
@@ -999,11 +1025,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("_prepare", "_capture", "_probe"))
     parser.add_argument("--job", type=Path, required=True)
     parser.add_argument("--buflo-chaff-cap-bytes", type=int)
+    parser.add_argument("--buflo-duration-policy")
     parser.add_argument("--frozen-application-manifest", type=Path)
     parser.add_argument("--frozen-application-manifest-sha256")
     args = parser.parse_args(argv)
     if args.buflo_chaff_cap_bytes is not None and args.action != "_prepare":
         parser.error("--buflo-chaff-cap-bytes is only valid for _prepare")
+    if args.buflo_duration_policy is not None and args.action != "_prepare":
+        parser.error("--buflo-duration-policy is only valid for _prepare")
+    if args.buflo_duration_policy is not None:
+        from .buflo_duration_budget import preparation_policy
+        preparation_policy(args.buflo_duration_policy)
     frozen_requested = args.frozen_application_manifest is not None or args.frozen_application_manifest_sha256 is not None
     if frozen_requested and (args.action != "_prepare" or args.frozen_application_manifest is None
                              or args.frozen_application_manifest_sha256 is None):
@@ -1011,6 +1043,10 @@ def main(argv: list[str] | None = None) -> int:
     cap = _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
     job = _object(args.job)
     if args.action == "_prepare":
+        if "buflo_duration_policy" in job:
+            raise ValueError("the immutable preparation job has no duration field; use the explicit CLI option")
+        if args.buflo_duration_policy is not None:
+            job = {**job, "buflo_duration_policy": args.buflo_duration_policy}
         if "buflo_chaff_cap_bytes" in job:
             raise ValueError("the immutable preparation job has no cap field; use the explicit CLI option")
         if "frozen_application_manifest" in job or "frozen_application_manifest_sha256" in job:

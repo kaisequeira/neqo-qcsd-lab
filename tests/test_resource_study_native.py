@@ -577,3 +577,165 @@ def test_buflo_missing_or_wrong_rebound_prepared_policy_refuses_before_capture(t
                                    runtime=runtime(executable), client=executable)
         assert not collected
         assert native._enrollment(root, HOST, runtime(executable))[1] == checked
+
+
+# Source070 offline controls. Synthetic GET/qualification output is not a live pass.
+def test_source070_exact_opt_in_tuple_receipt_and_historical_bounds(tmp_path):
+    from qcsd_lab import buflo_duration_budget as budget
+    from qcsd_lab import parameters
+
+    raw = budget.cadence64_1280_parameter_bytes()
+    assert hashlib.sha256(raw).hexdigest() == budget.CADENCE64_1280_PARAMETER_SHA256
+    assert budget.CADENCE64_PARAMETER_SHA256 == "5c35c9a6c0ce9d424b3e9cfc9e05a48713b9260fd1385dfba2d79048f58f283e"
+    assert budget.preparation_policy() == budget.CADENCE64_POLICY
+    assert budget.preparation_policy(budget.CADENCE64_1280_POLICY) == budget.CADENCE64_1280_POLICY
+    assert budget.CADENCE64_1280_PARAMETERS == {
+        **budget.CADENCE64_PARAMETERS, "max_events": 20_000,
+        budget.PARAMETER_FIELD: budget.CADENCE64_1280_POLICY}
+    budget.validate_parameters(json.loads(raw))
+    parameters._validate_buflo(json.loads(raw), 1200, tmp_path / "parameters.json")
+    for altered in (
+        {**json.loads(raw), "max_events": 20_001},
+        {**json.loads(raw), "max_events": True},
+        {**json.loads(raw), budget.PARAMETER_FIELD: budget.CADENCE64_POLICY},
+        {k: v for k, v in json.loads(raw).items() if k != budget.PARAMETER_FIELD},
+    ):
+        with pytest.raises(ValueError):
+            parameters._validate_buflo(altered, 1200, tmp_path / "invalid.json")
+    for value in (True, "unknown-duration", budget.POLICY):
+        with pytest.raises(ValueError):
+            budget.preparation_policy(value)
+    path = "/exact/selected-1280.json"
+    run = {"method": "GET", "defense_parameters": {
+        "kind": "buflo", "path": path, "sha256": budget.CADENCE64_1280_PARAMETER_SHA256,
+        "implementation_scope": "client_only_quic", "paper_equivalent": False,
+        budget.RUN_FIELD: dict(budget.CADENCE64_1280_RECEIPT)},
+        "resolved_configuration": {"defense": {"kind": "buflo", "parameters": path}}}
+    metrics = budget.validate_native_receipt(run, raw, expected_path=path)
+    assert budget.schedule_bounds(metrics) == (20_000, 1_280_000_000)
+    assert budget.schedule_bounds({}) == (6_000, 120_000_000)
+    for receipt, digest, expected in (
+        (budget.RECEIPT, budget.PARAMETER_SHA256, (10_000, 200_000_000)),
+        (budget.CADENCE64_RECEIPT, budget.CADENCE64_PARAMETER_SHA256, (10_000, 640_000_000)),
+    ):
+        assert budget.schedule_bounds({budget.RUN_FIELD: receipt,
+            "buflo_duration_budget_parameter_sha256": digest}) == expected
+    assert budget.cadence64_receipt_matches(budget.CADENCE64_1280_RECEIPT,
+                                           budget.CADENCE64_1280_PARAMETER_SHA256)
+    assert not budget.cadence64_receipt_matches(budget.CADENCE64_1280_RECEIPT,
+                                               budget.CADENCE64_PARAMETER_SHA256)
+    assert not budget.cadence64_receipt_matches(budget.CADENCE64_RECEIPT,
+                                               budget.CADENCE64_1280_PARAMETER_SHA256)
+    assert not budget.cadence64_receipt_matches(
+        {**budget.CADENCE64_1280_RECEIPT, "max_events": True},
+        budget.CADENCE64_1280_PARAMETER_SHA256)
+    run["defense_parameters"][budget.RUN_FIELD] = dict(budget.CADENCE64_RECEIPT)
+    with pytest.raises(ValueError):
+        budget.validate_native_receipt(run, raw, expected_path=path)
+    original = {"timeout_seconds": 120, "capture_seconds": 180}
+    assert budget.capture_limits("buflo", original, policy=budget.POLICY) == {
+        "timeout_seconds": 240, "capture_seconds": 300}
+    assert budget.capture_limits("buflo", original, policy=budget.CADENCE64_POLICY) == {
+        "timeout_seconds": 680, "capture_seconds": 740}
+    assert budget.capture_limits("buflo", original, policy=budget.CADENCE64_1280_POLICY) == {
+        "timeout_seconds": 1320, "capture_seconds": 1380}
+
+
+def test_source070_fresh_preparation_launch_router_and_missing_selector_refusal(tmp_path, executable, monkeypatch):
+    from qcsd_lab import buflo_duration_budget as budget
+    from qcsd_lab import buflo_fin_permission as fin
+    from qcsd_lab import resource_study_runtime as rt
+
+    old_root, old, _ = prepared(tmp_path / "default", executable, monkeypatch)
+    assert old["mode_policies"] == native.mode_policies()
+    assert old["mode_settings"]["buflo"]["timeout_seconds"] == 680
+    assert "buflo_duration_policy" not in json.loads(
+        (old_root / old["paths"]["prepared_workload"]).read_bytes())["preparation"]
+    assert rt._router_capture_seconds(old) == 740
+    install_process_stub(monkeypatch)
+    root = tmp_path / "explicit"
+    enrollment = native.prepare_domain(HOST, URLS, root, client=executable,
+        runtime=runtime(executable), buflo_duration_policy=budget.CADENCE64_1280_POLICY)
+    monkeypatch.setattr(collector, "NEQO_CLIENT", str(executable))
+    checked_root, checked = native._enrollment(root, HOST, runtime(executable))
+    assert checked_root == root
+    source = root / checked["paths"]["prepared_workload"]
+    assert json.loads(source.read_bytes())["preparation"]["buflo_duration_policy"] == budget.CADENCE64_1280_POLICY
+    assert checked["mode_policies"] == native.mode_policies(buflo_duration_policy=budget.CADENCE64_1280_POLICY)
+    # This is explicitly changed science: the original C019 Native-only
+    # unchanged-science comparison must not erase the policy/settings difference.
+    assert checked["mode_policies"]["buflo"] != old["mode_policies"]["buflo"]
+    assert checked["mode_settings"]["buflo"] != old["mode_settings"]["buflo"]
+    assert all(checked["mode_policies"][mode] == old["mode_policies"][mode]
+               for mode in native.MODES if mode != "buflo")
+    defense, context = native._capture_inputs("buflo", root, checked)
+    assert (context.limits.timeout_seconds, context.limits.capture_seconds) == (1320, 1380)
+    assert defense.parameters_sha256 == budget.CADENCE64_1280_PARAMETER_SHA256
+    assert getattr(context, fin.PREPARATION_FIELD) == fin.POLICY
+    command = collector._client_command(root / checked["paths"]["manifest"],
+        root / checked["paths"]["chaff_manifest"], HOST, defense, 9, context,
+        tmp_path / "explicit-command", application_workload_source=source,
+        application_response_policy="completed-terminal-http-errors-v1")
+    assert command.count(fin.CLI_FLAG) == 1
+    assert command[command.index("--application-workload-source") + 1] == str(source)
+    assert rt._router_capture_seconds(checked) == 1380
+    for field, value in (("capture_seconds", 740), ("timeout_seconds", True)):
+        forged = copy.deepcopy(checked)
+        forged["mode_settings"]["buflo"][field] = value
+        with pytest.raises(ValueError, match="router capture bound"):
+            rt._router_capture_seconds(forged)
+    for value in (None, budget.CADENCE64_POLICY):
+        prepared_source = json.loads(source.read_bytes())
+        if value is None:
+            prepared_source["preparation"].pop("buflo_duration_policy", None)
+        else:
+            prepared_source["preparation"]["buflo_duration_policy"] = value
+        write(source, prepared_source)
+        forged = json.loads((root / "enrollment.json").read_bytes())
+        forged["files"][forged["paths"]["prepared_workload"]] = sha256_file(source)
+        write(root / "enrollment.json", forged)
+        # Rebind only the private fixture to reach the semantic launch guard.
+        _, rechecked = native._enrollment(root, HOST, runtime(executable))
+        with pytest.raises(ValueError, match="matching explicit duration selector"):
+            native._capture_inputs("buflo", root, rechecked)
+
+
+def test_source070_public_selector_and_complete_reader_closure(tmp_path, monkeypatch, capsys):
+    from qcsd_lab import buflo_duration_budget as budget
+    from qcsd_lab import resource_study as public
+    from qcsd_lab import resource_study_cohorts as cohorts
+    from qcsd_lab import resource_study_reader_compatibility as helper
+    from qcsd_lab import resource_study_runtime as rt
+
+    untouched = tmp_path / "not-created"
+    assert public.main(["prepare", "--root", str(untouched),
+                        "--buflo-duration-policy", budget.CADENCE64_1280_POLICY]) == 1
+    assert "requires fresh live enrollment" in capsys.readouterr().out
+    assert not untouched.exists()
+    calls = []
+    monkeypatch.setattr(native, "prepare_domain", lambda **kw: calls.append(kw) or {})
+    job = tmp_path / "job.json"
+    write(job, {"sentinel": "same immutable job"})
+    assert native.main(["_prepare", "--job", str(job), "--buflo-duration-policy",
+                        budget.CADENCE64_1280_POLICY]) == 0
+    assert calls == [{"sentinel": "same immutable job",
+                      "buflo_duration_policy": budget.CADENCE64_1280_POLICY}]
+    write(job, {"buflo_duration_policy": budget.CADENCE64_1280_POLICY})
+    with pytest.raises(ValueError, match="immutable preparation job"):
+        native.main(["_prepare", "--job", str(job)])
+    assert len(calls) == 1
+    with pytest.raises(SystemExit):
+        native.main(["_capture", "--job", str(job), "--buflo-duration-policy",
+                     budget.CADENCE64_1280_POLICY])
+    output = tmp_path / "no-runtime-dns-or-GET"
+    with pytest.raises(ValueError, match="unknown explicit"):
+        rt.PreparationRuntime(tmp_path, {}).prepare({}, output, buflo_duration_policy="unknown")
+    assert not output.exists()
+    actual = cohorts._fresh_verifier_contract()
+    qualified = helper.qualify_execution(actual)
+    assert helper.EXECUTION_KIND == "070"
+    assert actual == qualified.contract() and actual["transitive_source_files"] == 171
+    prior = helper.prior_complete_fin069_execution_contract()
+    assert helper.require_supported(prior, qualified) is True
+    with pytest.raises(ValueError, match="unsupported or changed Source070"):
+        helper.qualify_execution(prior)

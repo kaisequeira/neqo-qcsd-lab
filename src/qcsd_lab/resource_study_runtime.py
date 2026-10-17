@@ -20,7 +20,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Mapping
 
 from .resource_study_inputs import canonical_json, sha256_file
 from .resource_study_verify import load
@@ -276,7 +276,11 @@ class PreparationRuntime:
         self.root, self.runtime = root.absolute(), runtime
 
     def prepare(self, candidate: dict, output: Path, *, buflo_chaff_cap_bytes: int | None = None,
+                buflo_duration_policy: str | None = None,
                 frozen_application_manifest: dict | None = None) -> dict:
+        if buflo_duration_policy is not None:
+            from .buflo_duration_budget import preparation_policy
+            preparation_policy(buflo_duration_policy)
         frozen_raw = None
         if frozen_application_manifest is not None:
             from .resource_study_selection import read_frozen_application_manifest
@@ -294,6 +298,8 @@ class PreparationRuntime:
             )
             cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
             native_prepare_options = ("--buflo-chaff-cap-bytes", str(cap))
+        if buflo_duration_policy is not None:
+            native_prepare_options += ("--buflo-duration-policy", buflo_duration_policy)
         if frozen_application_manifest is not None:
             native_prepare_options += ("--frozen-application-manifest",
                 str(self.root / frozen_application_manifest["manifest_path"]),
@@ -310,6 +316,9 @@ class PreparationRuntime:
                 timeout=max(600, len(candidate["urls"]) * 125 + 600))
         _put(output / "result.json", json.loads(result.splitlines()[-1]))
         enrollment = load(output / "result.json")
+        if (buflo_duration_policy is not None
+                and enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy") != buflo_duration_policy):
+            raise ValueError("prepared BuFLO duration differs from the explicit Native CLI option")
         if buflo_chaff_cap_bytes is not None:
             selection = enrollment.get("buflo_chaff_selection")
             if (type(selection) is not dict
@@ -370,6 +379,20 @@ def topology_receipts(image, network_name, network, subnet, router_name, router,
         "capture_position": "router-eth0-ingress-after-client-veth-before-forwarding-and-masquerade"}
     return router_ip, network_receipt, binding
 
+
+def _router_capture_seconds(enrollment: Mapping[str, Any]) -> int:
+    from . import buflo_duration_budget as budget
+    policies = enrollment.get("mode_policies", {}).get("buflo", {})
+    if policies.get("buflo_duration_policy") != budget.CADENCE64_1280_POLICY:
+        return 740
+    settings = enrollment.get("mode_settings", {}).get("buflo", {})
+    budget.validate_parameters(settings.get("parameters"))
+    limits = budget.capture_limits("buflo", {"timeout_seconds": 120, "capture_seconds": 180},
+                                  policy=budget.CADENCE64_1280_POLICY)
+    if (settings["parameters"][budget.PARAMETER_FIELD] != budget.CADENCE64_1280_POLICY
+            or any(type(settings.get(k)) is not int or settings[k] != v for k, v in limits.items())):
+        raise ValueError("router capture bound differs from the explicit enrolled BuFLO duration")
+    return limits["capture_seconds"]
 
 class CaptureRuntime:
     def __init__(self, root: Path, runtime: dict, workers: int, *, hostnames=None):
@@ -566,8 +589,10 @@ class CaptureRuntime:
             sidecar_cpuset = ",".join(map(str, sidecars))
             bridge = json.loads(_docker("network", "inspect", "bridge"))[0]
             from .resource_study_store import StudyStore
-            domains = [e["hostname"] for e in StudyStore(self.root).enrolled()
-                       if self.selected_hostnames is None or e["hostname"] in self.selected_hostnames]
+            router_enrollments = {e["hostname"]: e for e in StudyStore(self.root).enrolled()
+                       if self.selected_hostnames is None or e["hostname"] in self.selected_hostnames}
+            domains = list(router_enrollments)
+            router_capture_limits = {h: _router_capture_seconds(e) for h, e in router_enrollments.items()}
             if not domains:
                 raise ValueError("capture topology requires selected enrolled classes")
             if any(host not in assignments for host in domains):
@@ -596,7 +621,7 @@ class CaptureRuntime:
                 secret = secrets.token_hex(32)
                 router_env = {"QCSD_KERNEL_TX_ROUTER_CAPTURE_ROOT": "/kernel-tx", "QCSD_KERNEL_TX_ROUTER_CAPTURE_SECRET": secret,
                     "QCSD_KERNEL_TX_ROUTER_CAPTURE_INTERFACE": "eth0", "QCSD_KERNEL_TX_ROUTER_CAPTURE_PORT": "19090",
-                    "QCSD_KERNEL_TX_ROUTER_CAPTURE_MAX_SECONDS": "740",
+                    "QCSD_KERNEL_TX_ROUTER_CAPTURE_MAX_SECONDS": str(router_capture_limits[hostname]),
                     "QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND": "routed-public-egress", "QCSD_KERNEL_TX_ROUTER_UPLINK_INTERFACE": "eth1",
                     "QCSD_KERNEL_TX_ROUTER_CLIENT_SUBNET": subnet, "QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE": "1"}
                 router_args = ["create", "--name", prefix + "-router", "--network", network_id,
@@ -894,6 +919,12 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             sidecar_cpuset = ",".join(map(str, sidecars))
             bridge = json.loads(_docker("network", "inspect", "bridge"))[0]
             domains = sorted(self.cell_roots)
+            from .resource_study_store import StudyStore
+            router_enrollments = {e["hostname"]: e for root in self.contexts for e in StudyStore(root).enrolled()
+                                  if self.cell_roots.get(e["hostname"]) == root}
+            if set(router_enrollments) != set(domains):
+                raise ValueError("shared router capture lacks its exact current enrolled class")
+            router_capture_limits = {h: _router_capture_seconds(e) for h, e in router_enrollments.items()}
             if not domains:
                 raise ValueError("capture topology requires selected enrolled classes")
             if any(host not in assignments for host in domains):
@@ -922,7 +953,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                 secret = secrets.token_hex(32)
                 router_env = {"QCSD_KERNEL_TX_ROUTER_CAPTURE_ROOT": "/kernel-tx", "QCSD_KERNEL_TX_ROUTER_CAPTURE_SECRET": secret,
                     "QCSD_KERNEL_TX_ROUTER_CAPTURE_INTERFACE": "eth0", "QCSD_KERNEL_TX_ROUTER_CAPTURE_PORT": "19090",
-                    "QCSD_KERNEL_TX_ROUTER_CAPTURE_MAX_SECONDS": "740",
+                    "QCSD_KERNEL_TX_ROUTER_CAPTURE_MAX_SECONDS": str(router_capture_limits[hostname]),
                     "QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND": "routed-public-egress", "QCSD_KERNEL_TX_ROUTER_UPLINK_INTERFACE": "eth1",
                     "QCSD_KERNEL_TX_ROUTER_CLIENT_SUBNET": subnet, "QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE": "1"}
                 router_args = ["create", "--name", prefix + "-router", "--network", network_id,

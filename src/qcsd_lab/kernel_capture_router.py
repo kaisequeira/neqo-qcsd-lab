@@ -67,8 +67,8 @@ class CaptureState:
         require_masquerade: bool,
         max_duration_seconds: int = 300,
     ) -> None:
-        if type(max_duration_seconds) is not int or max_duration_seconds not in {300, 740}:
-            raise ValueError("router capture maximum duration needs its declared300/740-second bound")
+        if type(max_duration_seconds) is not int or max_duration_seconds not in {300, 740, 1380}:
+            raise ValueError("router capture maximum duration needs its declared300/740/1380-second bound")
         if root.is_symlink() or not root.is_dir() or not root.is_absolute():
             raise ValueError("router capture root must be an existing absolute directory")
         if _SECRET.fullmatch(secret) is None:
@@ -535,7 +535,7 @@ def main() -> None:
     if not raw_port.isdecimal() or not 1 <= int(raw_port) <= 65_535:
         raise SystemExit("router capture service port is invalid")
     raw_max_seconds = os.environ.get("QCSD_KERNEL_TX_ROUTER_CAPTURE_MAX_SECONDS", "300")
-    if raw_max_seconds not in {"300", "740"}:
+    if raw_max_seconds not in {"300", "740", "1380"}:
         raise SystemExit("router capture maximum duration is invalid")
     state = CaptureState(
         root=root,

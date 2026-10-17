@@ -766,12 +766,13 @@ def _validate_buflo_study_parameter_artifact(
         if duration_policy is not None:
             from . import buflo_duration_budget as duration
             if (type(duration_policy) is not str
-                or duration_policy not in {duration.POLICY, duration.CADENCE64_POLICY}
+                or duration_policy not in {duration.POLICY, duration.CADENCE64_POLICY, duration.CADENCE64_1280_POLICY}
                 or receipt.get("duration_budget_policy") != duration_policy):
                 raise ValueError("BuFLO duration provenance differs from its explicit fixed policy")
-            if duration_policy == duration.CADENCE64_POLICY:
+            if duration_policy in {duration.CADENCE64_POLICY, duration.CADENCE64_1280_POLICY}:
                 expected_variant = "QCSD-BuFLO-udp1200-rho64-tau10"
-                expected_semantics = duration.CADENCE64_PARAMETER_SEMANTICS
+                expected_semantics = (duration.CADENCE64_1280_PARAMETER_SEMANTICS
+                    if duration_policy == duration.CADENCE64_1280_POLICY else duration.CADENCE64_PARAMETER_SEMANTICS)
             else:
                 expected_semantics = duration.PARAMETER_SEMANTICS
     else:
@@ -872,7 +873,8 @@ def _validate_buflo_study_parameter_artifact(
     input_policy = BUFLO_STUDY_PARAMETER_INPUT_POLICY
     if duration_policy is not None:
         from . import buflo_duration_budget as duration
-        input_policy = (duration.CADENCE64_INPUT_POLICY if duration_policy == duration.CADENCE64_POLICY
+        input_policy = (duration.CADENCE64_1280_INPUT_POLICY if duration_policy == duration.CADENCE64_1280_POLICY
+                        else duration.CADENCE64_INPUT_POLICY if duration_policy == duration.CADENCE64_POLICY
                         else duration.INPUT_POLICY)
     return ParameterArtifact(
         path=parameter_path,

@@ -697,7 +697,7 @@ def buflo_terminal_state_valid(value: Any) -> bool:
 def _buflo_run_period_us(run: Mapping[str, Any]) -> int:
     """Select64 only after the exact Native/raw/policy tuple has authenticated."""
     from .capture_acceptance_policy import CADENCE64_ACK_START_POLICY, FIELD
-    from .buflo_duration_budget import CADENCE64_POLICY, RUN_FIELD
+    from .buflo_duration_budget import CADENCE64_POLICY, CADENCE64_1280_POLICY, RUN_FIELD
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
     marker = run.get(FIELD)
@@ -706,7 +706,7 @@ def _buflo_run_period_us(run: Mapping[str, Any]) -> int:
     prospective = (isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22
         or isinstance(raw, Mapping) and raw.get("schema_version") in {13, 14}
         or isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_ACK_START_POLICY
-        or isinstance(receipt, Mapping) and receipt.get("policy") == CADENCE64_POLICY)
+        or isinstance(receipt, Mapping) and receipt.get("policy") in {CADENCE64_POLICY, CADENCE64_1280_POLICY})
     if not prospective:
         return 20_000
     if (not isinstance(wakeups, Mapping) or type(wakeups.get("schema_version")) is not int
@@ -2622,10 +2622,9 @@ def _buflo_metric_startup(metrics: Mapping[str, Any]) -> Mapping[str, Any] | Non
     _buflo_schedule_release_window(metrics)
     period_us = 64_000 if marker["policy"] == CADENCE64_ACK_START_POLICY else 20_000
     if period_us == 64_000:
-        from .buflo_duration_budget import RUN_FIELD, CADENCE64_RECEIPT, CADENCE64_PARAMETER_SHA256, validate_receipt
+        from .buflo_duration_budget import RUN_FIELD, validate_receipt, cadence64_receipt_matches
         validate_receipt(metrics.get(RUN_FIELD))
-        if (metrics[RUN_FIELD] != CADENCE64_RECEIPT
-            or metrics.get("buflo_duration_budget_parameter_sha256") != CADENCE64_PARAMETER_SHA256):
+        if not cadence64_receipt_matches(metrics[RUN_FIELD], metrics.get("buflo_duration_budget_parameter_sha256")):
             raise ValueError("64ms startup metrics differ from exact Native duration provenance")
     startup = validate_buflo_startup_receipt(metrics.get("buflo_incoming_startup"), period_us=period_us)
     digest = metrics.get("buflo_incoming_startup_events_sha256")
