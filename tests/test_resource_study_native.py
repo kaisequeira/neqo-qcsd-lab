@@ -499,3 +499,81 @@ def test_only_consecutive_transport_failures_trigger_early_deferral(tmp_path, ex
     result = native.probe_urls(HOST, URLS[:5], tmp_path / "probe", client=executable, runtime=runtime(executable))
     assert len(calls) == 5 and result["deferred"] is None
     assert result["selected_urls"] == [URLS[4]]
+
+
+# Source063 focused offline adapter controls only. The existing prepared()
+# process stub supplies synthetic GET/qualification output; no live proof.
+def test_buflo_prepared_FIN_policy_reaches_context_and_one_native_flag(tmp_path, executable, monkeypatch):
+    from qcsd_lab import buflo_duration_budget as budget
+    from qcsd_lab import buflo_fin_permission as fin
+    from qcsd_lab.application_response_policy import COMPLETE_APPLICATION_DELIVERY_POLICY
+
+    root, enrollment, _ = prepared(tmp_path, executable, monkeypatch)
+    monkeypatch.setattr(collector, "NEQO_CLIENT", str(executable))
+    expected = {"application_body_identity_policy": COMPLETE_APPLICATION_DELIVERY_POLICY,
+                "buflo_duration_policy": budget.CADENCE64_POLICY}
+    # These are the original enrolled science fields; the new launch intent
+    # must remain outside this exact logical mode definition.
+    assert native.mode_policies()["buflo"] == enrollment["mode_policies"]["buflo"] == expected
+    checked_root, checked = native._enrollment(root, HOST, runtime(executable))
+    assert checked_root == root
+    relative = checked["paths"]["prepared_workload"]
+    source = root / relative
+    assert checked["files"][relative] == sha256_file(source)
+    assert json.loads(source.read_bytes())["preparation"][fin.PREPARATION_FIELD] == fin.POLICY
+    defense, context = native._capture_inputs("buflo", root, checked)
+    assert getattr(context, fin.PREPARATION_FIELD) == fin.POLICY
+    command = collector._client_command(
+        root / checked["paths"]["manifest"], root / checked["paths"]["chaff_manifest"],
+        HOST, defense, 9, context, tmp_path / "bf-command",
+        application_workload_source=source,
+        application_response_policy="completed-terminal-http-errors-v1")
+    assert command.count(fin.CLI_FLAG) == 1
+    assert command[command.index("--application-workload-source") + 1] == str(source)
+    # A prepared BF marker cannot enable the opt-in for an ordinary baseline.
+    baseline, ordinary = native._capture_inputs("undefended", root, checked)
+    assert getattr(ordinary, fin.PREPARATION_FIELD, None) is None
+    ordinary_command = collector._client_command(
+        root / checked["paths"]["manifest"], None, HOST, baseline, 10, ordinary,
+        tmp_path / "ordinary-command")
+    assert fin.CLI_FLAG not in ordinary_command
+    assert native._enrollment(root, HOST, runtime(executable))[1] == checked
+
+
+def test_buflo_missing_or_wrong_rebound_prepared_policy_refuses_before_capture(tmp_path, executable, monkeypatch):
+    from qcsd_lab import buflo_fin_permission as fin
+
+    for label, value, message in (
+        ("missing", None, "prepared BuFLO source lacks the explicit FIN permission policy"),
+        ("wrong", "unreviewed-policy", "unsupported explicit preparation/launch policy"),
+    ):
+        root, _, _ = prepared(tmp_path / label, executable, monkeypatch)
+        monkeypatch.setattr(collector, "NEQO_CLIENT", str(executable))
+        enrollment_path = root / "enrollment.json"
+        enrollment = json.loads(enrollment_path.read_bytes())
+        relative = enrollment["paths"]["prepared_workload"]
+        source = root / relative
+        prepared_source = json.loads(source.read_bytes())
+        if value is None:
+            del prepared_source["preparation"][fin.PREPARATION_FIELD]
+        else:
+            prepared_source["preparation"][fin.PREPARATION_FIELD] = value
+        # Deliberate private fixture forgery: rebind the modified file so the
+        # target refusal is policy semantics, rather than a stale digest.
+        write(source, prepared_source)
+        enrollment["files"][relative] = sha256_file(source)
+        write(enrollment_path, enrollment)
+        checked_root, checked = native._enrollment(root, HOST, runtime(executable))
+        assert checked_root == root and checked["files"][relative] == sha256_file(source)
+        collected = []
+
+        def forbidden_collect(*_args, **_kwargs):
+            collected.append(True)
+            raise AssertionError("invalid prepared policy reached collector")
+
+        monkeypatch.setattr(collector, "_collect_attempt", forbidden_collect)
+        with pytest.raises(ValueError, match=message):
+            native.capture_session(HOST, "buflo", root, tmp_path / label / "attempt", seed=9,
+                                   runtime=runtime(executable), client=executable)
+        assert not collected
+        assert native._enrollment(root, HOST, runtime(executable))[1] == checked

@@ -1,9 +1,9 @@
 """Progressive controlled resource-domain replay with independently recoverable cells.
 
-Source062 binds a distinct BuFLO genuine-FIN permission reader and explicit
-launch selection. Historical Source061 and all earlier reader/runtime identities
-remain dated. Resource selection, cell allocation and formal credit code are
-unchanged; the new Native/policy epoch needs its own actual class pilot proof.
+Source063 preserves the original enrolled fixed mode policies and selects the
+Native111 BuFLO FIN-permission implementation from its immutable prepared source.
+Source062 and earlier reader/runtime identities remain dated. Capture, cell
+allocation and formal-credit executable definitions remain unchanged.
 """
 from __future__ import annotations
 

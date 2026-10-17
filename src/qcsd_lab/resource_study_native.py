@@ -590,8 +590,7 @@ def mode_policies() -> dict[str, dict[str, Any]]:
     return {"undefended": dict(common),
         "front": {**common, front.FIELD: front.POLICY, incoming.FIELD: incoming.POLICY},
         "tamaraw": {**common, tamaraw.FIELD: tamaraw.POLICY},
-        "buflo": {**common, "buflo_duration_policy": buflo.CADENCE64_POLICY,
-                  "buflo_fin_permission_policy": "buflo-retained-owned-parser-demand-genuine-fin-permission-release-v1"},
+        "buflo": {**common, "buflo_duration_policy": buflo.CADENCE64_POLICY},
         "cs-buflo": {**common, "parameter_policy": "fixed-cs-buflo-cpsp-live-v1"}}
 
 
@@ -876,6 +875,20 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
     context = SimpleNamespace(qcsd_profile="research-1200", request_policy="as-defined",
         udp_payload_ceiling=1200, limits=collector.Limits(**limits, max_response_bytes=MAX_RESPONSE_BYTES,
             capture_megabytes=256, max_attempts=1), **policies)
+    if mode == "buflo":
+        from . import buflo_fin_permission
+        relative = enrollment["paths"]["prepared_workload"]
+        if (not isinstance(relative, str) or Path(relative).is_absolute()
+                or ".." in Path(relative).parts):
+            raise ValueError("prepared BuFLO policy source path is not relative")
+        prepared = _object(_regular(root / relative))
+        preparation = prepared.get("preparation")
+        selected = buflo_fin_permission.validate_policy(
+            preparation.get(buflo_fin_permission.PREPARATION_FIELD)
+            if isinstance(preparation, Mapping) else None)
+        if selected != buflo_fin_permission.POLICY:
+            raise ValueError("prepared BuFLO source lacks the explicit FIN permission policy")
+        setattr(context, buflo_fin_permission.PREPARATION_FIELD, selected)
     if mode == "front":
         context.front_configuration_path = root / enrollment["paths"]["front_config"]
     if mode == "tamaraw":
