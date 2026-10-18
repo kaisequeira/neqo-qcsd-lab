@@ -791,7 +791,14 @@ def require_capture_membership(store, parent):
 
 
 @contextmanager
-def capture_records_scope(parent, *, writer_root):
+def capture_records_scope(parent, *, writer_root, latest_only=False):
+    """Copy callback inputs without exposing the private validated ancestry.
+
+    The opt-in current-head list is only for guards which consume records[-1].
+    Complete history remains private and still runs every original full check.
+    """
+    if type(latest_only) is not bool:
+        raise ValueError("capture records view must select an explicit boolean")
     binding = _CAPTURE_AUTHORITY.get()
     if binding is None:
         # Caller retains its original _records position and short circuits.
@@ -808,8 +815,8 @@ def capture_records_scope(parent, *, writer_root):
         raise ValueError("capture authority callback has a foreign owning root")
     auth.check(); body_error = None
     try:
-        # The prototype deliberately copies the complete private value.
-        yield deepcopy(auth.records)
+        # Never hand a callback the private value, including nested head data.
+        yield deepcopy(auth.records[-1:] if latest_only else auth.records)
     except BaseException as error:
         body_error = error
         raise
@@ -2173,7 +2180,7 @@ def eligible_cells(store, cells):
         return frozenset(result)
 
 
-def counts_snapshot(store, cells):
+def counts_snapshot(store, cells, *, latest_only=False):
     """One parent-locked scheduling hint; reservations/credit recheck authority.
 
     Only the requested current writer cells are included. No count/head/row
@@ -2190,7 +2197,8 @@ def counts_snapshot(store, cells):
     if parent is None:
         if present: raise ValueError("runtime cohort marker lacks epoch parent")
         return None
-    with e._lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
+    with e._lock(parent.root), capture_records_scope(parent, writer_root=store.root,
+                                                    latest_only=latest_only) as captured_records:
         current = e._records(parent) if captured_records is None else captured_records
         if not current or current[-1]["record_type"] != ADMISSION:
             if present: raise ValueError("runtime cohort marker has no committed admission")

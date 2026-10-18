@@ -40,22 +40,40 @@ SHARED_NATIVE = {
     "prepare_image_digest": "sha256:b8a6bc760399f43f8b59d5748c689723dcdd204243063dd11f380356e6930217",
 }
 
+# Same immutable Native122 capture producer; only the external coordinator
+# pools already admitted writers. No new runtime or scientific eligibility.
+BF122_SHARED_RUNTIME = {'canonical_sha256': 'd199cfc953317c38e9442b92a3a40ef0a8971ecf6c45bab12cc8a138950ae0da', 'client_sha256': '8c78c43f30053af6427ecf3511a938f6c5c30abe0a5a0043c4e37d9054b471f4', 'collection_image_digest': 'sha256:107c7e65c2f8e7d42396b14956b15739d98893ad0970df5d986263f23f304c6d', 'native_commit': '1e9db5f744b0123051f1fe98e6345e88e8b3a773', 'platform': 'linux/arm64', 'prepare_image_digest': 'sha256:c2bef434df5dbcc73a0b449dfa5e83a20044dc77c70222ef446884be24fbef52', 'source': {'image_digest': None, 'lab_commit': '9d2706f091699ee748aca2f5af7b9ba828ee2d64', 'lab_dirty': False, 'lab_patch_sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'neqo_commit': '1e9db5f744b0123051f1fe98e6345e88e8b3a773', 'neqo_dirty': False, 'neqo_patch_sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'neqo_pinned_commit': '1e9db5f744b0123051f1fe98e6345e88e8b3a773'}}
+BF122_SHARED_ROOTS = tuple(
+    "/mnt/lima-neqo-data/neqo-obfuscation/study/"
+    "native122-source079-BuFLO-original50-runtime-cohort-" + f"{index:03d}"
+    for index in range(1, 6)
+)
+
 
 def require_shared_runtime(runtime):
+    if (type(runtime) is dict
+            and runtime.get("native_commit") == BF122_SHARED_RUNTIME["native_commit"]):
+        if runtime != BF122_SHARED_RUNTIME:
+            raise ValueError("BuFLO122 pooling requires the exact unchanged full runtime")
+        return True
     if (type(runtime) is not dict or any(runtime.get(key) != value for key, value in SHARED_NATIVE.items())
             or type(runtime.get("source")) is not dict
             or runtime["source"].get("neqo_commit") != SHARED_NATIVE["native_commit"]):
         raise ValueError("two-root capture requires the exact Native93 runtime")
 
 
-def shared_roots(values):
-    """Two distinct canonical directories, neither nested within the other."""
-    if type(values) not in (list, tuple) or len(values) != 2:
+def shared_roots(values, *, buflo122=False):
+    """Original two CS roots, or the explicit finite admitted BuFLO122 pool."""
+    if buflo122:
+        if (type(values) not in (list, tuple) or not 2 <= len(values) <= 5
+                or any(str(value) not in BF122_SHARED_ROOTS for value in values)):
+            raise ValueError("BuFLO122 pool requires two to five explicit cohort001 through005 roots")
+    elif type(values) not in (list, tuple) or len(values) != 2:
         raise ValueError("two-root capture requires exactly two writer roots")
     roots = [Path(value) for value in values]
     if (any(not root.is_absolute() or root.resolve(strict=True) != root
             or any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir() for root in roots)
-            or len(set(roots)) != 2 or any(a in b.parents for a in roots for b in roots if a != b)):
+            or len(set(roots)) != len(roots) or any(a in b.parents for a in roots for b in roots if a != b)):
         raise ValueError("shared writer roots must be distinct canonical nonnested directories")
     return roots
 
@@ -849,12 +867,12 @@ class MultiRootCaptureRuntime(CaptureRuntime):
     """
 
     def __init__(self, contexts, runtime, workers, *, cell_roots):
-        require_shared_runtime(runtime)
+        buflo122 = require_shared_runtime(runtime) is True
         if type(workers) is not int or not 2 <= workers <= 11:
             raise ValueError("shared capture requires between two and eleven workers")
         if type(contexts) is not dict or any(not isinstance(root, Path) for root in contexts):
             raise ValueError("shared capture requires authenticated root contexts")
-        roots = shared_roots(list(contexts))
+        roots = shared_roots(list(contexts), buflo122=buflo122)
         if (type(cell_roots) is not dict or not cell_roots or len(cell_roots) > 50
                 or set(cell_roots.values()) != set(roots)):
             raise ValueError("shared capture needs an explicit hostname-to-root map")

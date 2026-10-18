@@ -612,7 +612,7 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     enrollment_by_host = {e["hostname"]: e for e in enrolled}
     def scheduling_counts(cells):
         from .resource_study_cohorts import counts_snapshot
-        snapshot = counts_snapshot(store, cells)
+        snapshot = counts_snapshot(store, cells, latest_only=True)
         if snapshot is None:
             local = {(row["hostname"], row["mode"]): row["accepted"] for row in store.status()["cells"]}
             snapshot = {cell: local.get(cell, 0) for cell in cells}
@@ -799,10 +799,10 @@ def verify(root: Path, *, recover=False, all_receipts=False) -> dict:
 def parser():
     result = argparse.ArgumentParser(prog="qcsd-lab resource-study", description=__doc__)
     actions = result.add_subparsers(dest="action", required=True)
-    shared = actions.add_parser("capture-roots", help="one protected flight for two current Native93 CS writer roots")
+    shared = actions.add_parser("capture-roots", help="one protected flight for original Native93 CS roots or the finite Native122 BuFLO pool")
     shared.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
     shared.add_argument("--runtime", type=Path, required=True)
-    shared.add_argument("--cells", type=Path, required=True, help="immutable explicit root/hostname/CS plan")
+    shared.add_argument("--cells", type=Path, required=True, help="immutable explicit root/hostname/mode shared-flight plan")
     shared.add_argument("--cells-sha256", required=True)
     shared.add_argument("--workers", type=int, default=11)
     shared.add_argument("--attempts", type=int, required=True)
@@ -1031,9 +1031,10 @@ def main(argv=None):
 
 
 SHARED_CAPTURE_PLAN = "qcsd-resource-domain-two-root-CS-capture-plan-v1"
+BF122_SHARED_CAPTURE_PLAN = "qcsd-resource-domain-native122-buflo-pool-capture-plan-v1"
 
 
-def _shared_cells(cells):
+def _shared_cells(cells, *, buflo122=False):
     from .resource_study_epochs import _hostname
     from .resource_study_runtime import shared_roots
     if type(cells) is not list or not 2 <= len(cells) <= 50:
@@ -1041,11 +1042,12 @@ def _shared_cells(cells):
     normalized = []
     for row in cells:
         if (type(row) is not dict or set(row) != {"root", "hostname", "mode"}
-                or type(row["root"]) is not str or row["mode"] != "cs-buflo"
+                or type(row["root"]) is not str or row["mode"] != ("buflo" if buflo122 else "cs-buflo")
                 or _hostname(row["hostname"]) != row["hostname"]):
-            raise ValueError("shared capture cells must be exact root/hostname/CS bindings")
+            raise ValueError("shared capture cells must be exact root/hostname/BuFLO122 bindings"
+                             if buflo122 else "shared capture cells must be exact root/hostname/CS bindings")
         normalized.append((Path(row["root"]), row["hostname"], row["mode"]))
-    roots = shared_roots(list(dict.fromkeys(root for root, _, _ in normalized)))
+    roots = shared_roots(list(dict.fromkeys(root for root, _, _ in normalized)), buflo122=buflo122)
     if len({(host, mode) for _, host, mode in normalized}) != len(normalized):
         raise ValueError("shared capture repeats a logical hostname/mode cell")
     return roots, normalized
@@ -1056,8 +1058,8 @@ def _multiroot_context(parent, runtime, cells):
     from . import resource_study_epochs as epochs
     from . import resource_study_cohorts as cohorts
     from .resource_study_runtime import require_shared_runtime
-    require_shared_runtime(runtime)
-    roots, normalized = _shared_cells(cells)
+    buflo122 = require_shared_runtime(runtime) is True
+    roots, normalized = _shared_cells(cells, buflo122=buflo122)
     parent = epochs._regular(parent, directory=True)
     if parent in roots or any(parent in root.parents or root in parent.parents for root in roots):
         raise ValueError("shared capture parent and writer roots must be separate")
@@ -1094,6 +1096,11 @@ def _multiroot_context(parent, runtime, cells):
                     or cell["definition"]["ready"] is not True
                     or cell["definition"]["native"] != [runtime["client_sha256"], runtime["platform"], runtime["native_commit"]]):
                 raise ValueError("shared capture enrollment/runtime/readiness differs")
+            if buflo122 and (cell["definition"]["policies"].get("buflo_duration_policy")
+                             != "rapid-v7-fixed-64ms-640s-duration-budget-v1"
+                    or enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy")
+                             != "rapid-v7-fixed-64ms-640s-duration-budget-v1"):
+                raise ValueError("BuFLO122 pool requires each unchanged admitted640 treatment")
             jobs[(host, mode)] = {"root": root, "store": store, "enrollment": enrollment}
         authority = {"sequence": current["sequence"], "sha256": epochs._sha(current)}
     return contexts, jobs, authority
@@ -1116,7 +1123,7 @@ def _shared_pilot(root, enrollment, runtime, mode):
 
 def capture_roots(parent: Path, runtime: dict, cells: list, *, workers=11, budget=None,
                   stop=None, backend=None, chunk_sessions=CHUNK, pilot=False):
-    """Two current CS writer roots, one bounded global queue and Docker flight.
+    """Original CS pair or finite current BuFLO122 pool, one protected flight.
 
     Counts only choose work. Each owning Store still performs its original
     fresh global quota/tuple/head/fence and matching-pilot checks at mutation.
@@ -1130,7 +1137,11 @@ def capture_roots(parent: Path, runtime: dict, cells: list, *, workers=11, budge
         raise ValueError("chunk size must be between one and twenty")
     if type(pilot) is not bool:
         raise ValueError("shared pilot flag must be boolean")
-    roots, _ = _shared_cells(cells)
+    from .resource_study_runtime import require_shared_runtime
+    buflo122 = require_shared_runtime(runtime) is True
+    if buflo122 and pilot:
+        raise ValueError("BuFLO122 pool is continuation-only; use each owning root for genuine own pilots")
+    roots, _ = _shared_cells(cells, buflo122=buflo122)
     from .resource_study_cohorts import source_operation
     with source_operation(roots[0]) as source_auth:
         if source_auth is None:
@@ -1144,10 +1155,10 @@ def load_shared_capture_plan(path, digest, parent):
     from .resource_study_selection import _read, _json
     value = _json(_read(path, digest))
     if (set(value) != {"record_type", "schema_version", "parent", "cells"}
-            or value["record_type"] != SHARED_CAPTURE_PLAN or type(value["schema_version"]) is not int
+            or value["record_type"] not in (SHARED_CAPTURE_PLAN, BF122_SHARED_CAPTURE_PLAN) or type(value["schema_version"]) is not int
             or value["schema_version"] != 1 or value["parent"] != str(parent)):
         raise ValueError("shared capture plan differs from its explicit parent/schema")
-    _shared_cells(value["cells"])
+    _shared_cells(value["cells"], buflo122=value["record_type"] == BF122_SHARED_CAPTURE_PLAN)
     return value["cells"]
 
 
@@ -1190,7 +1201,7 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
         for root in roots:
             selected = [cell for cell in cells if jobs[cell]["root"] == root]
             if selected:
-                values = counts_snapshot(next(jobs[cell]["store"] for cell in selected), selected)
+                values = counts_snapshot(next(jobs[cell]["store"] for cell in selected), selected, latest_only=True)
                 if values is None:
                     raise ValueError("shared capture requires committed runtime-cohort count authority")
                 snapshot.update(values)
@@ -1340,7 +1351,9 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                                               "reason": result["allocation_error"]})
                 if result.get("pilot_passed"):
                     completed_pilots.add(result["cell"])
-    return {"record_type": "qcsd-resource-domain-two-root-CS-capture-result-v1",
+    return {"record_type": ("qcsd-resource-domain-native122-buflo-pool-capture-result-v1"
+                            if all(mode == "buflo" for _, mode in jobs)
+                            else "qcsd-resource-domain-two-root-CS-capture-result-v1"),
         "schema_version": 1, "parent": str(parent), "admission_at_start": authority,
         "roots": [{"root": str(root), "study_sha256": context["study_sha256"],
                    "progress": StudyStore(root).status()} for root, context in contexts.items()],

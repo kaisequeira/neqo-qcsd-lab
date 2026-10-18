@@ -640,7 +640,7 @@ def mutate_attempt(store, identifier, operation):
     if parent is None:
         return operation()
     from .resource_study_cohorts import capture_records_scope
-    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
+    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root, latest_only=True) as captured_records:
         records = (_records(parent) if captured_records is None else captured_records)
         if not records or "class_transition" not in records[-1]:
             return operation()
@@ -679,8 +679,10 @@ def stable_lineage_active(store):
     parent = _membership(store)
     if parent is None:
         return False
-    records = _records(parent)
-    return bool(records and records[-1].get("class_transition") is not None)
+    from .resource_study_cohorts import capture_records_scope
+    with capture_records_scope(parent, writer_root=store.root, latest_only=True) as captured_records:
+        records = _records(parent) if captured_records is None else captured_records
+        return bool(records and records[-1].get("class_transition") is not None)
 
 
 def _active(store, host, mode, records):
@@ -762,7 +764,7 @@ def reserve(store, hostname, mode, operation, *, purpose="formal"):
             _pilot(store, _cell(store, _hostname(hostname), _mode(mode)))
         return operation()
     from .resource_study_cohorts import capture_records_scope
-    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
+    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root, latest_only=True) as captured_records:
         records = (_records(parent) if captured_records is None else captured_records)
         from .resource_study_cohorts import ADMISSION, reserve as cohort_reserve
         if records and records[-1]["record_type"] == ADMISSION:
@@ -800,7 +802,7 @@ def credit(store, receipt_path, operation):
             _pilot(store, _cell(store, receipt["hostname"], receipt["mode"]))
         return operation()
     from .resource_study_cohorts import capture_records_scope
-    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root) as captured_records:
+    with _lock(parent.root), capture_records_scope(parent, writer_root=store.root, latest_only=True) as captured_records:
         from .resource_study_cohorts import has_authority, credit as cohort_credit
         if has_authority(parent):
             return cohort_credit(store, parent, (_records(parent) if captured_records is None else captured_records), receipt_path, operation)
