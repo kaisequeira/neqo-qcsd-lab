@@ -31,6 +31,7 @@ from .resource_study_network import (ACCEPTANCE as NETWORK_ACCEPTANCE, TUPLE_SCO
 
 RECORD = "qcsd-resource-domain-study-v1"
 CHUNK = 20
+BUFLO_MAX_CONSECUTIVE_COLLECTOR_FAILURES = 3
 INPUT_LIMIT = 16 * 1024 * 1024
 DEFAULT_STORAGE_RESERVE_BYTES = 60 * 1024 ** 3
 
@@ -526,8 +527,10 @@ def capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
 def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
              hostnames=None, stop=None, backend=None, chunk_sessions=CHUNK, pilot=False,
              _source_auth=None) -> dict:
-    """Balanced chunks; a failing cell pauses for this invocation only.
+    """Balanced chunks with at most three consecutive BF collector failures.
 
+    Only a genuine verified BF commit resets that invocation-local streak.
+    Other failure boundaries receive no new BF retry, including pilots.
     A subsequent invocation retries that cell without resetting others. Workers
     never capture the same hostname concurrently. Every attempted reservation
     is durable before any packet is sent.
@@ -604,6 +607,7 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
     paused, busy, completed_pilots, attempts = set(pilot_blocked), set(), set(), 0
     allocation_errors = []
     clock_failures = {}
+    buflo_failures = {}
     tamaraw_retries = {}
     if pilot:
         chunk_sessions = 1
@@ -672,6 +676,8 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                         return bound["facts"]
                     store.commit_verified(receipt_path, validator=checked_this_attempt)
                     credited += 1
+                    if mode == "buflo":
+                        buflo_failures[cell] = 0
             except DuplicateSession as error:
                 # The immutable recording is retained but cannot satisfy a
                 # distinct-five-tuple quota. Move it away from the slot path.
@@ -696,6 +702,20 @@ def _capture(root: Path, runtime: dict, *, workers=2, budget=None, modes=MODES,
                 create_json(root / attempt["path"] / "failure.json", {
                     "attempt_id": attempt["attempt_id"], "mode": mode, "hostname": host,
                     "reason": str(error), "exception": type(error).__name__, "scientific_credit": False})
+                if mode == "buflo":
+                    failure = result.get("failure")
+                    if (not pilot and failure_origin == "collector"
+                            and result.get("success") is False
+                            and isinstance(failure, dict)
+                            and type(failure.get("stage")) is str and failure["stage"]
+                            and type(failure.get("details")) is list and failure["details"]
+                            and all(type(detail) is dict and detail for detail in failure["details"])):
+                        buflo_failures[cell] = buflo_failures.get(cell, 0) + 1
+                        if buflo_failures[cell] < BUFLO_MAX_CONSECUTIVE_COLLECTOR_FAILURES:
+                            continue
+                    # BF never stacks its streak with the separate clock/T
+                    # retry policies; all failures above remain durable negatives.
+                    return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
                 if temporary_clock_failure(result):
                     clock_failures[cell] = clock_failures.get(cell, 0) + 1
                     if clock_failures[cell] < 3:
@@ -1171,8 +1191,10 @@ def load_shared_capture_plan(path, digest, parent):
 
 def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                    chunk_sessions, pilot, _source_auth):
-    """Balanced chunks; a failing cell pauses for this invocation only.
+    """Balanced chunks with at most three consecutive BF collector failures.
 
+    Only a genuine verified BF commit resets that invocation-local streak.
+    Other failure boundaries receive no new BF retry, including pilots.
     A subsequent invocation retries that cell without resetting others. Workers
     never capture the same hostname concurrently. Every attempted reservation
     is durable before any packet is sent.
@@ -1198,6 +1220,7 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
     paused, busy, completed_pilots, attempts = set(pilot_blocked), set(), set(), 0
     allocation_errors = []
     clock_failures = {}
+    buflo_failures = {}
     tamaraw_retries = {}
     if pilot:
         chunk_sessions = 1
@@ -1271,6 +1294,8 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                         return bound["facts"]
                     store.commit_verified(receipt_path, validator=checked_this_attempt)
                     credited += 1
+                    if mode == "buflo":
+                        buflo_failures[cell] = 0
             except DuplicateSession as error:
                 # The immutable recording is retained but cannot satisfy a
                 # distinct-five-tuple quota. Move it away from the slot path.
@@ -1295,6 +1320,20 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                 create_json(root / attempt["path"] / "failure.json", {
                     "attempt_id": attempt["attempt_id"], "mode": mode, "hostname": host,
                     "reason": str(error), "exception": type(error).__name__, "scientific_credit": False})
+                if mode == "buflo":
+                    failure = result.get("failure")
+                    if (not pilot and failure_origin == "collector"
+                            and result.get("success") is False
+                            and isinstance(failure, dict)
+                            and type(failure.get("stage")) is str and failure["stage"]
+                            and type(failure.get("details")) is list and failure["details"]
+                            and all(type(detail) is dict and detail for detail in failure["details"])):
+                        buflo_failures[cell] = buflo_failures.get(cell, 0) + 1
+                        if buflo_failures[cell] < BUFLO_MAX_CONSECUTIVE_COLLECTOR_FAILURES:
+                            continue
+                    # BF never stacks its streak with the separate clock/T
+                    # retry policies; all failures above remain durable negatives.
+                    return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
                 if temporary_clock_failure(result):
                     clock_failures[cell] = clock_failures.get(cell, 0) + 1
                     if clock_failures[cell] < 3:
