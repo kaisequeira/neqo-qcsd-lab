@@ -1197,6 +1197,260 @@ def _scope_keys(cells, hosts, modes):
     return keys
 
 
+# The producer remains the original Native122 runtime. This is an explicit
+# append-only cover-selection admission, never an ordinary Native change.
+COVER_DECLARATION = "qcsd-resource-domain-same-runtime-buflo-capped-cover-declaration-v1"
+COVER_CHANGE = "buflo-capped-cover"
+COVER_CAP = 65536
+COVER_POLICY640 = "rapid-v7-fixed-64ms-640s-duration-budget-v1"
+
+
+def _cover_input(store, enrollment, key):
+    paths, inventory = enrollment.get("paths"), enrollment.get("files")
+    if type(paths) is not dict or type(inventory) is not dict:
+        raise ValueError("cover replacement lacks its original enrollment launch inventory")
+    relative = paths.get(key)
+    if (type(relative) is not str or Path(relative).is_absolute()
+            or Path(relative).as_posix() != relative or ".." in Path(relative).parts):
+        raise ValueError("cover replacement launch input is not canonical and relative")
+    digest = inventory.get(relative); _digest(digest)
+    path = store._relative(relative)
+    scope = _PLAN_READ_SCOPE.get()
+    if scope is not None:
+        if type(scope) is not _RecordsRead: raise ValueError("foreign cover records input scope")
+        scope.file(path, digest)
+    _, actual, raw = _records_file(path, content=True)
+    if actual != digest:
+        raise ValueError("cover replacement immutable launch input changed")
+    return {"path": relative, "sha256": digest}, _load(raw)
+
+
+def _cover_binding(cell, *, capped):
+    """Saved launch metadata only; no new qualification or capture operation."""
+    from . import resource_study_native as native
+    from . import chaff_qualification as chaff
+    from .resource_study_runtime import BF122_SHARED_RUNTIME
+    if type(capped) is not bool or cell["mode"] != "buflo":
+        raise ValueError("cover replacement is exclusively a typed BuFLO transition")
+    store = StudyStore(cell["root"])
+    if not _same(cell, _records_cell(cell)):
+        raise ValueError("cover replacement cell differs from its immutable enrollment")
+    raw, observation = store._file(cell["enrollment_path"], cell["enrollment_sha256"])
+    enrollment = _load(raw)
+    if (observation["mode"] != "0444" or enrollment.get("hostname") != cell["hostname"]
+            or enrollment.get("mode_readiness", {}).get("buflo") is not True
+            or not _same(enrollment.get("runtime"), BF122_SHARED_RUNTIME)
+            or cell["definition"]["ready"] is not True
+            or cell["definition"]["policies"].get("buflo_duration_policy") != COVER_POLICY640):
+        raise ValueError("cover replacement requires the exact ready Native122640 producer")
+    manifest_ref, application = _cover_input(store, enrollment, "manifest")
+    prepared_ref, prepared = _cover_input(store, enrollment, "prepared_workload")
+    resources = application.get("resources") if type(application) is dict else None
+    if (type(resources) is not list or len(resources) != 20
+            or any(type(row) is not dict or type(row.get("id")) is not int for row in resources)
+            or [row["id"] for row in resources] != list(range(20))
+            or [row.get("url") for row in resources] != cell["definition"]["urls"]
+            or len(set(cell["definition"]["urls"])) != 20
+            or enrollment.get("workload_path") != manifest_ref["path"]
+            or enrollment.get("workload_sha256") != manifest_ref["sha256"]
+            or cell["definition"]["workload_sha256"] != manifest_ref["sha256"]
+            or type(prepared) is not dict or not _same(prepared.get("resources"), resources)):
+        raise ValueError("cover replacement changed the frozen original ordered twenty")
+    selection = None
+    if capped:
+        selection = native.validate_buflo_capped_enrollment(store.root, enrollment)
+        if (type(selection) is not dict or type(selection.get("cap_bytes")) is not int
+                or selection["cap_bytes"] != COVER_CAP):
+            raise ValueError("cover replacement requires genuine saved65536 qualification")
+        sidecar_ref, _ = _cover_input(store, enrollment, "buflo_chaff_sidecar")
+        cover_ref, manifest = _cover_input(store, enrollment, "buflo_chaff_manifest")
+        if (selection["sidecar_sha256"] != sidecar_ref["sha256"]
+                or selection["native_manifest_sha256"] != cover_ref["sha256"]
+                or selection["application_workload_sha256"] != prepared_ref["sha256"]):
+            raise ValueError("cover replacement saved qualification launch binding differs")
+        launch = {"chaff_manifest": cover_ref, "sidecar": sidecar_ref}
+    else:
+        if "buflo_chaff_selection" in enrollment:
+            raise ValueError("cover replacement before member must be uncapped")
+        cover_ref, manifest = _cover_input(store, enrollment, "chaff_manifest")
+        launch = {"chaff_manifest": cover_ref}
+    rows = manifest.get("resources") if type(manifest) is dict else None
+    identifier = manifest.get("selected_chaff_resource_id") if type(manifest) is dict else None
+    if (type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict
+            or type(identifier) is not int or not 0 <= identifier < 20
+            or rows[0].get("id") != identifier or type(rows[0].get("id")) is not int
+            or rows[0].get("url") != resources[identifier]["url"]
+            or manifest.get("application_workload_sha256") != prepared_ref["sha256"]):
+        raise ValueError("cover replacement manifest is outside its original prepared twenty")
+    resource = rows[0]; proof = resource.get("chaff_qualification")
+    if type(proof) is not dict:
+        raise ValueError("cover replacement lacks its saved qualified response identity")
+    response = proof.get("expected_response")
+    chaff._validate_expected_response(response)
+    if response["content_encoding"] != "identity":
+        raise ValueError("cover replacement response must retain identity encoding")
+    if capped:
+        if (not 1 <= identifier <= 19 or response["body_bytes"] > COVER_CAP
+                or selection["selected_chaff_resource_id"] != identifier):
+            raise ValueError("cover replacement capped auxiliary identity differs")
+        # Native's saved validator already replayed the complete sustained
+        # candidate-prefix/receipt contract and derived these exact bytes.
+    else:
+        expected = prepared.get("preparation", {}).get("expected_responses")
+        if (type(expected) is not list or len(expected) != 20
+                or any(type(row) is not dict or type(row.get("resource_id")) is not int
+                       or type(row.get("bytes")) is not int or row["bytes"] <= 0 for row in expected)
+                or {row["resource_id"] for row in expected} != set(range(20))):
+            raise ValueError("uncapped cover lacks original complete prepared response identities")
+        candidates = sorted((row for row in expected if row["bytes"] >= 1200),
+            key=lambda row: (-row["bytes"], row["resource_id"], resources[row["resource_id"]]["url"]))
+        if not candidates or identifier != candidates[0]["resource_id"] or response["body_bytes"] <= COVER_CAP:
+            raise ValueError("uncapped cover must be the original over65536 largest-body selector")
+        request_bytes = proof.get("request_stream_bytes")
+        digest = proof.get("response_qualification_sha256"); _digest(digest)
+        if type(request_bytes) is not int or request_bytes <= 0:
+            raise ValueError("uncapped cover saved request size is invalid")
+        sidecar = {"base_manifest": {"sha256": prepared_ref["sha256"]}, "application_resource_id": 0,
+            "selected_chaff_resource_id": identifier, "resource": {"headers": resources[identifier]["headers"],
+            "expected_response": response, "request_stream_bytes": request_bytes,
+            "response_qualification_sha256": digest}}
+        if not _same(manifest, chaff.derive_response_only_chaff_manifest(sidecar, resources[identifier])):
+            raise ValueError("uncapped cover differs from its exact saved legacy manifest")
+    # Repeat original immutable file fences around the saved cap validator.
+    for key in ("manifest", "prepared_workload", "buflo_chaff_sidecar", "buflo_chaff_manifest") if capped else ("manifest", "prepared_workload", "chaff_manifest"):
+        _cover_input(store, enrollment, key)
+    return {"enrollment": {"root": cell["root"], "path": cell["enrollment_path"], "sha256": cell["enrollment_sha256"]},
+        "runtime": deepcopy(enrollment["runtime"]), "application_manifest": manifest_ref,
+        "prepared_workload": prepared_ref, "launch_inputs": launch, "selection": selection,
+        "resource": {"id": identifier, "url": resource["url"], "headers": deepcopy(resource["headers"]),
+                     "expected_response": deepcopy(response)}}
+
+
+def _cover_affected(old, candidate, entry, transition):
+    if (old["mode"] != "buflo" or candidate["mode"] != "buflo" or "science_strata" in entry
+            or _writer(entry)["cell"] != old or not _same(old["definition"], candidate["definition"])
+            or old["definition"]["ready"] is not True
+            or not _same(entry["science"], _science(candidate, transition))):
+        raise ValueError("cover replacement must preserve the complete ready640 scientific definition")
+    before, after = _cover_binding(old, capped=False), _cover_binding(candidate, capped=True)
+    if (not _same(before["runtime"], after["runtime"])
+            or before["resource"]["id"] == after["resource"]["id"]):
+        raise ValueError("cover replacement needs the same full runtime and a changed auxiliary")
+    return {"hostname": old["hostname"], "mode": "buflo", "previous_cohort_id": entry["writer"],
+        "previous_definition_sha256": old["definition_sha256"],
+        "new_definition_sha256": candidate["definition_sha256"],
+        "before_cover": before, "after_cover": after}
+
+
+def _cover_declaration(parent, new, records, hosts, modes, *, contract=None, retained_digest=None):
+    e = _epochs()
+    if (not records or records[-1]["record_type"] != ADMISSION
+            or records[-1].get("class_transition") is None or modes != ["buflo"]):
+        raise ValueError("cover replacement requires existing selected50 BuFLO cohort authority")
+    prior = records[-1]; cells = {e._key(cell): cell for cell in prior["cells"]}
+    keys = _scope_keys(cells, hosts, modes)
+    roster = prior["class_transition"]["class_selection"]["selected_hostnames"]
+    if len(roster) != 50 or len(set(roster)) != 50 or not set(hosts) <= set(roster):
+        raise ValueError("cover replacement host must remain in the original selected50")
+    contract = verifier_contract() if contract is None else contract
+    affected = [_cover_affected(cells[key], e._cell(new, *key), _entry(prior["cohorts"], key), prior["class_transition"])
+                for key in sorted(keys)]
+    return {"record_type": COVER_DECLARATION, "schema_version": 1,
+        "parent_study_sha256": parent._file("study.json")[1]["sha256"],
+        "predecessor_admission_sha256": e._sha(prior), "selected_hostnames": roster,
+        "affected": affected,
+        "retained_accepted_manifest_sha256": e._sha(_manifest(prior["cohorts"])) if retained_digest is None else retained_digest,
+        "verifier": contract, "stable_lineage_projection": _projection(prior["class_transition"]),
+        "cover_change_authorized": False, "cover_selection_is_analysis_stratum": True, "rationale": ""}
+
+
+def _validate_cover_declaration(value, expected):
+    if (type(value) is not dict or set(value) != set(expected) or value.get("cover_change_authorized") is not True
+            or value.get("cover_selection_is_analysis_stratum") is not True
+            or type(value.get("rationale")) is not str or not value["rationale"].strip()):
+        raise ValueError("explicit capped cover replacement authority and analysis label required")
+    actual = dict(value); actual.update(cover_change_authorized=False, rationale="")
+    if not _same(actual, expected):
+        raise ValueError("cover replacement declaration changed frozen scope, launch inputs or retained credit")
+
+
+def cover_template(parent, cohort_root, *, affected_hostnames=(), affected_modes=()):
+    e = _epochs()
+    parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
+    with e._lock(parent.root):
+        return _cover_declaration(parent, new, e._records(parent), list(affected_hostnames), list(affected_modes))
+
+
+def create_cover_replacement(parent, cohort_root, declaration_path, declaration_sha256):
+    return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=False, cover=True)
+
+
+def _validate_cover_record(parent, records, value, contract):
+    """Historical same-runtime cap admission; never reassert a zero-row root."""
+    e = _epochs(); prior = records[-1]
+    fields = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells",
+              "exclusions", "class_transition", "write_fences", "cohorts", "cohort_memberships", "compatibility_declaration"}
+    if (type(value) is not dict or set(value) != fields or value["record_type"] != ADMISSION or value["change"] != COVER_CHANGE
+            or type(value["sequence"]) is not int or value["sequence"] != len(records)
+            or value["previous_sha256"] != e._sha(prior)
+            or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
+            or not _same(value["class_transition"], prior.get("class_transition"))
+            or value["class_transition"] is None or not _same(value["exclusions"], prior["exclusions"])):
+        raise ValueError("cover replacement parent ancestry/selected50/exclusions differ")
+    ref = value["compatibility_declaration"]
+    if type(ref) is not dict or set(ref) != {"path", "sha256"}:
+        raise ValueError("cover replacement declaration reference differs")
+    declaration = e._read(ref["path"])
+    if sha256_file(ref["path"]) != ref["sha256"] or e._sha(declaration) != ref["sha256"]:
+        raise ValueError("cover replacement declaration immutable bytes changed")
+    affected_rows = declaration.get("affected")
+    row_fields = {"hostname", "mode", "previous_cohort_id", "previous_definition_sha256", "new_definition_sha256", "before_cover", "after_cover"}
+    if (type(affected_rows) is not list or not affected_rows
+            or any(type(row) is not dict or set(row) != row_fields for row in affected_rows)):
+        raise ValueError("cover replacement affected bindings are malformed")
+    affected = {(row["hostname"], row["mode"]) for row in affected_rows}
+    old_entries = {(r["hostname"], r["mode"]): r for r in prior["cohorts"]}
+    new_entries = {(r["hostname"], r["mode"]): r for r in value["cohorts"]}
+    old_cells, new_cells = ({e._key(c): c for c in r["cells"]} for r in (prior, value))
+    if (len(affected) != len(affected_rows) or not affected <= old_entries.keys()
+            or any(mode != "buflo" for _, mode in affected)
+            or len(new_entries) != len(value["cohorts"]) or new_entries.keys() != old_entries.keys()
+            or len(new_cells) != len(value["cells"]) or new_cells.keys() != old_cells.keys()
+            or value["affected"] != [list(key) for key in sorted(affected)]):
+        raise ValueError("cover replacement logical cell inventory differs")
+    next_roots = {new_cells[key]["root"] for key in affected}
+    previous_roots = {c["root"] for record in records for c in record["cells"]}
+    if len(next_roots) != 1 or next_roots & previous_roots:
+        raise ValueError("cover replacement requires one genuinely fresh independent root")
+    expected = _cover_declaration(parent, StudyStore(next(iter(next_roots))), records,
+        sorted({host for host, _ in affected}), ["buflo"], contract=contract,
+        retained_digest=declaration.get("retained_accepted_manifest_sha256"))
+    _validate_cover_declaration(declaration, expected)
+    for key, entry in new_entries.items():
+        old = old_entries[key]
+        if key not in affected:
+            if not _same(entry, old) or not _same(new_cells[key], old_cells[key]):
+                raise ValueError("cover replacement changed an unaffected cell")
+            continue
+        if (set(entry) != {"hostname", "mode", "science", "members", "writer"}
+                or not _same(entry["science"], old["science"])
+                or len(entry["members"]) != len(old["members"])+1):
+            raise ValueError("cover replacement changed logical science or member ancestry")
+        for before, after in zip(old["members"], entry["members"][:-1]):
+            expected_member = dict(after)
+            if before["cohort_id"] == old["writer"]:
+                if after["frozen_accepted"] is None: raise ValueError("cover replacement did not freeze previous writer")
+                expected_member["frozen_accepted"] = None
+            if not _same(before, expected_member):
+                raise ValueError("cover replacement rewrites a historical member")
+        candidate = new_cells[key]; member = _writer(entry)
+        if (entry["members"][-1] is not member or not _same(member, _member(candidate, contract))
+                or not _same(candidate["definition"], old_cells[key]["definition"])
+                or not _same(entry["science"], _science(candidate, value["class_transition"]))):
+            raise ValueError("cover replacement writer/unchanged definition identity differs")
+    _validate_members(parent, value, new_cells, contract)
+
+
 def _declaration(parent, new, records, hosts, modes):
     e = _epochs()
     if not records or records[-1].get("class_transition") is None:
@@ -1742,7 +1996,7 @@ def create_first_modes(parent, cohort_root, declaration_path, declaration_sha256
     return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=True)
 
 
-def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False):
+def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False, cover=False):
     e = _epochs()
     from .resource_study_lineage import prepare_fences, publication_scope, validate_cells, no_retired_history
     parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
@@ -1758,9 +2012,11 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
             raise ValueError("runtime cohort input authority has a stale or foreign actual parent head")
         hosts = sorted({row["hostname"] for row in declaration["affected"]})
         modes = sorted({row["mode"] for row in declaration["affected"]})
+        if cover and (first or budget):
+            raise ValueError("cover replacement cannot combine first-mode or budget authority")
         if first and budget: raise ValueError("budget amendment cannot introduce a first mode")
-        expected = (_budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
-        (_validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
+        expected = (_cover_declaration if cover else _budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
+        (_validate_cover_declaration if cover else _validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
         current_plans = [StudyStore(root).plan() for root in
                          sorted({c["root"] for c in records[-1]["cells"]})]
         if not any("class_selection" in plan and _same(e._plan(new), plan) for plan in current_plans):
@@ -1816,7 +2072,7 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
                 _create(store.root / MARKER, canonical_json(value))
             markers[root] = e._sha(value)
         value = {"record_type": ADMISSION, "sequence": len(records), "previous_sha256": e._sha(records[-1]),
-                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
+                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": COVER_CHANGE if cover else "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
                  "affected": [[row["hostname"], row["mode"]] for row in declaration["affected"]],
                  "cells": [cells[key] for key in sorted(cells)], "exclusions": records[-1]["exclusions"],
                  "class_transition": records[-1]["class_transition"], "write_fences": fences,
@@ -1841,6 +2097,8 @@ def _validate_record(parent, records, value, *, contract=None):
     contract = verifier_contract() if contract is None else contract
     qualified = reader_compatibility.qualify_execution(verifier_contract())
     reader_compatibility.require_supported(contract, qualified)
+    if type(value) is dict and value.get("change") == COVER_CHANGE:
+        return _validate_cover_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == "first-mode":
         return _validate_first_record(parent, records, value, contract)
     budget = type(value) is dict and value.get("change") == "buflo-duration-budget"

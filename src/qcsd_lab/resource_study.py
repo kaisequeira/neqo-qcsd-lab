@@ -808,14 +808,14 @@ def parser():
     shared.add_argument("--attempts", type=int, required=True)
     shared.add_argument("--chunk", type=int, default=CHUNK)
     shared.add_argument("--pilot", action="store_true")
-    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit"):
+    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit"):
         child = actions.add_parser(action, help="explicit compatible-runtime cohort protocol; no imported credit")
         child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
         child.add_argument("--cohort-root", type=Path, required=True, help="fresh separate immutable cohort ledger")
-        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template"}:
+        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template", "cohort-buflo-cover-template"}:
             child.add_argument("--affected-hostname", action="append", required=True)
             child.add_argument("--affected-mode", choices=MODES, action="append", required=True)
-        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit"}:
+        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit"}:
             child.add_argument("--declaration", type=Path, required=True)
             child.add_argument("--declaration-sha256", required=True)
     for action in ("prepare", "capture", "status", "verify", "export"):
@@ -892,6 +892,13 @@ def main(argv=None):
         elif args.action == "cohort-buflo-budget-admit":
             from .resource_study_cohorts import create_budget_amendment
             output = create_budget_amendment(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-buflo-cover-template":
+            from .resource_study_cohorts import cover_template
+            output = cover_template(root, args.cohort_root.absolute(),
+                affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
+        elif args.action == "cohort-buflo-cover-admit":
+            from .resource_study_cohorts import create_cover_replacement
+            output = create_cover_replacement(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
             if args.buflo_duration_policy is not None:
                 from .buflo_duration_budget import preparation_policy
