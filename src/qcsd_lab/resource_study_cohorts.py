@@ -423,7 +423,12 @@ _CAPTURE_AUTHORITY = ContextVar("resource-study-capture-authority", default=None
 
 
 class _CaptureAuthority:
-    """Private ancestry; callback authority always rereads full bytes and SQL."""
+    """Private ancestry with operation-owned immutable input observations.
+
+    Entry/exit rehash every bound byte. Interior callbacks reopen and fence
+    every immutable FD/path/stamp while rereading all original fresh SQL.
+    No SQL/head/row/count/tuple result or scientific proof is cached here.
+    """
     def __init__(self, root, docker_owner):
         from .resource_study_runtime import _DockerLockOwner
         if type(docker_owner) is not _DockerLockOwner:
@@ -496,7 +501,7 @@ class _CaptureAuthority:
                         self.meta[path] = expected
                     self._bind_classes()
                     self.collecting = False
-                    self.check()
+                    self.check(full_bytes=True)
         except BaseException:
             self.close()
             raise
@@ -658,13 +663,20 @@ class _CaptureAuthority:
                 or self._db_identity(path.lstat()) != expected):
             raise ValueError("capture authority parent lock identity changed")
 
-    def check(self):
+    def check(self, *, full_bytes=False):
         self._owner()
+        if type(full_bytes) is not bool:
+            raise ValueError("capture authority byte-check policy must be explicit boolean")
         self._check_epoch_lock()
         if self.records is None or self.collecting:
             raise ValueError("capture authority has no completed full validation")
         for path, expected in self.files.items():
-            if _records_file(Path(path), content=True) != expected:
+            # _records_file opens a new nofollow FD on every hit and checks
+            # canonical/unlinked paths plus before/after FD/path stamps.
+            # The entry stamp includes dev/inode/uid/gid/mode/nlink/size/
+            # mtime_ns/ctime_ns; immutable payloads are rehashed at closure.
+            actual = _records_file(Path(path), content=full_bytes)
+            if actual[0] != expected[0] or full_bytes and actual != expected:
                 raise ValueError("capture authority immutable bytes changed")
         for path in self.absences:
             if Path(path).exists() or Path(path).is_symlink():
@@ -690,14 +702,14 @@ class _CaptureAuthority:
         self._owner()
 
     def finish(self):
-        self._collector(); self.check()
+        self._collector(); self.check(full_bytes=True)
         token = _AUTHORITY_INPUT_COLLECTOR.set(self)
         try:
             with bind_source(self.source_auth), _epochs()._lock(self.parent.root):
                 actual = records(StudyStore(self.parent.root))
                 if not _same(actual, self.records):
                     raise ValueError("capture authority full closure changed immutable ancestry")
-                self.check()
+                self.check(full_bytes=True)
                 if not _same(_load(self.source_auth.profile), _fresh_verifier_contract()):
                     raise ValueError("capture authority qualifying Source bytes changed")
         finally:
