@@ -2595,19 +2595,10 @@ def _runner_job_valid(
             clock="monotonic",
             raw_ns=job["release_monotonic_ns"],
         )
-        or (
-            not _clock_frame_contains(
-                mapping,
-                clock="monotonic",
-                raw_ns=job["deadline_monotonic_ns"],
-            )
-            and not (
-                not strict_success
-                and job.get("terminal_outcome") == "failed"
-                and job["deadline_monotonic_ns"]
-                > mapping["end"]["monotonic"]["clock_ns"]
-            )
-        )
+        # Like the incoming deadline, this is a source-derived future bound,
+        # not an observed clock read. A completed last job may finish before
+        # its unused deadline; actual enqueue/TX/post-TX evidence below still
+        # remains inside the sampled frame and the strict physical window.
         or job["deadline_monotonic_ns"] - job["release_monotonic_ns"]
         != KERNEL_TX_REALIZATION_WINDOW_NS
         or job["deadline_tai_ns"] - job["release_tai_ns"]
