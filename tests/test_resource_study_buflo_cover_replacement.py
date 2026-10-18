@@ -93,7 +93,7 @@ def prepared(store, host, bound, *, capped=False):
         'mode_readiness': dict.fromkeys(MODES, True), 'scientific_credit': False}
     if selection is not None:
         enrollment.update(buflo_chaff_selection=selection, buflo_chaff_qualification_error=None)
-    if host == lineage.INCLUDED:
+    if 'class_selection' in store.plan():
         enrollment['source_occurrences'] = study.candidate_pool(store.root)[host]['source_occurrences']
     return lineage.bind_enrollment(store, enrollment) if 'class_selection' in store.plan() else enrollment
 
