@@ -4114,7 +4114,7 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any], *, bu
             validate_buflo_startup_receipt(startup, period_us=buflo_period_us)
         except ValueError:
             return False
-        selected.pop("buflo_incoming_aggregate_startup" if startup["schema_version"] == 2 else "buflo_incoming_startup")
+        selected.pop("buflo_incoming_aggregate_startup" if startup["schema_version"] == 3 else "buflo_incoming_startup")
     if defense == "buflo" and (
         "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch" not in selected
     ):

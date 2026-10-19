@@ -717,12 +717,12 @@ def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
         validate_buflo_startup_receipt(summary.get("incoming_startup") if isinstance(summary, Mapping) else None,
             period_us=64_000 if prospective else 20_000)
         startup = summary.get("incoming_startup") if isinstance(summary, Mapping) else None
-        if isinstance(startup, Mapping) and startup.get("schema_version") == 2:
+        if isinstance(startup, Mapping) and startup.get("schema_version") == 3:
             diagnostics = run.get("defense_diagnostics")
-            if (not prospective or run.get("migration_commit") != AGGREGATE_STARTUP_NATIVE
+            if (not prospective or not _aggregate_startup_native_supported(run.get("migration_commit"))
                 or not isinstance(diagnostics, Mapping) or "buflo_incoming_startup" in diagnostics
                 or not _exact_json(diagnostics.get("buflo_incoming_aggregate_startup"), startup)):
-                raise ValueError("aggregate cadence64 requires its exact Native127 capability and namespace")
+                raise ValueError("aggregate cadence64 requires its exact Native128 capability and namespace")
     elif _startup_present(run):
         raise ValueError("BuFLO incoming startup lacks its V2 policy")
     return window
@@ -933,10 +933,17 @@ def _validate_buflo_single_startup_evidence(run: Mapping[str, Any], *, runner_di
 
 # SOURCE fragment inserted into the existing capture_acceptance_policy module.
 # The historical single-stream implementation remains a separate unchanged leaf.
-AGGREGATE_STARTUP_POLICY = "qualified-five-chaff-terminal-ack-aggregate-cadence-start-v1"
-AGGREGATE_STARTUP_NATIVE = "d44de7cde8f6e2e72f337c00a01e9816c07753fa"
-AGGREGATE_CAPACITY_POLICY = "same-endpoint-five-acked-known-capacity-v1"
-AGGREGATE_CAPACITY_CONTRACT_SHA256 = "2ccc8a42e9ad289add902d44887d0e728c41ed61c18ef5a396108557918e4d76"
+AGGREGATE_STARTUP_POLICY = "qualified-eight-chaff-terminal-ack-aggregate-cadence-start-v1"
+AGGREGATE_STARTUP_NATIVE = '7db09b9748787c88190c5df1000c9cfd03b11a39'
+AGGREGATE_CAPACITY_POLICY = "same-endpoint-eight-acked-known-capacity-v1"
+AGGREGATE_CAPACITY_CONTRACT_SHA256 = "71eb3123edc625d0b2eddaf34074c4c7bb71e79679944b28d1670c537ee2cc2c"
+
+
+def _aggregate_startup_native_supported(value: Any) -> bool:
+    expected = AGGREGATE_STARTUP_NATIVE
+    return (type(expected) is str and len(expected) == 40
+            and all(c in "0123456789abcdef" for c in expected)
+            and type(value) is str and value == expected)
 
 
 def buflo_startup_diagnostics(diagnostics: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -949,9 +956,9 @@ def buflo_startup_diagnostics(diagnostics: Mapping[str, Any]) -> Mapping[str, An
 
 def validate_buflo_aggregate_startup_receipt(value: Any, *, require_armed: bool = True,
                                           period_us: int = 64_000) -> Mapping[str, Any]:
-    fixed = {"schema_version": 2, "policy": AGGREGATE_STARTUP_POLICY,
+    fixed = {"schema_version": 3, "policy": AGGREGATE_STARTUP_POLICY,
              "time_basis": STARTUP_TIME_BASIS, "period_us": 64_000,
-             "packet_size_bytes": 1_200, "member_count": 5}
+             "packet_size_bytes": 1_200, "member_count": 8}
     nullable = {"armed_at_us", "ready_at_us", "aggregate_endpoint", "members",
                 "aggregate_eligible_exact_capacity_bytes"}
     keys = {*fixed, *nullable, "armed", "startup_suppressed_opportunities",
@@ -965,7 +972,7 @@ def validate_buflo_aggregate_startup_receipt(value: Any, *, require_armed: bool 
         or not _uint(value["startup_suppressed_opportunities"])
         or type(digest) is not str or len(digest) != 64
         or any(character not in "0123456789abcdef" for character in digest)):
-        raise ValueError("invalid five-member BuFLO aggregate startup receipt")
+        raise ValueError("invalid eight-member BuFLO aggregate startup receipt")
     if not value["armed"]:
         if require_armed or any(value[key] is not None for key in nullable):
             raise ValueError("unarmed aggregate startup has fabricated readiness")
@@ -973,7 +980,7 @@ def validate_buflo_aggregate_startup_receipt(value: Any, *, require_armed: bool 
     integer_keys = nullable - {"members"}
     members = value["members"]
     if (any(not _uint(value[key]) for key in integer_keys)
-        or type(members) is not list or len(members) != 5
+        or type(members) is not list or len(members) != 8
         or value["armed_at_us"] != (value["ready_at_us"] // 64_000 + 1) * 64_000
         or value["armed_at_us"] > _U64_MAX
         or value["startup_suppressed_opportunities"] != value["armed_at_us"] // 64_000):
@@ -999,13 +1006,13 @@ def validate_buflo_aggregate_startup_receipt(value: Any, *, require_armed: bool 
         resources.add(member["resource_id"]); total += member["eligible_exact_capacity_bytes"]
     if (streams != sorted(set(streams)) or len(resources) != 1 or not 1_200 <= total <= _U64_MAX
         or total != value["aggregate_eligible_exact_capacity_bytes"]):
-        raise ValueError("aggregate startup capacity is not five unique same-endpoint members")
+        raise ValueError("aggregate startup capacity is not eight unique same-endpoint members")
     return value
 
 
 def validate_buflo_startup_receipt(value: Any, *, require_armed: bool = True,
                                  period_us: int = 20_000) -> Mapping[str, Any]:
-    if isinstance(value, Mapping) and type(value.get("schema_version")) is int and value["schema_version"] == 2:
+    if isinstance(value, Mapping) and type(value.get("schema_version")) is int and value["schema_version"] == 3:
         return validate_buflo_aggregate_startup_receipt(value, require_armed=require_armed, period_us=period_us)
     return _validate_buflo_single_startup_receipt(value, require_armed=require_armed, period_us=period_us)
 
@@ -1101,14 +1108,14 @@ def _aggregate_member_ack_evidence(events: list[Mapping[str, Any]], member: Mapp
 def validate_buflo_aggregate_startup_evidence(run: Mapping[str, Any], *, runner_directory: Path | None,
                                            prepared: Mapping[str, Any] | None = None,
                                            schedule_rows: list[Mapping[str, Any]] | None = None) -> Mapping[str, Any]:
-    """Prove five-member startup; never manufacture a single-stream cell."""
+    """Prove eight-member startup; never manufacture a single-stream cell."""
     marker = run.get(FIELD)
     diagnostics = run.get("defense_diagnostics")
     summary = run.get("buflo_summary")
-    if (run.get("migration_commit") != AGGREGATE_STARTUP_NATIVE
+    if (not _aggregate_startup_native_supported(run.get("migration_commit"))
         or not isinstance(marker, Mapping) or marker.get("policy") != CADENCE64_ACK_START_POLICY
         or not isinstance(diagnostics, Mapping) or not isinstance(summary, Mapping)):
-        raise ValueError("aggregate startup requires its distinct Native127 source and cadence64 contract")
+        raise ValueError("aggregate startup requires its distinct Native128 source and cadence64 contract")
     startup = validate_buflo_aggregate_startup_receipt(summary.get("incoming_startup"))
     if (not _exact_json(buflo_startup_diagnostics(diagnostics), startup)
         or "buflo_incoming_startup" in diagnostics
@@ -1232,7 +1239,7 @@ def validate_buflo_aggregate_startup_evidence(run: Mapping[str, Any], *, runner_
             or resource.get("known_valid") is not True or resource.get("depends_on") != []):
             raise ValueError("aggregate issued Resource lacks its exact qualified estimate")
         body = max(1 if content is None else content, data)
-        if (not 1 <= body < 1_200 or member["known_limit"] < body
+        if (not 515 <= body < 1_200 or member["known_limit"] < body
             or qualified_body is not None and body != qualified_body):
             raise ValueError("aggregate members disagree with their one qualified small-body floor")
         qualified_body = body
@@ -1246,7 +1253,7 @@ def validate_buflo_aggregate_startup_evidence(run: Mapping[str, Any], *, runner_
         # Independent conservative floor: no framing reserve, parser budget or claims count.
         minimum_capacity += max(0, body - requested)
     if minimum_capacity < 1_200:
-        raise ValueError("five qualified current body floors do not independently fund one whole cell")
+        raise ValueError("eight qualified current body floors do not independently fund one whole cell")
     if schedule_rows is None:
         with _regular_child(directory, "schedule.csv").open(newline="", encoding="utf-8") as source:
             schedule_rows = list(csv.DictReader(source))
@@ -1259,7 +1266,7 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
                                   schedule_rows: list[Mapping[str, Any]] | None = None) -> Mapping[str, Any]:
     summary = run.get("buflo_summary")
     startup = summary.get("incoming_startup") if isinstance(summary, Mapping) else None
-    if isinstance(startup, Mapping) and type(startup.get("schema_version")) is int and startup["schema_version"] == 2:
+    if isinstance(startup, Mapping) and type(startup.get("schema_version")) is int and startup["schema_version"] == 3:
         return validate_buflo_aggregate_startup_evidence(run, runner_directory=runner_directory,
             prepared=prepared, schedule_rows=schedule_rows)
     return _validate_buflo_single_startup_evidence(run, runner_directory=runner_directory,

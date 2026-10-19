@@ -104,8 +104,10 @@ UDP_PAYLOAD_CEILING = 1_200
 INCOMING_UDP_PAYLOAD_LIMIT = 65_527
 RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 4
 RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 5
-SMALL_RESPONSE_AGGREGATE_SCOPE = "buflo-small-response-aggregate-v1"
-SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256 = "2ccc8a42e9ad289add902d44887d0e728c41ed61c18ef5a396108557918e4d76"
+SMALL_RESPONSE_AGGREGATE_SCOPE = "buflo-small-response-eight-aggregate-v1"
+SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256 = "71eb3123edc625d0b2eddaf34074c4c7bb71e79679944b28d1670c537ee2cc2c"
+SMALL_RESPONSE_AGGREGATE_PARALLEL_STREAMS = 8
+SMALL_RESPONSE_AGGREGATE_WAVES_PER_EPOCH = 5
 PREFIX_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 3
 PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION = 4
 PRIMARY_ORIGIN_CAPACITY_SCOPE = "primary-origin-capacity-v1"
@@ -2273,21 +2275,23 @@ def derive_response_only_chaff_manifest_v2(
 
 
 def small_response_aggregate_contract() -> dict[str, Any]:
-    """The exact Native127 five-stream known-capacity contract."""
-    return {"policy": "same-endpoint-five-acked-known-capacity-v1", "defense": "buflo",
+    """The explicit Native128 eight-stream known-capacity contract."""
+    return {"policy": "same-endpoint-eight-acked-known-capacity-v1", "defense": "buflo",
         "period_us": 64_000, "packet_size_bytes": 1200, "initial_max_stream_data": 16,
-        "member_count": 5, "max_members": 5, "connection_count": 1,
-        "minimum_initial_exact_capacity_bytes": 1200, "body_range_bytes": [1, 1199],
+        "member_count": 8, "max_members": 8, "connection_count": 1,
+        "minimum_initial_exact_capacity_bytes": 1200, "body_range_bytes": [515, 1199],
         "count_claimable_or_parser_budget": False, "same_original_approved_origin_required": True}
 
 
 def derive_small_response_aggregate_manifest(sidecar: Mapping[str, Any],
         base_resource: Mapping[str, Any]) -> dict[str, Any]:
     value = derive_response_only_chaff_manifest_v2(sidecar, base_resource)
-    value.update(schema_version=5, qualification_scope=SMALL_RESPONSE_AGGREGATE_SCOPE,
+    value.update(schema_version=6, qualification_scope=SMALL_RESPONSE_AGGREGATE_SCOPE,
+                 qualified_parallel_chaff_streams=SMALL_RESPONSE_AGGREGATE_PARALLEL_STREAMS,
                  aggregate_capacity_contract=small_response_aggregate_contract())
-    value["resources"][0]["chaff_qualification"].update(schema_version=5,
+    value["resources"][0]["chaff_qualification"].update(schema_version=6,
         qualification_scope=SMALL_RESPONSE_AGGREGATE_SCOPE,
+        qualified_parallel_chaff_streams=SMALL_RESPONSE_AGGREGATE_PARALLEL_STREAMS,
         aggregate_capacity_contract_sha256=SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256)
     return value
 
@@ -4475,7 +4479,7 @@ def _run_response_qualifications_v2(
                 "--packet-size",
                 str(UDP_PAYLOAD_CEILING),
                 "--parallel-requests",
-                str(RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS),
+                str(SMALL_RESPONSE_AGGREGATE_PARALLEL_STREAMS if small_response_aggregate else RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS),
                 "--total-requests",
                 str(RESPONSE_ONLY_REQUESTS_PER_EPOCH),
                 "--request-header-mode",
@@ -4832,14 +4836,17 @@ def _validate_response_receipt_v2(
     headers: list[list[str]],
     small_response_aggregate: bool = False,
 ) -> tuple[list[tuple[int, str, int, str]], int, int, int, str, str | None]:
-    """Validate one sustained 8x5 response epoch without hiding a rejection."""
+    """Validate ordinary 8x5 or explicit aggregate 5x8, retaining every rejection."""
+
+    parallel = SMALL_RESPONSE_AGGREGATE_PARALLEL_STREAMS if small_response_aggregate else RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+    waves = SMALL_RESPONSE_AGGREGATE_WAVES_PER_EPOCH if small_response_aggregate else RESPONSE_ONLY_WAVES_PER_EPOCH
 
     receipt, incoming_limit = _receipt_udp_policy(
         value,
         legacy_keys=(RESPONSE_V2_RECEIPT_KEYS | {"capacity_policy", "aggregate_capacity_contract",
             "capacity_contract_sha256"}) if small_response_aggregate else RESPONSE_V2_RECEIPT_KEYS,
         legacy_schema=RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION,
-        directional_schema=6 if small_response_aggregate else RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+        directional_schema=7 if small_response_aggregate else RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
         outgoing_ceiling=UDP_PAYLOAD_CEILING,
         label="sustained response qualification receipt",
     )
@@ -4850,7 +4857,7 @@ def _validate_response_receipt_v2(
     if (
         type(receipt["schema_version"]) is not int
         or receipt["schema_version"]
-        not in ({6} if small_response_aggregate else {
+        not in ({7} if small_response_aggregate else {
             RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION,
             RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
         })
@@ -4861,24 +4868,24 @@ def _validate_response_receipt_v2(
         or type(receipt["selected_chaff_resource_id"]) is not int
         or receipt["selected_chaff_resource_id"] != selected_chaff_resource_id
         or type(receipt["qualified_parallel_chaff_streams"]) is not int
-        or receipt["qualified_parallel_chaff_streams"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or receipt["qualified_parallel_chaff_streams"] != parallel
         or receipt["method"] != METHOD
         or receipt["url"] != url
         or receipt["request_headers"] != headers
         or receipt["request_header_mode"] != IDENTITY_REQUEST_HEADER_MODE
         or type(receipt["parallel_requests"]) is not int
-        or receipt["parallel_requests"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or receipt["parallel_requests"] != parallel
         or type(receipt["total_requests"]) is not int
         or receipt["total_requests"] != RESPONSE_ONLY_REQUESTS_PER_EPOCH
         or type(receipt["request_waves"]) is not int
-        or receipt["request_waves"] != RESPONSE_ONLY_WAVES_PER_EPOCH
+        or receipt["request_waves"] != waves
         or type(receipt["max_concurrent_requests"]) is not int
-        or receipt["max_concurrent_requests"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or receipt["max_concurrent_requests"] != parallel
         or type(receipt["connection_count"]) is not int
         or receipt["connection_count"] != 1
         or type(receipt["requests_opened_before_first_network_output"]) is not int
         or receipt["requests_opened_before_first_network_output"]
-        != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        != parallel
         or type(receipt["request_stream_bytes"]) is not int
         or receipt["request_stream_bytes"] <= 0
         or type(receipt["max_response_bytes"]) is not int
@@ -4936,7 +4943,7 @@ def _validate_response_receipt_v2(
             type(request["request_index"]) is not int
             or request["request_index"] != index
             or type(request["wave_index"]) is not int
-            or request["wave_index"] != index // RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+            or request["wave_index"] != index // parallel
             or type(stream_id) is not int
             or stream_id != index * 4
             or stream_id in stream_ids
@@ -4959,7 +4966,7 @@ def _validate_response_receipt_v2(
         sizes.append(size)
     if len(set(sizes)) != 1 or receipt["request_stream_bytes"] != sizes[0]:
         raise ValueError("sustained response qualification request primitive changed")
-    capacity_failure = any((not 1 <= identity[2] < 1200 or 5 * (identity[2] - 16) < 1200)
+    capacity_failure = any((not 515 <= identity[2] < 1200)
         if small_response_aggregate else identity[2] < UDP_PAYLOAD_CEILING for identity in identities)
     identity_failure = len(set(identities)) != 1 or any(
         not 200 <= identity[0] <= 299 or identity[1] != "identity" for identity in identities
@@ -5098,7 +5105,7 @@ def _candidate_attempt_record_v2(
     if len(set(sizes)) != 1:
         raise PreparationError("identity chaff request-stream bytes changed across epochs")
     capacity_failure = "capacity" in explicit_failures or any(
-        (not 1 <= identity[2] < 1200 or 5 * (identity[2] - 16) < 1200)
+        (not 515 <= identity[2] < 1200)
         if small_response_aggregate else identity[2] < UDP_PAYLOAD_CEILING for identity in identities
     )
     identity_failure = (
@@ -5514,7 +5521,7 @@ def _validate_expected_response(value: object, *, small_response_aggregate: bool
         or not isinstance(response["content_encoding"], str)
         or response["content_encoding"] != _normalize_content_encoding(response["content_encoding"])
         or type(response["body_bytes"]) is not int
-        or ((not 1 <= response["body_bytes"] < 1200 or 5 * (response["body_bytes"] - 16) < 1200)
+        or ((not 515 <= response["body_bytes"] < 1200)
             if small_response_aggregate else response["body_bytes"] < UDP_PAYLOAD_CEILING)
         or not _digest(response["body_sha256"])
     ):
@@ -6096,6 +6103,9 @@ def _validate_response_only_v2_policy(value: object) -> None:
 def small_response_aggregate_qualification_policy() -> dict[str, Any]:
     value = response_only_v2_qualification_policy()
     value.update(qualification_scope=SMALL_RESPONSE_AGGREGATE_SCOPE,
+        qualified_parallel_chaff_streams=SMALL_RESPONSE_AGGREGATE_PARALLEL_STREAMS,
+        parallel_requests_per_wave=SMALL_RESPONSE_AGGREGATE_PARALLEL_STREAMS,
+        waves_per_connection_epoch=SMALL_RESPONSE_AGGREGATE_WAVES_PER_EPOCH,
         aggregate_capacity_contract_sha256=SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256)
     return value
 

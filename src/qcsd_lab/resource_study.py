@@ -209,10 +209,10 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            buflo_duration_policy: str | None = None,
            frozen_application_manifest: Path | None = None,
            frozen_application_manifest_sha256: str | None = None) -> dict:
-    from .resource_study_native import _buflo_aggregate_option, BUFLO_AGGREGATE_NATIVE
+    from .resource_study_native import _buflo_aggregate_option, buflo_aggregate_native_supported
     aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
-    if aggregate and runtime.get("native_commit") != BUFLO_AGGREGATE_NATIVE:
-        raise ValueError("aggregate enrollment requires the exact Native127 runtime")
+    if aggregate and not buflo_aggregate_native_supported(runtime.get("native_commit")):
+        raise ValueError("aggregate enrollment requires the exact Native128 runtime")
     cap = None
     if buflo_chaff_cap_bytes is not None:
         from .resource_study_native import _buflo_chaff_cap

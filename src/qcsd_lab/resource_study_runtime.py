@@ -313,10 +313,10 @@ class PreparationRuntime:
                 buflo_small_response_aggregate: bool = False,
                 buflo_duration_policy: str | None = None,
                 frozen_application_manifest: dict | None = None) -> dict:
-        from .resource_study_native import _buflo_aggregate_option, BUFLO_AGGREGATE_NATIVE
+        from .resource_study_native import _buflo_aggregate_option, buflo_aggregate_native_supported
         aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
-        if aggregate and self.runtime.get("native_commit") != BUFLO_AGGREGATE_NATIVE:
-            raise ValueError("aggregate preparation requires the exact Native127 runtime")
+        if aggregate and not buflo_aggregate_native_supported(self.runtime.get("native_commit")):
+            raise ValueError("aggregate preparation requires the exact Native128 runtime")
         if buflo_duration_policy is not None:
             from .buflo_duration_budget import preparation_policy
             preparation_policy(buflo_duration_policy)

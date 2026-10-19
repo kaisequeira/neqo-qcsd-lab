@@ -38,10 +38,15 @@ REQUEST_HEADERS = [["accept", "*/*"], ["accept-encoding", "identity"],
 BUFLO_CAPPED_SELECTION_POLICY = "resource-domain-buflo-prepared-and-identity-body-cap-descending-prefix-v1"
 BUFLO_CAPPED_SELECTION_TYPE = "qcsd-resource-domain-buflo-capped-chaff-selection-v1"
 BUFLO_CAPPED_SIDECAR_TYPE = "qcsd-resource-domain-buflo-capped-identity-chaff-qualification-v1"
-BUFLO_AGGREGATE_SELECTION_POLICY = "resource-domain-buflo-original-auxiliary-small-response-five-known-capacity-v1"
-BUFLO_AGGREGATE_SELECTION_TYPE = "qcsd-resource-domain-buflo-small-response-aggregate-selection-v1"
-BUFLO_AGGREGATE_SIDECAR_TYPE = "qcsd-resource-domain-buflo-small-response-aggregate-qualification-v1"
-BUFLO_AGGREGATE_NATIVE = "d44de7cde8f6e2e72f337c00a01e9816c07753fa"
+BUFLO_AGGREGATE_SELECTION_POLICY = "resource-domain-buflo-original-auxiliary-small-response-eight-known-capacity-v1"
+BUFLO_AGGREGATE_SELECTION_TYPE = "qcsd-resource-domain-buflo-small-response-eight-aggregate-selection-v1"
+BUFLO_AGGREGATE_SIDECAR_TYPE = "qcsd-resource-domain-buflo-small-response-eight-aggregate-qualification-v1"
+BUFLO_AGGREGATE_NATIVE = '7db09b9748787c88190c5df1000c9cfd03b11a39'
+
+
+def buflo_aggregate_native_supported(value: Any) -> bool:
+    return (type(BUFLO_AGGREGATE_NATIVE) is str and _COMMIT.fullmatch(BUFLO_AGGREGATE_NATIVE) is not None
+            and type(value) is str and value == BUFLO_AGGREGATE_NATIVE)
 
 
 def _buflo_aggregate_option(value: Any, cap: int | None = None) -> bool:
@@ -276,9 +281,9 @@ def _buflo_aggregate_candidates(prepared: Mapping[str, Any]) -> list[tuple[dict,
                 or type(row.get("body_sha256")) is not str
                 or _SHA256.fullmatch(row["body_sha256"]) is None):
             raise ValueError("aggregate qualification changed an original complete prepared GET")
-        # The unchanged approved-origin Native schema-five contract selects
+        # The approved-origin Native schema-six contract selects
         # an auxiliary response; resource0 remains the application anchor.
-        if resource["id"] != 0 and 256 <= row["bytes"] < 1200:
+        if resource["id"] != 0 and 515 <= row["bytes"] < 1200:
             candidates.append((resource, row))
     return sorted(candidates, key=lambda pair: (-pair[1]["bytes"], pair[0]["id"], pair[0]["url"]))[:1]
 
@@ -302,7 +307,7 @@ def _validate_buflo_aggregate_sidecar(prepared: Mapping[str, Any], prepared_sha2
             or type(sidecar["application_resource_id"]) is not int or sidecar["application_resource_id"] != 0
             or type(sidecar["selected_chaff_resource_id"]) is not int
             or type(sidecar["qualified_parallel_chaff_streams"]) is not int
-            or sidecar["qualified_parallel_chaff_streams"] != 5
+            or sidecar["qualified_parallel_chaff_streams"] != 8
             or sidecar["qualification_policy"] != chaff.small_response_aggregate_qualification_policy()
             or canonical_json(sidecar["runtime"]) != canonical_json(dict(runtime))
             or sidecar["scientific_credit"] is not False
@@ -337,7 +342,7 @@ def _validate_buflo_aggregate_sidecar(prepared: Mapping[str, Any], prepared_sha2
         "application_resource_id": 0, "selected_chaff_resource_id": selected["id"], "resource": resource}, selected)
     digest = hashlib.sha256(canonical_json(derived)).hexdigest()
     if canonical_json(manifest) != canonical_json(derived) or sidecar["native_manifest_sha256"] != digest:
-        raise ValueError("aggregate BuFLO sidecar does not derive the exact Native schema-five manifest")
+        raise ValueError("aggregate BuFLO sidecar does not derive the exact Native schema-six manifest")
 
 
 def validate_buflo_aggregate_enrollment(root: Path, enrollment: Mapping[str, Any]) -> dict | None:
@@ -348,8 +353,8 @@ def validate_buflo_aggregate_enrollment(root: Path, enrollment: Mapping[str, Any
     if "buflo_small_response_aggregate_selection" not in enrollment:
         return None
     selection = enrollment["buflo_small_response_aggregate_selection"]
-    if enrollment.get("runtime", {}).get("native_commit") != BUFLO_AGGREGATE_NATIVE:
-        raise ValueError("aggregate BuFLO requires the exact Native127 implementation")
+    if not buflo_aggregate_native_supported(enrollment.get("runtime", {}).get("native_commit")):
+        raise ValueError("aggregate BuFLO requires the exact Native128 implementation")
     from .buflo_duration_budget import CADENCE64_POLICY
     if enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy") != CADENCE64_POLICY:
         raise ValueError("aggregate BuFLO preserves the fixed64ms640s policy")
@@ -422,7 +427,7 @@ def _qualify_buflo_aggregate(prepared: Path, root: Path, client: Path,
         sidecar = {"schema_version": 1, "record_type": BUFLO_AGGREGATE_SIDECAR_TYPE,
             "selection_policy": BUFLO_AGGREGATE_SELECTION_POLICY, "aggregate_capacity_contract_sha256": chaff.SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256,
             "application_workload_sha256": digest, "application_resource_id": 0,
-            "selected_chaff_resource_id": candidate["id"], "qualified_parallel_chaff_streams": 5,
+            "selected_chaff_resource_id": candidate["id"], "qualified_parallel_chaff_streams": 8,
             "qualification_policy": chaff.small_response_aggregate_qualification_policy(), "runtime": dict(runtime),
             "neqo_provenance": chaff._stable_neqo_provenance(receipts), "candidate_attempts": attempts,
             "selection_outcomes": outcomes, "resource": resource,
@@ -936,8 +941,8 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, cap)
     if aggregate and selected_duration != buflo.CADENCE64_POLICY:
         raise ValueError("small-response aggregate preserves the fixed64ms640s duration")
-    if aggregate and runtime.get("native_commit") != BUFLO_AGGREGATE_NATIVE:
-        raise ValueError("small-response aggregate preparation requires the exact Native127 implementation")
+    if aggregate and not buflo_aggregate_native_supported(runtime.get("native_commit")):
+        raise ValueError("small-response aggregate preparation requires the exact Native128 implementation")
     pool = _manifest(hostname, urls, require_twenty=False)
     if len(pool["resources"]) < RESOURCES_PER_SESSION:
         raise ValueError("candidate pool has fewer than20 distinct same-host URLs")

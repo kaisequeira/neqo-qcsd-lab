@@ -1,4 +1,4 @@
-"""Exact dated readers through Source089 and explicit Source090 execution.
+"""Exact dated readers through Source089 and explicit Source091 execution.
 
 The separately qualified five-small-response BuFLO capability retains every
 older immutable admission profile and the original physical packet guards.
@@ -15,8 +15,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = '090'
-BINDING_TYPE = 'qcsd-resource-domain-017-018-019-045-048-051-055-060-061-062-063-069-070-071-079-080-081-082-083-088-089-090-reader-execution-binding-v1'
+EXECUTION_KIND = '091'
+BINDING_TYPE = 'qcsd-resource-domain-017-018-019-045-048-051-055-060-061-062-063-069-070-071-079-080-081-082-083-088-089-090-091-reader-execution-binding-v1'
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -290,19 +290,19 @@ APPROVED_EXECUTION_FILES = {'buflo_duration_budget.py': 'c568b7d092ab76f4346b17d
  'buflo_evaluation.py': '834ee1c17a6b43852069e8fe9802e097f004fd1affb784f76021fcd72fd4a33e',
  'buflo_fin_permission.py': '08742d2ee4652ecbb43ef11fc98aa17299f02c94fc656867403989cda9917916',
  'buflo_handoff.py': '804597c52dc10a03f87197a60f1e19f6743f27588eb8f739c0760bbe217cdbad',
- 'capture_acceptance_policy.py': '908e0e82e2c9b7812fe736511f3933b1def07b21315bdec847908753217a5953',
+ 'capture_acceptance_policy.py': '4ca587b43e4e6369200e2f65ec4efc60c8f737e3da4337c51b6f5fb9eb1ea40b',
  'capture_session.py': 'b7207fbaf41fc5ed6171ac01368a6fdf89cbd02d26b924f3148240bd929bc949',
- 'chaff_qualification.py': '7314f7c35f23e75fdb5f4805a0e28799f7fcbec590fec7219fb3a42913684591',
- 'fidelity.py': 'ed8eead6a555ead1687e1df75df7bc523afdbf87eb96440b91b783e166210c0f',
+ 'chaff_qualification.py': '1d12ed2337dda847993cd5e18b0285f99f8076fcb0ab2a40250eadc48586240f',
+ 'fidelity.py': '460c7ee9540eb17d22eac54f73f5462c06a674110d72ede707555b11792847a8',
  'kernel_tx.py': '5f05c57af4dbf3ec37ef6fd9dcf43984b2d48e477a4e8ca435556ce4e2612125',
  'parameters.py': '179d7f9d43be5adae9470727cc193524d2756dc54645830e6dce61ea4d903b82',
  'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf',
- 'resource_study.py': '5b2f26826966c98e9fb9d123451d8684068b0935fa2307d00faa60629c376002',
+ 'resource_study.py': 'b06cae6edc1ef3d749955913bd442c35be802f850b6fb2e5f93d0315bbd1059c',
  'resource_study_cohorts.py': 'b53907f613d9af9393991814bd4359f7f5bbe29bb54001dc1ce599cda228256a',
  'resource_study_epochs.py': '693912bc1ad354001f73a87adb49e5bd1b3909db831384458dbd8e7c11fce76b',
- 'resource_study_native.py': '831ff8042c5c6a488b820c2aadce9d9fdcd1f6a0344668ff1b299de4a1af375e',
+ 'resource_study_native.py': '5db41bfda91f46dc0f237feabd00f68e6f3c6a3d88cd223f9defbb25bd421697',
  'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
- 'resource_study_runtime.py': '1730e61c569d402dc8f7cc6280e50166ff4eaeeb3470d39586199ab84a08b167',
+ 'resource_study_runtime.py': 'b6560aae5b53f2393efa86f3e3eed9f218f59b32a4a41c75ffb5da39e4090d16',
  'resource_study_selection.py': '6f06c6bef2953d6b480949281b4e889ad7412aca7f2e6bc3c500130234b0e99e',
  'resource_study_store.py': '9be2314336482cbceded42b61d70a161add53c1dd74f06d474ce711b0f9656fb',
  'resource_study_verify.py': 'dbe72ecaafdeae98da59e50810f62109a446d91c75dba01fb5bc5cd024fe9eb9'}
@@ -341,6 +341,30 @@ PRIOR_QUEUED_HTTP079_EXECUTION_FILES = {'buflo_evaluation.py': '834ee1c17a6b4385
 
 # Exact dated Source080 external coordinator/current-head and finite BF pool.
 PRIOR_BF_POOL080_EXECUTION_FILES = {'buflo_evaluation.py': '834ee1c17a6b43852069e8fe9802e097f004fd1affb784f76021fcd72fd4a33e', 'buflo_handoff.py': 'c5b0a6fac096717dd3b710398a179089e13d43deffc882b3da4d1444d0bc2c74', 'capture_acceptance_policy.py': '16761a8eae4c95fe2bbdc92087d9de23fa071e87fde3f5d0dcc0d556af77ee0b', 'fidelity.py': '149fbf8049c359478f47427b2f5ae26252869454a24d00b0c6d8459abf533dd8', 'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf', 'resource_study.py': '2058cdc53cfba9c65b6554449f9caeae26459f3324ae8a8890e29b4d93d625d5', 'resource_study_cohorts.py': '84b59afc772db6794bd4319ec048f42fbb87924fa1bbec701bb8cf647212696c', 'resource_study_epochs.py': '48dbc2afa5e3c8fea2debd8e36a70aaf9ed5034a0a423b9f6b80116d0efab3b6', 'resource_study_native.py': '6565608516fad575b6f7065cf19aeb4959b2aff03b5233ebb1552102c9e363c0', 'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20', 'resource_study_runtime.py': 'db63162ef14f0c2c26e814411fac78505a6dc1352adb382c0564d402825458f2', 'resource_study_store.py': '9be2314336482cbceded42b61d70a161add53c1dd74f06d474ce711b0f9656fb', 'resource_study_verify.py': '82f4bfafe4987f118bda6c3ba4b9cebe2a3a78414effbf198457df56020ba235', 'resource_study_selection.py': '6f06c6bef2953d6b480949281b4e889ad7412aca7f2e6bc3c500130234b0e99e', 'buflo_fin_permission.py': '08742d2ee4652ecbb43ef11fc98aa17299f02c94fc656867403989cda9917916', 'capture_session.py': 'b7207fbaf41fc5ed6171ac01368a6fdf89cbd02d26b924f3148240bd929bc949', 'buflo_duration_budget.py': 'c568b7d092ab76f4346b17d187a106e3a8cd2b8267ebcae387bd68437b643ec5', 'parameters.py': '179d7f9d43be5adae9470727cc193524d2756dc54645830e6dce61ea4d903b82', 'kernel_tx.py': '5f05c57af4dbf3ec37ef6fd9dcf43984b2d48e477a4e8ca435556ce4e2612125', 'resource_study_reader_compatibility.py': '8d325565cb44610a1473b8cc474ee3fbdf4684a6a79c9b01eac83f7bb3405648'}
+
+
+# Exact frozen Source090 five-stream prototype source; never current091 authority.
+PRIOR_SMALL_RESPONSE_AGGREGATE090_EXECUTION_FILES = {'buflo_duration_budget.py': 'c568b7d092ab76f4346b17d187a106e3a8cd2b8267ebcae387bd68437b643ec5',
+ 'buflo_evaluation.py': '834ee1c17a6b43852069e8fe9802e097f004fd1affb784f76021fcd72fd4a33e',
+ 'buflo_fin_permission.py': '08742d2ee4652ecbb43ef11fc98aa17299f02c94fc656867403989cda9917916',
+ 'buflo_handoff.py': '804597c52dc10a03f87197a60f1e19f6743f27588eb8f739c0760bbe217cdbad',
+ 'capture_acceptance_policy.py': '908e0e82e2c9b7812fe736511f3933b1def07b21315bdec847908753217a5953',
+ 'capture_session.py': 'b7207fbaf41fc5ed6171ac01368a6fdf89cbd02d26b924f3148240bd929bc949',
+ 'chaff_qualification.py': '7314f7c35f23e75fdb5f4805a0e28799f7fcbec590fec7219fb3a42913684591',
+ 'fidelity.py': 'ed8eead6a555ead1687e1df75df7bc523afdbf87eb96440b91b783e166210c0f',
+ 'kernel_tx.py': '5f05c57af4dbf3ec37ef6fd9dcf43984b2d48e477a4e8ca435556ce4e2612125',
+ 'parameters.py': '179d7f9d43be5adae9470727cc193524d2756dc54645830e6dce61ea4d903b82',
+ 'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf',
+ 'resource_study.py': '5b2f26826966c98e9fb9d123451d8684068b0935fa2307d00faa60629c376002',
+ 'resource_study_cohorts.py': 'b53907f613d9af9393991814bd4359f7f5bbe29bb54001dc1ce599cda228256a',
+ 'resource_study_epochs.py': '693912bc1ad354001f73a87adb49e5bd1b3909db831384458dbd8e7c11fce76b',
+ 'resource_study_native.py': '831ff8042c5c6a488b820c2aadce9d9fdcd1f6a0344668ff1b299de4a1af375e',
+ 'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
+ 'resource_study_reader_compatibility.py': 'b4ea0e54ead72136900bc562aeb781fd4cb134cd404190de23993a90b107afa7',
+ 'resource_study_runtime.py': '1730e61c569d402dc8f7cc6280e50166ff4eaeeb3470d39586199ab84a08b167',
+ 'resource_study_selection.py': '6f06c6bef2953d6b480949281b4e889ad7412aca7f2e6bc3c500130234b0e99e',
+ 'resource_study_store.py': '9be2314336482cbceded42b61d70a161add53c1dd74f06d474ce711b0f9656fb',
+ 'resource_study_verify.py': 'dbe72ecaafdeae98da59e50810f62109a446d91c75dba01fb5bc5cd024fe9eb9'}
 
 
 def _profile(files):
@@ -585,6 +609,13 @@ def _self_sha256():
     return hashlib.sha256(raw).hexdigest()
 
 
+def prior_small_response_aggregate090_execution_contract():
+    """Exact frozen Source090 profile; no historical receipt is requalified."""
+    files = dict(LEGACY_FILES)
+    files.update(PRIOR_SMALL_RESPONSE_AGGREGATE090_EXECUTION_FILES)
+    return _profile(files)
+
+
 def execution_files():
     """Expected 171-file graph; the caller supplies a freshly observed profile.
 
@@ -600,7 +631,7 @@ def execution_files():
                                          "chaff_qualification.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source090 reader compatibility registry is not sealed")
+        raise ValueError("Source091 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -636,6 +667,7 @@ class _QualifiedExecution:
             _encoded(prior_owned_immutable083_execution_contract()),
             _encoded(prior_missed_reason088_execution_contract()),
             _encoded(prior_native126_pool089_execution_contract()),
+            _encoded(prior_small_response_aggregate090_execution_contract()),
             self._profile,
         )
 
@@ -644,21 +676,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source090 profile, never a dated alias.
+    """Authenticate the exact approved Source091 profile, never a dated alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source090 execution reader")
+        raise ValueError("unsupported or changed Source091 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source090 execution reader required")
+        raise ValueError("qualified Source091 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -677,8 +709,14 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles, dated Source045/048/051/055/060/061/062/063/069/070/071/079/080/081/082/083/088/089 execution or reviewed Source090 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles, dated Source045/048/051/055/060/061/062/063/069/070/071/079/080/081/082/083/088/089/090 execution or reviewed Source091 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
+        "source091_eight_small_response_aggregate_candidate_replaces_five": True,
+        "source091_manifest_schema": 6,
+        "source091_response_qualification_schema": 7,
+        "source091_aggregate_startup_schema": 3,
+        "source091_ordinary_nonaggregate_allocator_kernel_packet_guards_preserved": True,
+        "source091_frozen090_receipts_not_requalified": True,
         "source090_qualified_five_small_response_aggregate_role_added": True,
         "source090_original_ordinary_qualification_and_startup_preserved": True,
         "source090_manifest_schema": 5,
