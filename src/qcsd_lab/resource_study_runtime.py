@@ -49,8 +49,22 @@ BF122_SHARED_ROOTS = tuple(
     for index in range(1, 6)
 )
 
+# Source089 only adds a coordinator role for this already installed producer.
+# The original Native122 and Native93 paths below retain their exact guards.
+BF126_SHARED_RUNTIME = {'canonical_sha256': 'adb1c6d52a0dda65f301fde16f6d03af46fe7ec8f565412afc0c9026df566291', 'client_sha256': 'f7746e03426bf710c1e0a197ff2136789cc8a7aee32e66b34934f27a535ee058', 'native_commit': 'fc87393e3162bbf0562e64c8fb2f2ebe6b4d7cd9', 'platform': 'linux/arm64', 'collection_image_digest': 'sha256:489d25daf256bde2d82da45a1ec479b54e468858b5a3efc6bc7e53995cf5cc55', 'prepare_image_digest': 'sha256:f18f293c472667ea4cf94ffc297551d4848a4339f4c14fc0e60fa178fb36c48e', 'source': {'image_digest': None, 'lab_commit': 'be488d555b64c0479f180c90317146ca42b9c31a', 'lab_dirty': False, 'lab_patch_sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'neqo_commit': 'fc87393e3162bbf0562e64c8fb2f2ebe6b4d7cd9', 'neqo_dirty': False, 'neqo_patch_sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'neqo_pinned_commit': 'fc87393e3162bbf0562e64c8fb2f2ebe6b4d7cd9'}}
+BF126_SHARED_ROOTS = tuple(
+    "/mnt/lima-neqo-data/neqo-obfuscation/study/"
+    "native126-source087-BuFLO-original50-runtime-cohort-" + f"{index:03d}"
+    for index in range(1, 4)
+)
+
 
 def require_shared_runtime(runtime):
+    if (type(runtime) is dict
+            and runtime.get("native_commit") == BF126_SHARED_RUNTIME["native_commit"]):
+        if runtime != BF126_SHARED_RUNTIME:
+            raise ValueError("BuFLO126 pooling requires the exact unchanged full runtime")
+        return True
     if (type(runtime) is dict
             and runtime.get("native_commit") == BF122_SHARED_RUNTIME["native_commit"]):
         if runtime != BF122_SHARED_RUNTIME:
@@ -64,11 +78,13 @@ def require_shared_runtime(runtime):
 
 def shared_roots(values, *, buflo122=False):
     """Original two CS roots, or the explicit finite admitted BuFLO122 pool."""
-    if buflo122:
+    native126 = (buflo122 and type(values) in (list, tuple) and 2 <= len(values) <= 3
+                 and all(str(value) in BF126_SHARED_ROOTS for value in values))
+    if buflo122 and not native126:
         if (type(values) not in (list, tuple) or not 2 <= len(values) <= 5
                 or any(str(value) not in BF122_SHARED_ROOTS for value in values)):
             raise ValueError("BuFLO122 pool requires two to five explicit cohort001 through005 roots")
-    elif type(values) not in (list, tuple) or len(values) != 2:
+    elif not buflo122 and (type(values) not in (list, tuple) or len(values) != 2):
         raise ValueError("two-root capture requires exactly two writer roots")
     roots = [Path(value) for value in values]
     if (any(not root.is_absolute() or root.resolve(strict=True) != root

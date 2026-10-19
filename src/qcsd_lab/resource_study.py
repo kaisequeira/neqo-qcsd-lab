@@ -1180,12 +1180,18 @@ def capture_roots(parent: Path, runtime: dict, cells: list, *, workers=11, budge
 
 def load_shared_capture_plan(path, digest, parent):
     from .resource_study_selection import _read, _json
+    from .resource_study_runtime import BF122_SHARED_ROOTS, BF126_SHARED_ROOTS
+    native126_plan = "qcsd-resource-domain-native126-buflo-pool-capture-plan-v1"
     value = _json(_read(path, digest))
     if (set(value) != {"record_type", "schema_version", "parent", "cells"}
-            or value["record_type"] not in (SHARED_CAPTURE_PLAN, BF122_SHARED_CAPTURE_PLAN) or type(value["schema_version"]) is not int
+            or value["record_type"] not in (SHARED_CAPTURE_PLAN, BF122_SHARED_CAPTURE_PLAN, native126_plan) or type(value["schema_version"]) is not int
             or value["schema_version"] != 1 or value["parent"] != str(parent)):
         raise ValueError("shared capture plan differs from its explicit parent/schema")
-    _shared_cells(value["cells"], buflo122=value["record_type"] == BF122_SHARED_CAPTURE_PLAN)
+    _shared_cells(value["cells"], buflo122=value["record_type"] in (BF122_SHARED_CAPTURE_PLAN, native126_plan))
+    if value["record_type"] in (BF122_SHARED_CAPTURE_PLAN, native126_plan):
+        allowed = BF126_SHARED_ROOTS if value["record_type"] == native126_plan else BF122_SHARED_ROOTS
+        if any(row["root"] not in allowed for row in value["cells"]):
+            raise ValueError("shared BuFLO plan type differs from its exact runtime root role")
     return value["cells"]
 
 
