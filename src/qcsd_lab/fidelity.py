@@ -1933,7 +1933,7 @@ def _schedule_realization_metrics_from_path(path: Path, *, tamaraw_configuration
         satisfactions[satisfaction] = satisfactions.get(satisfaction, 0) + 1
         directions[direction] = directions.get(direction, 0) + 1
         reason = str(row.get("miss_reason", ""))
-        if reason:
+        if satisfaction == "missed" and reason:
             miss_reasons[reason] = miss_reasons.get(reason, 0) + 1
         try:
             slot = _csv_uint(row, "slot_id")
