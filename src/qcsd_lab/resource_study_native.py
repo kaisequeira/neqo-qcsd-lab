@@ -41,7 +41,7 @@ BUFLO_CAPPED_SIDECAR_TYPE = "qcsd-resource-domain-buflo-capped-identity-chaff-qu
 BUFLO_AGGREGATE_SELECTION_POLICY = "resource-domain-buflo-original-auxiliary-small-response-eight-known-capacity-v1"
 BUFLO_AGGREGATE_SELECTION_TYPE = "qcsd-resource-domain-buflo-small-response-eight-aggregate-selection-v1"
 BUFLO_AGGREGATE_SIDECAR_TYPE = "qcsd-resource-domain-buflo-small-response-eight-aggregate-qualification-v1"
-BUFLO_AGGREGATE_NATIVE = '7db09b9748787c88190c5df1000c9cfd03b11a39'
+BUFLO_AGGREGATE_NATIVE = 'c22f3db3890ebb14ce8b349bd063ddedadd004b7'
 
 
 def buflo_aggregate_native_supported(value: Any) -> bool:

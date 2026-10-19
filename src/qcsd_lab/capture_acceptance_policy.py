@@ -934,7 +934,7 @@ def _validate_buflo_single_startup_evidence(run: Mapping[str, Any], *, runner_di
 # SOURCE fragment inserted into the existing capture_acceptance_policy module.
 # The historical single-stream implementation remains a separate unchanged leaf.
 AGGREGATE_STARTUP_POLICY = "qualified-eight-chaff-terminal-ack-aggregate-cadence-start-v1"
-AGGREGATE_STARTUP_NATIVE = '7db09b9748787c88190c5df1000c9cfd03b11a39'
+AGGREGATE_STARTUP_NATIVE = 'c22f3db3890ebb14ce8b349bd063ddedadd004b7'
 AGGREGATE_CAPACITY_POLICY = "same-endpoint-eight-acked-known-capacity-v1"
 AGGREGATE_CAPACITY_CONTRACT_SHA256 = "71eb3123edc625d0b2eddaf34074c4c7bb71e79679944b28d1670c537ee2cc2c"
 
