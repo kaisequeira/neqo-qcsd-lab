@@ -150,6 +150,32 @@ def _extent(ranges: list[tuple[int, int]]) -> int:
     return sum(end - start for start, end in _union(ranges))
 
 
+def _fixed_chaff_stream_configuration(run: Mapping[str, Any], config: Mapping[str, Any]) -> bool:
+    """Eight streams require their distinct current Native and typed startup authority."""
+    diagnostics = run.get("defense_diagnostics")
+    summary = run.get("buflo_summary")
+    startup = summary.get("incoming_startup") if isinstance(summary, Mapping) else None
+    aggregate = (isinstance(startup, Mapping) and startup.get("schema_version") == 3
+                 or isinstance(diagnostics, Mapping) and "buflo_incoming_aggregate_startup" in diagnostics)
+    if config.get("max_chaff_streams") == 5:
+        _need(not aggregate, "ordinary five-stream configuration cannot claim aggregate startup")
+        return True
+    _need(type(config.get("max_chaff_streams")) is int and config["max_chaff_streams"] == 8
+          and aggregate, "eight streams require explicit aggregate startup3")
+    from . import capture_acceptance_policy as acceptance
+    _need(acceptance._aggregate_startup_native_supported(run.get("migration_commit"))
+          and isinstance(startup, Mapping) and type(startup.get("schema_version")) is int
+          and startup["schema_version"] == 3 and isinstance(diagnostics, Mapping)
+          and "buflo_incoming_startup" not in diagnostics,
+          "aggregate configuration requires its exact current Native and startup namespace")
+    acceptance.validate_buflo_aggregate_startup_receipt(startup)
+    _need(_same(diagnostics.get("buflo_incoming_aggregate_startup"), startup)
+          and run.get("chaff_manifest_hash_sha256") == startup["qualification_manifest_sha256"]
+          and acceptance.buflo_incoming_release_window(run) == WINDOW_US,
+          "aggregate startup, manifest hash and original cadence64 source binding differ")
+    return True
+
+
 def validate_run_marker(run: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """A marker never enables the policy implicitly or changes the old default."""
     config = run.get("resolved_configuration")
@@ -161,7 +187,7 @@ def validate_run_marker(run: Mapping[str, Any]) -> Mapping[str, Any] | None:
     _need(isinstance(config, Mapping) and isinstance(config.get("defense"), Mapping)
           and config["defense"].get("kind") == "buflo" and config.get("max_udp_payload_size") == CELL
           and config.get("initial_max_stream_data") == 16 and config.get("max_stream_data_excess") == 1000
-          and config.get("max_chaff_streams") == 5, "fixed research-1200 BuFLO configuration differs")
+          and _fixed_chaff_stream_configuration(run, config), "fixed research-1200 BuFLO configuration differs")
     marker = run.get(FIELD)
     _need(isinstance(marker, Mapping) and set(marker) == {"accounting", "physical_proof"}, "exact new marker required")
     accounting = marker["accounting"]

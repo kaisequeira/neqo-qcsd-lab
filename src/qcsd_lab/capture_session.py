@@ -2023,6 +2023,11 @@ def _validate_run_binding(
         )
 
     resolved = run_data.get("resolved_configuration")
+    aggregate_configuration = _buflo_eight_aggregate_configuration(
+        chaff_manifest, application_workload_source, defense, context, runner_directory)
+    if aggregate_configuration is not None and json.dumps(resolved, sort_keys=True, allow_nan=False) != json.dumps(
+            aggregate_configuration[1], sort_keys=True, allow_nan=False):
+        raise ValueError("Native run differs from the exact eight-stream launch configuration")
     resolved_defense = resolved.get("defense") if isinstance(resolved, dict) else None
     resource_usage = run_data.get("client_resource_usage")
     wakeup_metrics = run_data.get("runner_wakeup_metrics")
@@ -2387,6 +2392,76 @@ def _wait_for_capture_start(
     raise RuntimeError("dumpcap did not become ready")
 
 
+def _buflo_eight_aggregate_configuration(
+    chaff_manifest: Path | None,
+    application_workload_source: Path | None,
+    defense: Defense,
+    context: CaptureContext,
+    output: Path,
+    *,
+    create: bool = False,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Derive only the explicitly qualified eight-stream launch; ordinary defaults stay exact."""
+    if chaff_manifest is None:
+        return None
+    qualified = load_json(chaff_manifest)
+    if not isinstance(qualified, Mapping):
+        raise ValueError("qualified chaff manifest must be an object")
+    scope = "buflo-small-response-eight-aggregate-v1"
+    if qualified.get("schema_version") != 6 and qualified.get("qualification_scope") != scope:
+        return None
+    from . import chaff_qualification as qualification
+    from . import buflo_fin_permission
+    contract = qualified.get("aggregate_capacity_contract")
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                         ensure_ascii=False, allow_nan=False)
+    if (type(qualified.get("schema_version")) is not int or qualified["schema_version"] != 6
+        or qualified.get("artifact_type") != "qcsd-qualified-chaff-manifest"
+        or qualified.get("qualification_scope") != scope
+        or type(qualified.get("qualified_parallel_chaff_streams")) is not int
+        or qualified["qualified_parallel_chaff_streams"] != 8
+        or canonical(contract) != canonical(qualification.small_response_aggregate_contract())
+        or defense.kind != "buflo" or defense.baseline or context.qcsd_profile != "research-1200"
+        or defense.schedule_path is not None or defense.parameters_path is None
+        or application_workload_source is None
+        or qualified.get("application_workload_sha256") != sha256_file(application_workload_source)
+        or buflo_fin_permission.validate_policy(
+            getattr(context, buflo_fin_permission.PREPARATION_FIELD, None)) != buflo_fin_permission.POLICY):
+        raise ValueError("eight-stream launch requires exact qualified manifest6/71eb and prepared BuFLO")
+    parameters = Path(defense.parameters_path)
+    output = Path(output)
+    if (not parameters.is_absolute() or parameters.resolve(strict=True) != parameters
+        or any(p.is_symlink() for p in (parameters, *parameters.parents))
+        or sha256_file(parameters) != defense.parameters_sha256
+        or not output.is_absolute() or output.parent.resolve(strict=True) != output.parent
+        or any(p.is_symlink() for p in (output, *output.parents))):
+        raise ValueError("eight-stream launch paths or frozen parameter bytes changed")
+    # Exact research-1200 controller configuration; only the qualified chaff
+    # concurrency changes from five to eight. The same numeric receipt remains bound.
+    value = {
+        "schema_version": 2, "control_interval_us": 5000,
+        "initial_max_stream_data": 16, "automatic_receive_window": 1048576,
+        "max_chaff_streams": 8, "low_watermark": 1000000,
+        "use_empty_resources": False, "max_stream_data_excess": 1000,
+        "max_udp_payload_size": 1200, "drop_unsatisfied_events": False,
+        "keep_alive_lead_time_us": 100000, "tail_wait_us": 0,
+        "buflo_retained_parser_fin_permission": True,
+        "defense": {"kind": "buflo", "parameters": str(parameters)},
+    }
+    lines = [f"{key} = {json.dumps(item)}" for key, item in value.items() if key != "defense"]
+    lines += ["", "[defense]", *(f"{key} = {json.dumps(item)}"
+                               for key, item in value["defense"].items())]
+    raw = ("\n".join(lines) + "\n").encode("ascii")
+    configuration = output.parent / "buflo-eight-aggregate.toml"
+    if create:
+        durable_create(configuration, raw)
+        configuration.chmod(0o444)
+    if (configuration.is_symlink() or not configuration.is_file()
+        or configuration.read_bytes() != raw):
+        raise ValueError("eight-stream complete configuration changed")
+    return configuration, value
+
+
 def _client_command(
     manifest: Path,
     chaff_manifest_or_workload_id: Path | str | None,
@@ -2478,7 +2553,13 @@ def _client_command(
             raise ValueError("FRONT V5 preparation differs from its prospective launch selection")
     if fixed_front is not None and (fixed_tamaraw is not None or configuration_path is not None):
         raise ValueError("fixed FRONT and Tamaraw configurations are mutually exclusive")
-    if fixed_front is not None:
+    aggregate_configuration = _buflo_eight_aggregate_configuration(
+        chaff_manifest, application_workload_source, defense, context, output, create=True)
+    if aggregate_configuration is not None:
+        if fixed_front is not None or fixed_tamaraw is not None or configuration_path is not None:
+            raise ValueError("eight-stream BuFLO configuration conflicts with another fixed setting")
+        command += ["--config", str(aggregate_configuration[0])]
+    elif fixed_front is not None:
         if (defense.kind != "front" or defense.baseline or context.qcsd_profile != "research-1200"
             or front_path is None or defense.parameters_path is not None or defense.schedule_path is not None):
             raise ValueError("fixed FRONT V5 launch lacks its exact frozen configuration")
@@ -2504,7 +2585,7 @@ def _client_command(
             "--static-mode",
             str(defense.mode),
         ]
-    elif defense.kind in PARAMETER_FLAG_BY_KIND:
+    elif defense.kind in PARAMETER_FLAG_BY_KIND and aggregate_configuration is None:
         command += [
             PARAMETER_FLAG_BY_KIND[defense.kind],
             str(defense.parameters_path),

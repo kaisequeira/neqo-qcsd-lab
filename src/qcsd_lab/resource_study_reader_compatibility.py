@@ -1,6 +1,6 @@
-"""Exact dated readers through Source091 and explicit Source092 execution.
+"""Exact dated readers through Source092 and explicit Source093 execution.
 
-The Native129 aggregate qualifier identity forward retains every
+The Native129 aggregate capture-launch and permission repair retains every
 older immutable admission profile and the original physical packet guards.
 No registry binding grants receipt, admission or scientific credit.
 """
@@ -15,8 +15,8 @@ import stat
 
 LEGACY_HEAD = "bd6f8afbc7c450b8e03d4b3814da75b68218c66e"
 HELPER_NAME = "resource_study_reader_compatibility.py"
-EXECUTION_KIND = '092'
-BINDING_TYPE = 'qcsd-resource-domain-017-018-019-045-048-051-055-060-061-062-063-069-070-071-079-080-081-082-083-088-089-090-091-092-reader-execution-binding-v1'
+EXECUTION_KIND = '093'
+BINDING_TYPE = 'qcsd-resource-domain-017-018-019-045-048-051-055-060-061-062-063-069-070-071-079-080-081-082-083-088-089-090-091-092-093-reader-execution-binding-v1'
 PRIMARY_FILES = (
     "resource_study_verify.py", "resource_study_inputs.py", "fidelity.py",
     "resource_study_native.py", "resource_study_network.py",
@@ -288,10 +288,10 @@ PRIOR_BOUNDED_RETRY082_EXECUTION_FILES = {'buflo_duration_budget.py': 'c568b7d09
 
 APPROVED_EXECUTION_FILES = {'buflo_duration_budget.py': 'c568b7d092ab76f4346b17d187a106e3a8cd2b8267ebcae387bd68437b643ec5',
  'buflo_evaluation.py': '834ee1c17a6b43852069e8fe9802e097f004fd1affb784f76021fcd72fd4a33e',
- 'buflo_fin_permission.py': '08742d2ee4652ecbb43ef11fc98aa17299f02c94fc656867403989cda9917916',
+ 'buflo_fin_permission.py': 'a07952889bbadef8c1b2af71f847da6b29590a0aac68ed119eaea83935d9e739',
  'buflo_handoff.py': '804597c52dc10a03f87197a60f1e19f6743f27588eb8f739c0760bbe217cdbad',
  'capture_acceptance_policy.py': 'c4e1fcdbef68e94d3495d452a4efae4f70f740565d7270d1fca81296c766e55f',
- 'capture_session.py': 'b7207fbaf41fc5ed6171ac01368a6fdf89cbd02d26b924f3148240bd929bc949',
+ 'capture_session.py': '0b065a72b8f54e6f13df9e498a4b415ac7abff783af817afbd750e7f4df549f0',
  'chaff_qualification.py': '1d12ed2337dda847993cd5e18b0285f99f8076fcb0ab2a40250eadc48586240f',
  'fidelity.py': '460c7ee9540eb17d22eac54f73f5462c06a674110d72ede707555b11792847a8',
  'kernel_tx.py': '5f05c57af4dbf3ec37ef6fd9dcf43984b2d48e477a4e8ca435556ce4e2612125',
@@ -648,6 +648,37 @@ def prior_eight_response_framing091_execution_contract():
     return _profile(files)
 
 
+# Exact frozen Source092 Native129 public-qualification profile, including its original helper.
+PRIOR_EIGHT_PUBLIC_QUALIFICATION092_EXECUTION_FILES = {'buflo_duration_budget.py': 'c568b7d092ab76f4346b17d187a106e3a8cd2b8267ebcae387bd68437b643ec5',
+ 'buflo_evaluation.py': '834ee1c17a6b43852069e8fe9802e097f004fd1affb784f76021fcd72fd4a33e',
+ 'buflo_fin_permission.py': '08742d2ee4652ecbb43ef11fc98aa17299f02c94fc656867403989cda9917916',
+ 'buflo_handoff.py': '804597c52dc10a03f87197a60f1e19f6743f27588eb8f739c0760bbe217cdbad',
+ 'capture_acceptance_policy.py': 'c4e1fcdbef68e94d3495d452a4efae4f70f740565d7270d1fca81296c766e55f',
+ 'capture_session.py': 'b7207fbaf41fc5ed6171ac01368a6fdf89cbd02d26b924f3148240bd929bc949',
+ 'chaff_qualification.py': '1d12ed2337dda847993cd5e18b0285f99f8076fcb0ab2a40250eadc48586240f',
+ 'fidelity.py': '460c7ee9540eb17d22eac54f73f5462c06a674110d72ede707555b11792847a8',
+ 'kernel_tx.py': '5f05c57af4dbf3ec37ef6fd9dcf43984b2d48e477a4e8ca435556ce4e2612125',
+ 'parameters.py': '179d7f9d43be5adae9470727cc193524d2756dc54645830e6dce61ea4d903b82',
+ 'process_scheduler.py': '8171b841d4aa26d63c9de740f79641bd4071ad1c9587dfc0d7068d5dac4328bf',
+ 'resource_study.py': 'b06cae6edc1ef3d749955913bd442c35be802f850b6fb2e5f93d0315bbd1059c',
+ 'resource_study_cohorts.py': 'b53907f613d9af9393991814bd4359f7f5bbe29bb54001dc1ce599cda228256a',
+ 'resource_study_epochs.py': '693912bc1ad354001f73a87adb49e5bd1b3909db831384458dbd8e7c11fce76b',
+ 'resource_study_native.py': 'e0206962ee7d20cde64f4ef3ac7b735db76524bf1083b2e6062402a5cf375042',
+ 'resource_study_network.py': 'd1be85c769642739238ffc1823d41ed28353e3d9c38a1e84b54f8973bd614c20',
+ 'resource_study_reader_compatibility.py': '7531a7f2ec630a2e1ea01ed2361ce45f691d52f75fc54dac88580750f6358bca',
+ 'resource_study_runtime.py': 'b6560aae5b53f2393efa86f3e3eed9f218f59b32a4a41c75ffb5da39e4090d16',
+ 'resource_study_selection.py': '6f06c6bef2953d6b480949281b4e889ad7412aca7f2e6bc3c500130234b0e99e',
+ 'resource_study_store.py': '9be2314336482cbceded42b61d70a161add53c1dd74f06d474ce711b0f9656fb',
+ 'resource_study_verify.py': 'dbe72ecaafdeae98da59e50810f62109a446d91c75dba01fb5bc5cd024fe9eb9'}
+
+
+def prior_eight_public_qualification092_execution_contract():
+    """Exact Source092 graph; capture-launch repair cannot relabel its authority."""
+    files = dict(LEGACY_FILES)
+    files.update(PRIOR_EIGHT_PUBLIC_QUALIFICATION092_EXECUTION_FILES)
+    return _profile(files)
+
+
 def execution_files():
     """Expected 171-file graph; the caller supplies a freshly observed profile.
 
@@ -663,7 +694,7 @@ def execution_files():
                                          "chaff_qualification.py"}
             or any(type(v) is not str or _SHA.fullmatch(v) is None
                    for v in APPROVED_EXECUTION_FILES.values())):
-        raise ValueError("Source092 reader compatibility registry is not sealed")
+        raise ValueError("Source093 reader compatibility registry is not sealed")
     result = dict(LEGACY_FILES)
     result.update(APPROVED_EXECUTION_FILES)
     result[HELPER_NAME] = _self_sha256()
@@ -701,6 +732,7 @@ class _QualifiedExecution:
             _encoded(prior_native126_pool089_execution_contract()),
             _encoded(prior_small_response_aggregate090_execution_contract()),
             _encoded(prior_eight_response_framing091_execution_contract()),
+            _encoded(prior_eight_public_qualification092_execution_contract()),
             self._profile,
         )
 
@@ -709,21 +741,21 @@ class _QualifiedExecution:
 
 
 def qualify_execution(actual):
-    """Authenticate the exact approved Source092 profile, never a dated alias.
+    """Authenticate the exact approved Source093 profile, never a dated alias.
 
     This value is call-local Source metadata. It contains no head, SQL rows,
     reservations, accepted count, receipt, raw result or scientific proof.
     """
     expected = _profile(execution_files())
     if _encoded(actual) != _encoded(expected):
-        raise ValueError("unsupported or changed Source092 execution reader")
+        raise ValueError("unsupported or changed Source093 execution reader")
     return _QualifiedExecution(expected)
 
 
 def require_supported(admission, qualified):
     """Keep an exact original admission profile or the exact execution profile."""
     if type(qualified) is not _QualifiedExecution:
-        raise ValueError("qualified Source092 execution reader required")
+        raise ValueError("qualified Source093 execution reader required")
     if _encoded(admission) not in qualified._supported_profiles:
         raise ValueError("unsupported or changed admission reader / verifier contract")
     return True
@@ -742,8 +774,12 @@ def execution_binding(admission, qualified):
         "admission_reader": _copy(admission), "execution_reader": execution,
         "admission_reader_preserved": True,
         "execution_reader_is_admission_reader": _encoded(admission) == qualified._profile,
-        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles, dated Source045/048/051/055/060/061/062/063/069/070/071/079/080/081/082/083/088/089/090/091 execution or reviewed Source092 execution profile",
+        "compatibility_rule": "exact authenticated Source017/018/019 admission profiles, dated Source045/048/051/055/060/061/062/063/069/070/071/079/080/081/082/083/088/089/090/091/092 execution or reviewed Source093 execution profile",
         "changed_source_files": sorted(APPROVED_EXECUTION_FILES),
+        "source093_aggregate_capture_launch_uses_complete_eight_stream_config": True,
+        "source093_aggregate_permission_reader_schema3_and_eight_members": True,
+        "source093_native129_client_and_nonaggregate_path_preserved": True,
+        "source093_frozen092_profile_preserved_without_requalification": True,
         "source092_native129_public_qualifier_identity_forward_only": True,
         "source092_aggregate_schema_6_7_3_and_contract_71eb_unchanged": True,
         "source092_frozen091_profile_preserved_without_requalification": True,
