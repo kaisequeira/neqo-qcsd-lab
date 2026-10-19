@@ -38,6 +38,23 @@ REQUEST_HEADERS = [["accept", "*/*"], ["accept-encoding", "identity"],
 BUFLO_CAPPED_SELECTION_POLICY = "resource-domain-buflo-prepared-and-identity-body-cap-descending-prefix-v1"
 BUFLO_CAPPED_SELECTION_TYPE = "qcsd-resource-domain-buflo-capped-chaff-selection-v1"
 BUFLO_CAPPED_SIDECAR_TYPE = "qcsd-resource-domain-buflo-capped-identity-chaff-qualification-v1"
+BUFLO_AGGREGATE_SELECTION_POLICY = "resource-domain-buflo-original-auxiliary-small-response-five-known-capacity-v1"
+BUFLO_AGGREGATE_SELECTION_TYPE = "qcsd-resource-domain-buflo-small-response-aggregate-selection-v1"
+BUFLO_AGGREGATE_SIDECAR_TYPE = "qcsd-resource-domain-buflo-small-response-aggregate-qualification-v1"
+BUFLO_AGGREGATE_NATIVE = "d44de7cde8f6e2e72f337c00a01e9816c07753fa"
+
+
+def _buflo_aggregate_option(value: Any, cap: int | None = None) -> bool:
+    if type(value) is not bool or value and cap is not None:
+        raise ValueError("small-response aggregate requires an explicit boolean and excludes the cap option")
+    return value
+
+
+def buflo_aggregate_selection() -> dict[str, Any]:
+    from .chaff_qualification import SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256
+    return {"schema_version": 1, "record_type": BUFLO_AGGREGATE_SELECTION_TYPE,
+        "selection_policy": BUFLO_AGGREGATE_SELECTION_POLICY,
+        "aggregate_capacity_contract_sha256": SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256}
 
 
 def _buflo_chaff_cap(value: Any) -> int | None:
@@ -228,6 +245,195 @@ def _qualify_buflo_capped(prepared: Path, root: Path, client: Path,
     _write(root / "qualification-failed.json", {"error": error, "candidate_attempts": attempts,
         "selection_outcomes": outcomes, "scientific_credit": False})
     return {"sidecar": None, "manifest": None, "error": error}
+
+
+def _buflo_aggregate_candidates(prepared: Mapping[str, Any]) -> list[tuple[dict, dict]]:
+    """Filter the original twenty; never change application resources or order."""
+    resources = prepared["resources"]
+    responses = prepared["preparation"]["expected_responses"]
+    if (type(resources) is not list or type(responses) is not list
+            or len(resources) != 20 or len(responses) != 20
+            or [row.get("id") for row in resources] != list(range(20))
+            or any(type(row.get("id")) is not int for row in resources)
+            or any(type(row.get("resource_id")) is not int for row in responses)
+            or {row["resource_id"] for row in responses} != set(range(20))):
+        raise ValueError("aggregate qualification requires all twenty original prepared identities")
+    expected = {row["resource_id"]: row for row in responses}
+    hosts = {urlsplit(row["url"]).hostname for row in resources}
+    if len(hosts) != 1 or None in hosts:
+        raise ValueError("aggregate qualification must stay on the original resource hostname")
+    if (prepared["preparation"].get("qualified_chaff_origin_policy") != "prepared-approved-origins-v1"
+            or prepared["preparation"].get("approved_origins") != ["https://" + next(iter(hosts))]):
+        raise ValueError("aggregate qualification changed the original approved origin")
+    candidates = []
+    for resource in resources:
+        row = expected[resource["id"]]
+        if (resource.get("known_valid") is not True or resource.get("depends_on") != []
+                or resource.get("headers") != REQUEST_HEADERS
+                or urlsplit(resource["url"]).scheme != "https"
+                or type(row.get("status")) is not int or not 200 <= row["status"] < 300
+                or type(row.get("bytes")) is not int or not 0 < row["bytes"] <= MAX_RESPONSE_BYTES
+                or type(row.get("body_sha256")) is not str
+                or _SHA256.fullmatch(row["body_sha256"]) is None):
+            raise ValueError("aggregate qualification changed an original complete prepared GET")
+        # The unchanged approved-origin Native schema-five contract selects
+        # an auxiliary response; resource0 remains the application anchor.
+        if resource["id"] != 0 and 256 <= row["bytes"] < 1200:
+            candidates.append((resource, row))
+    return sorted(candidates, key=lambda pair: (-pair[1]["bytes"], pair[0]["id"], pair[0]["url"]))[:1]
+
+
+def _validate_buflo_aggregate_sidecar(prepared: Mapping[str, Any], prepared_sha256: str,
+                                  sidecar: Mapping[str, Any], manifest: Mapping[str, Any],
+                                  runtime: Mapping[str, Any]) -> None:
+    """Independently replay the scoped policy and all sustained receipt guards."""
+    from . import chaff_qualification as chaff
+    fields = {"schema_version", "record_type", "selection_policy", "aggregate_capacity_contract_sha256",
+        "application_workload_sha256", "application_resource_id", "selected_chaff_resource_id",
+        "qualified_parallel_chaff_streams", "qualification_policy", "runtime", "neqo_provenance",
+        "candidate_attempts", "selection_outcomes", "resource", "native_manifest_sha256", "scientific_credit"}
+    candidates = _buflo_aggregate_candidates(prepared)
+    if (type(sidecar) is not dict or set(sidecar) != fields
+            or type(sidecar["schema_version"]) is not int or sidecar["schema_version"] != 1
+            or sidecar["record_type"] != BUFLO_AGGREGATE_SIDECAR_TYPE
+            or sidecar["selection_policy"] != BUFLO_AGGREGATE_SELECTION_POLICY
+            or sidecar["aggregate_capacity_contract_sha256"] != chaff.SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256
+            or sidecar["application_workload_sha256"] != prepared_sha256
+            or type(sidecar["application_resource_id"]) is not int or sidecar["application_resource_id"] != 0
+            or type(sidecar["selected_chaff_resource_id"]) is not int
+            or type(sidecar["qualified_parallel_chaff_streams"]) is not int
+            or sidecar["qualified_parallel_chaff_streams"] != 5
+            or sidecar["qualification_policy"] != chaff.small_response_aggregate_qualification_policy()
+            or canonical_json(sidecar["runtime"]) != canonical_json(dict(runtime))
+            or sidecar["scientific_credit"] is not False
+            or type(sidecar["neqo_provenance"]) is not dict
+            or sidecar["neqo_provenance"].get("migration_commit") != runtime["native_commit"]):
+        raise ValueError("aggregate BuFLO sidecar policy, runtime or workload binding differs")
+    chaff._validate_small_response_aggregate_policy(sidecar["qualification_policy"])
+    attempts, outcomes = sidecar["candidate_attempts"], sidecar["selection_outcomes"]
+    if (type(attempts) is not list or not 1 <= len(attempts) <= len(candidates)
+            or type(outcomes) is not list or len(outcomes) != len(attempts)):
+        raise ValueError("aggregate BuFLO attempts must be the exact nonempty eligible prefix")
+    for index, (attempt, outcome) in enumerate(zip(attempts, outcomes)):
+        resource, response = candidates[index]
+        checked = chaff._validate_response_only_candidate_attempt(attempt,
+            candidate_index=index, base_resource=resource, prepared_response=response,
+            application_manifest_sha256=prepared_sha256, application_resource_id=0,
+            neqo_provenance=sidecar["neqo_provenance"], small_response_aggregate=True)
+        epochs = [(row["process_exit_code"], row["receipt"]) for row in checked["connection_epochs"]]
+        _, identity, _ = chaff._candidate_attempt_record_v2(candidate_index=index,
+            base_resource=resource, prepared_response=response, epochs=epochs,
+            application_manifest_sha256=prepared_sha256, application_resource_id=0,
+            neqo_provenance=sidecar["neqo_provenance"], small_response_aggregate=True)
+        actual = "rejected" if identity is None else "selected"
+        if outcome != actual or (actual == "selected") != (index == len(attempts) - 1):
+            raise ValueError("aggregate BuFLO selected candidate or earlier outcome differs")
+    selected = candidates[len(attempts) - 1][0]
+    if sidecar["selected_chaff_resource_id"] != selected["id"]:
+        raise ValueError("aggregate BuFLO selected resource is outside its exact candidate prefix")
+    resource = chaff._validate_response_only_v2_resource_receipt(sidecar["resource"], selected,
+        selected_attempt=attempts[-1], small_response_aggregate=True)
+    derived = chaff.derive_small_response_aggregate_manifest({"base_manifest": {"sha256": prepared_sha256},
+        "application_resource_id": 0, "selected_chaff_resource_id": selected["id"], "resource": resource}, selected)
+    digest = hashlib.sha256(canonical_json(derived)).hexdigest()
+    if canonical_json(manifest) != canonical_json(derived) or sidecar["native_manifest_sha256"] != digest:
+        raise ValueError("aggregate BuFLO sidecar does not derive the exact Native schema-five manifest")
+
+
+def validate_buflo_aggregate_enrollment(root: Path, enrollment: Mapping[str, Any]) -> dict | None:
+    """Validate only the explicit new branch; all launch files retain their hashes."""
+    from . import chaff_qualification as chaff
+    if "buflo_chaff_selection" in enrollment and "buflo_small_response_aggregate_selection" in enrollment:
+        raise ValueError("aggregate and capped BuFLO selections cannot coexist")
+    if "buflo_small_response_aggregate_selection" not in enrollment:
+        return None
+    selection = enrollment["buflo_small_response_aggregate_selection"]
+    if enrollment.get("runtime", {}).get("native_commit") != BUFLO_AGGREGATE_NATIVE:
+        raise ValueError("aggregate BuFLO requires the exact Native127 implementation")
+    from .buflo_duration_budget import CADENCE64_POLICY
+    if enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy") != CADENCE64_POLICY:
+        raise ValueError("aggregate BuFLO preserves the fixed64ms640s policy")
+    if (type(selection) is not dict or set(selection) != {"schema_version", "record_type", "selection_policy", "aggregate_capacity_contract_sha256"}
+            or type(selection["schema_version"]) is not int or selection["schema_version"] != 1
+            or selection["record_type"] != BUFLO_AGGREGATE_SELECTION_TYPE
+            or selection["selection_policy"] != BUFLO_AGGREGATE_SELECTION_POLICY
+            or selection["aggregate_capacity_contract_sha256"] != chaff.SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256):
+        raise ValueError("aggregate BuFLO enrollment selection declaration differs")
+    keys = ("buflo_chaff_sidecar", "buflo_chaff_manifest")
+    if enrollment["mode_readiness"].get("buflo") is not True:
+        if (enrollment["mode_readiness"].get("buflo") is not False
+                or type(enrollment.get("buflo_chaff_qualification_error")) is not str
+                or not enrollment["buflo_chaff_qualification_error"]
+                or any(enrollment["paths"].get(key) is not None for key in keys)):
+            raise ValueError("unqualified aggregate BuFLO enrollment has launch inputs")
+        return None
+    if enrollment.get("buflo_chaff_qualification_error") is not None:
+        raise ValueError("qualified aggregate BuFLO enrollment retains a qualification error")
+    paths = {}
+    for key in (*keys, "prepared_workload"):
+        relative = enrollment["paths"].get(key)
+        if (type(relative) is not str or Path(relative).is_absolute() or ".." in Path(relative).parts
+                or str(Path(relative)) != relative):
+            raise ValueError("aggregate BuFLO launch input path is not canonical and relative")
+        path = _regular(root / relative)
+        if sha256_file(path) != enrollment["files"].get(relative):
+            raise ValueError("aggregate BuFLO launch input changed its enrollment digest")
+        paths[key] = path
+    prepared_sha = sha256_file(paths["prepared_workload"])
+    sidecar = _object(paths["buflo_chaff_sidecar"])
+    manifest = _object(paths["buflo_chaff_manifest"])
+    _validate_buflo_aggregate_sidecar(_object(paths["prepared_workload"]), prepared_sha,
+        sidecar, manifest, enrollment["runtime"])
+    if sidecar["native_manifest_sha256"] != sha256_file(paths["buflo_chaff_manifest"]):
+        raise ValueError("aggregate BuFLO sidecar differs from the exact Native manifest bytes")
+    return {**selection, "application_workload_sha256": prepared_sha,
+        "selected_chaff_resource_id": sidecar["selected_chaff_resource_id"],
+        "sidecar_sha256": sha256_file(paths["buflo_chaff_sidecar"]),
+        "native_manifest_sha256": sha256_file(paths["buflo_chaff_manifest"])}
+
+
+def _qualify_buflo_aggregate(prepared: Path, root: Path, client: Path,
+                         runtime: Mapping[str, Any]) -> dict:
+    """Run genuine three-by-forty identity qualification for a new BF policy."""
+    from . import chaff_qualification as chaff
+    base = _object(prepared); digest = sha256_file(prepared)
+    attempts, outcomes, receipts = [], [], []
+    for index, (candidate, response) in enumerate(_buflo_aggregate_candidates(base)):
+        directory = _new_directory(root / f"candidate-{index:03d}-resource-{candidate['id']:02d}")
+        epochs = chaff._run_response_qualifications_v2(prepared, directory,
+            selected_chaff_resource_id=candidate["id"], application_manifest_sha256=digest,
+            application_resource_id=0, url=candidate["url"], headers=chaff.project_identity_chaff_headers(candidate),
+            neqo_client=client, neqo_client_sha256=runtime["client_sha256"], timeout_seconds=120,
+            interval_seconds=chaff.RESPONSE_ONLY_EPOCH_SPACING_SECONDS, small_response_aggregate=True)
+        receipts.extend(receipt for _, receipt in epochs)
+        attempt, identity, request_bytes = chaff._candidate_attempt_record_v2(candidate_index=index,
+            base_resource=candidate, prepared_response=response, epochs=epochs,
+            application_manifest_sha256=digest, application_resource_id=0, small_response_aggregate=True)
+        attempts.append(attempt)
+        outcome = "rejected" if identity is None else "selected"
+        outcomes.append(outcome)
+        if outcome != "selected":
+            continue
+        resource = {"resource_id": candidate["id"], "url": candidate["url"],
+            "headers": chaff.project_identity_chaff_headers(candidate), "request_stream_bytes": request_bytes,
+            "expected_response": identity, "response_qualification_sha256": attempt["response_qualification_sha256"]}
+        manifest = chaff.derive_small_response_aggregate_manifest({"base_manifest": {"sha256": digest},
+            "application_resource_id": 0, "selected_chaff_resource_id": candidate["id"], "resource": resource}, candidate)
+        sidecar = {"schema_version": 1, "record_type": BUFLO_AGGREGATE_SIDECAR_TYPE,
+            "selection_policy": BUFLO_AGGREGATE_SELECTION_POLICY, "aggregate_capacity_contract_sha256": chaff.SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256,
+            "application_workload_sha256": digest, "application_resource_id": 0,
+            "selected_chaff_resource_id": candidate["id"], "qualified_parallel_chaff_streams": 5,
+            "qualification_policy": chaff.small_response_aggregate_qualification_policy(), "runtime": dict(runtime),
+            "neqo_provenance": chaff._stable_neqo_provenance(receipts), "candidate_attempts": attempts,
+            "selection_outcomes": outcomes, "resource": resource,
+            "native_manifest_sha256": hashlib.sha256(canonical_json(manifest)).hexdigest(), "scientific_credit": False}
+        _validate_buflo_aggregate_sidecar(base, digest, sidecar, manifest, runtime)
+        return {"sidecar": sidecar, "manifest": manifest, "error": None}
+    error = "no small-response aggregate BuFLO candidate passed the genuine sustained identity qualification"
+    _write(root / "qualification-failed.json", {"error": error, "candidate_attempts": attempts,
+        "selection_outcomes": outcomes, "scientific_credit": False})
+    return {"sidecar": None, "manifest": None, "error": error}
+
 
 
 def _regular(path: str | Path) -> Path:
@@ -713,6 +919,7 @@ def _mode_settings(paths: Mapping[str, Path | None], *,
 def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
                    client: str | Path = DEFAULT_CLIENT,
                    runtime: Mapping[str, Any], buflo_chaff_cap_bytes: int | None = None,
+                   buflo_small_response_aggregate: bool = False,
                    buflo_duration_policy: str | None = None,
                    frozen_application_manifest: str | Path | None = None,
                    frozen_application_manifest_sha256: str | None = None) -> dict[str, Any]:
@@ -726,6 +933,11 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     from . import buflo_duration_budget as buflo
     selected_duration = buflo.preparation_policy(buflo_duration_policy)
     cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
+    aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, cap)
+    if aggregate and selected_duration != buflo.CADENCE64_POLICY:
+        raise ValueError("small-response aggregate preserves the fixed64ms640s duration")
+    if aggregate and runtime.get("native_commit") != BUFLO_AGGREGATE_NATIVE:
+        raise ValueError("small-response aggregate preparation requires the exact Native127 implementation")
     pool = _manifest(hostname, urls, require_twenty=False)
     if len(pool["resources"]) < RESOURCES_PER_SESSION:
         raise ValueError("candidate pool has fewer than20 distinct same-host URLs")
@@ -804,6 +1016,11 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         capped = _qualify_buflo_capped(prepared, _new_directory(root / "buflo-capped-qualification"), executable, bound, cap)
         paths["buflo_chaff_sidecar"] = _write(root / "buflo-capped-chaff-qualification.json", capped["sidecar"]) if capped["sidecar"] else None
         paths["buflo_chaff_manifest"] = _write(root / "buflo-capped-chaff-manifest.json", capped["manifest"]) if capped["manifest"] else None
+    aggregated = None
+    if aggregate:
+        aggregated = _qualify_buflo_aggregate(prepared, _new_directory(root / "buflo-small-response-aggregate-qualification"), executable, bound)
+        paths["buflo_chaff_sidecar"] = _write(root / "buflo-small-response-aggregate-qualification.json", aggregated["sidecar"]) if aggregated["sidecar"] else None
+        paths["buflo_chaff_manifest"] = _write(root / "buflo-small-response-aggregate-manifest.json", aggregated["manifest"]) if aggregated["manifest"] else None
     # This self inventory deliberately excludes enrollment.json, whose digest
     # is returned separately for the outer coordinator's immutable reference.
     enrollment = {"schema_version": 1, "role": ROLE, "hostname": probe["hostname"],
@@ -819,6 +1036,11 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         enrollment["mode_readiness"]["buflo"] = capped["error"] is None
         enrollment["buflo_chaff_qualification_error"] = capped["error"]
         validate_buflo_capped_enrollment(root, enrollment)
+    if aggregate:
+        enrollment["buflo_small_response_aggregate_selection"] = buflo_aggregate_selection()
+        enrollment["mode_readiness"]["buflo"] = aggregated["error"] is None
+        enrollment["buflo_chaff_qualification_error"] = aggregated["error"]
+        validate_buflo_aggregate_enrollment(root, enrollment)
     enrollment_path = _write(root / "enrollment.json", enrollment)
     return {**enrollment, "workload_path": str(manifest_path),
         "paths": {**{key: str(value) if value else None for key, value in paths.items()},
@@ -881,6 +1103,8 @@ def _enrollment(directory: str | Path, hostname: str, runtime: Mapping[str, Any]
         raise ValueError("enrollment mode settings differ from actual fixed input bytes")
     if "buflo_chaff_selection" in enrollment:
         validate_buflo_capped_enrollment(root, enrollment)
+    if "buflo_small_response_aggregate_selection" in enrollment:
+        validate_buflo_aggregate_enrollment(root, enrollment)
     return root, enrollment
 
 
@@ -985,7 +1209,8 @@ def capture_session(hostname: str, mode: str, enrollment_dir: str | Path,
         raise ValueError("attempt must be a fresh nonsymlink directory disjoint from enrollment")
     manifest = root / enrollment["paths"]["manifest"]
     prepared = root / enrollment["paths"]["prepared_workload"]
-    chaff_key = "buflo_chaff_manifest" if mode == "buflo" and "buflo_chaff_selection" in enrollment else "chaff_manifest"
+    chaff_key = "buflo_chaff_manifest" if mode == "buflo" and (
+        "buflo_chaff_selection" in enrollment or "buflo_small_response_aggregate_selection" in enrollment) else "chaff_manifest"
     chaff = root / enrollment["paths"][chaff_key] if mode != "undefended" else None
     defense, context = _capture_inputs(mode, root, enrollment)
     result = collector._collect_attempt(attempt, manifest, chaff, hostname, defense, seed, context,
@@ -1025,6 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("_prepare", "_capture", "_probe"))
     parser.add_argument("--job", type=Path, required=True)
     parser.add_argument("--buflo-chaff-cap-bytes", type=int)
+    parser.add_argument("--buflo-small-response-aggregate", action="store_true")
     parser.add_argument("--buflo-duration-policy")
     parser.add_argument("--frozen-application-manifest", type=Path)
     parser.add_argument("--frozen-application-manifest-sha256")
@@ -1041,6 +1267,9 @@ def main(argv: list[str] | None = None) -> int:
                              or args.frozen_application_manifest_sha256 is None):
         parser.error("frozen application manifest needs paired path/SHA only with _prepare")
     cap = _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
+    aggregate = _buflo_aggregate_option(args.buflo_small_response_aggregate, cap)
+    if aggregate and args.action != "_prepare":
+        parser.error("--buflo-small-response-aggregate is only valid for _prepare")
     job = _object(args.job)
     if args.action == "_prepare":
         if "buflo_duration_policy" in job:
@@ -1049,6 +1278,10 @@ def main(argv: list[str] | None = None) -> int:
             job = {**job, "buflo_duration_policy": args.buflo_duration_policy}
         if "buflo_chaff_cap_bytes" in job:
             raise ValueError("the immutable preparation job has no cap field; use the explicit CLI option")
+        if "buflo_small_response_aggregate" in job:
+            raise ValueError("the immutable preparation job has no aggregate field; use the explicit CLI option")
+        if aggregate:
+            job = {**job, "buflo_small_response_aggregate": True}
         if "frozen_application_manifest" in job or "frozen_application_manifest_sha256" in job:
             raise ValueError("the immutable preparation job has no frozen-manifest field; use explicit CLI options")
         if cap is not None:

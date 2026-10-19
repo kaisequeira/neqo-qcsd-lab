@@ -2435,10 +2435,10 @@ def _buflo_ack_start_stop_drain_ledger(
 ) -> dict[str, dict[str, int]]:
     """Bind ACK64 suppression to actual target grids and unchanged drain checks."""
 
-    from .capture_acceptance_policy import validate_buflo_startup_receipt, validate_buflo_startup_schedule
+    from .capture_acceptance_policy import validate_buflo_startup_receipt, validate_buflo_startup_schedule, buflo_startup_diagnostics
     validate_buflo_startup_receipt(incoming_startup, period_us=64_000)
-    validate_buflo_startup_receipt(diagnostics.get("buflo_incoming_startup"), period_us=64_000)
-    if diagnostics["buflo_incoming_startup"] != incoming_startup:
+    validate_buflo_startup_receipt(buflo_startup_diagnostics(diagnostics), period_us=64_000)
+    if buflo_startup_diagnostics(diagnostics) != incoming_startup:
         raise ValueError("BuFLO retained stop startup differs from its Native diagnostics")
     validate_buflo_startup_schedule(incoming_startup, list(schedule_rows), period_us=64_000)
 

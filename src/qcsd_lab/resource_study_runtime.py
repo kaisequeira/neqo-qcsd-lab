@@ -310,8 +310,13 @@ class PreparationRuntime:
         self.root, self.runtime = root.absolute(), runtime
 
     def prepare(self, candidate: dict, output: Path, *, buflo_chaff_cap_bytes: int | None = None,
+                buflo_small_response_aggregate: bool = False,
                 buflo_duration_policy: str | None = None,
                 frozen_application_manifest: dict | None = None) -> dict:
+        from .resource_study_native import _buflo_aggregate_option, BUFLO_AGGREGATE_NATIVE
+        aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
+        if aggregate and self.runtime.get("native_commit") != BUFLO_AGGREGATE_NATIVE:
+            raise ValueError("aggregate preparation requires the exact Native127 runtime")
         if buflo_duration_policy is not None:
             from .buflo_duration_budget import preparation_policy
             preparation_policy(buflo_duration_policy)
@@ -326,6 +331,8 @@ class PreparationRuntime:
         job = {"hostname": candidate["hostname"], "urls": candidate["urls"],
                "output": str(output / "prepared"), "runtime": self.runtime}
         native_prepare_options = ()
+        if aggregate:
+            native_prepare_options = ("--buflo-small-response-aggregate",)
         if buflo_chaff_cap_bytes is not None:
             from .resource_study_native import (
                 _buflo_chaff_cap, BUFLO_CAPPED_SELECTION_POLICY, BUFLO_CAPPED_SELECTION_TYPE,
@@ -350,6 +357,14 @@ class PreparationRuntime:
                 timeout=max(600, len(candidate["urls"]) * 125 + 600))
         _put(output / "result.json", json.loads(result.splitlines()[-1]))
         enrollment = load(output / "result.json")
+        if aggregate:
+            from .resource_study_native import buflo_aggregate_selection
+            selection = enrollment.get("buflo_small_response_aggregate_selection")
+            if (type(selection) is not dict or type(selection.get("schema_version")) is not int
+                    or selection != buflo_aggregate_selection() or "buflo_chaff_selection" in enrollment):
+                raise ValueError("prepared aggregate declaration differs from the explicit Native CLI option")
+        elif "buflo_small_response_aggregate_selection" in enrollment:
+            raise ValueError("ordinary preparation cannot claim the aggregate option")
         if (buflo_duration_policy is not None
                 and enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy") != buflo_duration_policy):
             raise ValueError("prepared BuFLO duration differs from the explicit Native CLI option")

@@ -37,6 +37,7 @@ _U64_MAX = 2**64 - 1
 # Historical source identities retain their schema-13 reader authority.
 LAYERED_TX_REQUIRED_NATIVE_COMMITS: frozenset[str] = frozenset({
     "01e226fb43000691acbda57feb338855b26e66ca",
+    "d44de7cde8f6e2e72f337c00a01e9816c07753fa",
 })
 
 
@@ -611,10 +612,10 @@ def validate_tamaraw_source_binding(prepared: Mapping[str, Any], run: Mapping[st
 def _startup_present(run: Mapping[str, Any]) -> bool:
     summary, diagnostics = run.get("buflo_summary"), run.get("defense_diagnostics")
     return (isinstance(summary, Mapping) and "incoming_startup" in summary
-            or isinstance(diagnostics, Mapping) and "buflo_incoming_startup" in diagnostics)
+            or isinstance(diagnostics, Mapping) and bool({"buflo_incoming_startup", "buflo_incoming_aggregate_startup"} & set(diagnostics)))
 
 
-def validate_buflo_startup_receipt(value: Any, *, require_armed: bool = True, period_us: int = 20_000) -> Mapping[str, Any]:
+def _validate_buflo_single_startup_receipt(value: Any, *, require_armed: bool = True, period_us: int = 20_000) -> Mapping[str, Any]:
     """Validate the actual DTO, including an honest unarmed failure snapshot."""
     if type(period_us) is not int or period_us not in {20_000, 64_000}:
         raise ValueError("unsupported source-bound BuFLO startup cadence")
@@ -715,6 +716,13 @@ def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
         summary = run.get("buflo_summary")
         validate_buflo_startup_receipt(summary.get("incoming_startup") if isinstance(summary, Mapping) else None,
             period_us=64_000 if prospective else 20_000)
+        startup = summary.get("incoming_startup") if isinstance(summary, Mapping) else None
+        if isinstance(startup, Mapping) and startup.get("schema_version") == 2:
+            diagnostics = run.get("defense_diagnostics")
+            if (not prospective or run.get("migration_commit") != AGGREGATE_STARTUP_NATIVE
+                or not isinstance(diagnostics, Mapping) or "buflo_incoming_startup" in diagnostics
+                or not _exact_json(diagnostics.get("buflo_incoming_aggregate_startup"), startup)):
+                raise ValueError("aggregate cadence64 requires its exact Native127 capability and namespace")
     elif _startup_present(run):
         raise ValueError("BuFLO incoming startup lacks its V2 policy")
     return window
@@ -783,7 +791,7 @@ def validate_buflo_startup_schedule(startup: Mapping[str, Any], rows: list[Mappi
         raise ValueError("BuFLO startup suppressed count differs from its actual schedule")
 
 
-def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory: Path | None,
+def _validate_buflo_single_startup_evidence(run: Mapping[str, Any], *, runner_directory: Path | None,
                                   prepared: Mapping[str, Any] | None = None,
                                   schedule_rows: list[Mapping[str, Any]] | None = None) -> Mapping[str, Any]:
     """Re-derive terminal ACK coverage from paired production/reduction records."""
@@ -921,3 +929,338 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
     validate_buflo_startup_schedule(startup, schedule_rows,
         period_us=64_000 if marker["policy"] == CADENCE64_ACK_START_POLICY else 20_000)
     return startup
+
+
+# SOURCE fragment inserted into the existing capture_acceptance_policy module.
+# The historical single-stream implementation remains a separate unchanged leaf.
+AGGREGATE_STARTUP_POLICY = "qualified-five-chaff-terminal-ack-aggregate-cadence-start-v1"
+AGGREGATE_STARTUP_NATIVE = "d44de7cde8f6e2e72f337c00a01e9816c07753fa"
+AGGREGATE_CAPACITY_POLICY = "same-endpoint-five-acked-known-capacity-v1"
+AGGREGATE_CAPACITY_CONTRACT_SHA256 = "2ccc8a42e9ad289add902d44887d0e728c41ed61c18ef5a396108557918e4d76"
+
+
+def buflo_startup_diagnostics(diagnostics: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Keep the two actual Native DTO namespaces distinct."""
+    keys = {"buflo_incoming_startup", "buflo_incoming_aggregate_startup"} & set(diagnostics)
+    if len(keys) > 1:
+        raise ValueError("BuFLO single-stream and aggregate startup cannot coexist")
+    return diagnostics[next(iter(keys))] if keys else None
+
+
+def validate_buflo_aggregate_startup_receipt(value: Any, *, require_armed: bool = True,
+                                          period_us: int = 64_000) -> Mapping[str, Any]:
+    fixed = {"schema_version": 2, "policy": AGGREGATE_STARTUP_POLICY,
+             "time_basis": STARTUP_TIME_BASIS, "period_us": 64_000,
+             "packet_size_bytes": 1_200, "member_count": 5}
+    nullable = {"armed_at_us", "ready_at_us", "aggregate_endpoint", "members",
+                "aggregate_eligible_exact_capacity_bytes"}
+    keys = {*fixed, *nullable, "armed", "startup_suppressed_opportunities",
+            "qualification_manifest_sha256"}
+    digest = value.get("qualification_manifest_sha256") if isinstance(value, Mapping) else None
+    if (type(period_us) is not int or period_us != 64_000
+        or not isinstance(value, Mapping) or set(value) != keys
+        or any(type(value[key]) is not type(expected) or value[key] != expected
+               for key, expected in fixed.items())
+        or type(value["armed"]) is not bool
+        or not _uint(value["startup_suppressed_opportunities"])
+        or type(digest) is not str or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)):
+        raise ValueError("invalid five-member BuFLO aggregate startup receipt")
+    if not value["armed"]:
+        if require_armed or any(value[key] is not None for key in nullable):
+            raise ValueError("unarmed aggregate startup has fabricated readiness")
+        return value
+    integer_keys = nullable - {"members"}
+    members = value["members"]
+    if (any(not _uint(value[key]) for key in integer_keys)
+        or type(members) is not list or len(members) != 5
+        or value["armed_at_us"] != (value["ready_at_us"] // 64_000 + 1) * 64_000
+        or value["armed_at_us"] > _U64_MAX
+        or value["startup_suppressed_opportunities"] != value["armed_at_us"] // 64_000):
+        raise ValueError("aggregate startup violates its strict future cadence barrier")
+    member_keys = {"endpoint", "stream", "resource_id", "request_id",
+                   "request_stream_final_size", "ack_observed_at_us", "advertised_limit",
+                   "requested_limit", "known_limit", "eligible_exact_capacity_bytes"}
+    total = 0
+    streams, requests, resources = [], set(), set()
+    for member in members:
+        if (not isinstance(member, Mapping) or set(member) != member_keys
+            or any(not _uint(member[key]) for key in member_keys)
+            or member["endpoint"] != value["aggregate_endpoint"]
+            or member["resource_id"] == 0 or member["resource_id"] > 2**32 - 1
+            or member["request_id"] in requests
+            or member["request_stream_final_size"] == 0
+            or member["ack_observed_at_us"] > value["ready_at_us"]
+            or member["advertised_limit"] != member["requested_limit"]
+            or member["known_limit"] <= member["requested_limit"]
+            or member["eligible_exact_capacity_bytes"] != member["known_limit"] - member["requested_limit"]):
+            raise ValueError("aggregate startup member lacks exact live identity, ACK or capacity")
+        streams.append(member["stream"]); requests.add(member["request_id"])
+        resources.add(member["resource_id"]); total += member["eligible_exact_capacity_bytes"]
+    if (streams != sorted(set(streams)) or len(resources) != 1 or not 1_200 <= total <= _U64_MAX
+        or total != value["aggregate_eligible_exact_capacity_bytes"]):
+        raise ValueError("aggregate startup capacity is not five unique same-endpoint members")
+    return value
+
+
+def validate_buflo_startup_receipt(value: Any, *, require_armed: bool = True,
+                                 period_us: int = 20_000) -> Mapping[str, Any]:
+    if isinstance(value, Mapping) and type(value.get("schema_version")) is int and value["schema_version"] == 2:
+        return validate_buflo_aggregate_startup_receipt(value, require_armed=require_armed, period_us=period_us)
+    return _validate_buflo_single_startup_receipt(value, require_armed=require_armed, period_us=period_us)
+
+
+def _aggregate_member_ack_evidence(events: list[Mapping[str, Any]], member: Mapping[str, Any],
+                                 ready_at_us: int) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
+    """Join each actual chaff FIN ACK to its paired production/reduction records."""
+    role = {"chaff": {"resource_id": member["resource_id"], "request_id": member["request_id"]}}
+    identity = (member["endpoint"], member["stream"], role)
+    originals, bindings, openings = {}, [], []
+    for row in events:
+        event = row.get("event")
+        if event not in {"observation", "buflo_incoming_startup_ack"}:
+            continue
+        try:
+            details = json.loads(row["details"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("invalid aggregate startup event JSON") from error
+        if not isinstance(details, Mapping):
+            raise ValueError("invalid aggregate startup event object")
+        if event == "buflo_incoming_startup_ack":
+            if (set(details) != {"schema_version", "source", "production_sequence", "production_monotonic_ns",
+                                "controller_defense_elapsed_us", "observation"}
+                or type(details["schema_version"]) is not int or details["schema_version"] != 1
+                or details["source"] != STARTUP_TIME_BASIS or row.get("outcome") != "controller_reduced"
+                or any(not _uint(details[key]) for key in ("production_sequence", "production_monotonic_ns",
+                                                          "controller_defense_elapsed_us"))):
+                raise ValueError("invalid aggregate ACK reduction event")
+            observation = details["observation"]
+        else:
+            observation = {key: item for key, item in details.items()
+                           if key not in {"production_sequence", "production_monotonic_ns"}}
+        if not isinstance(observation, Mapping):
+            raise ValueError("invalid aggregate startup observation")
+        if (observation.get("endpoint"), observation.get("stream"), observation.get("role")) != identity:
+            continue
+        if (any(not _uint(observation.get(key)) for key in ("endpoint", "stream"))
+            or not isinstance(observation.get("role"), Mapping) or set(observation["role"]) != {"chaff"}
+            or not isinstance(observation["role"]["chaff"], Mapping)
+            or set(observation["role"]["chaff"]) != {"resource_id", "request_id"}
+            or any(not _uint(observation["role"]["chaff"][key]) for key in ("resource_id", "request_id"))
+            or not _uint(details.get("production_sequence")) or not _uint(details.get("production_monotonic_ns"))
+            or _csv_uint(row.get("connection")) != member["endpoint"]
+            or _csv_uint(row.get("monotonic_us")) != details["production_monotonic_ns"] // 1_000):
+            raise ValueError("aggregate member lacks its actual production clock or endpoint")
+        if event == "observation" and observation.get("type") == "stream_opened":
+            if row.get("outcome") != "recorded":
+                raise ValueError("aggregate opening was not recorded")
+            openings.append(details)
+        if observation.get("type") != "stream_data_acknowledged":
+            continue
+        if (set(observation) not in ({"type", "endpoint", "stream", "role", "offset", "bytes"},
+                                    {"type", "endpoint", "stream", "role", "offset", "bytes", "fin"})
+            or not _uint(observation["offset"]) or not _uint(observation["bytes"])
+            or type(observation.get("fin", False)) is not bool
+            or observation["offset"] + observation["bytes"] > member["request_stream_final_size"]
+            or observation.get("fin", False) and observation["offset"] + observation["bytes"] != member["request_stream_final_size"]):
+            raise ValueError("invalid aggregate member ACK range or FIN")
+        key = (details["production_sequence"], details["production_monotonic_ns"])
+        if event == "observation":
+            if row.get("outcome") != "recorded" or key in originals:
+                raise ValueError("duplicate aggregate member original ACK")
+            originals[key] = observation
+        else:
+            bindings.append(details)
+    if len(openings) != 1 or not bindings:
+        raise ValueError("aggregate member lacks its unique opening or ACK evidence")
+    opening = openings[0]
+    ranges, seen = [], set()
+    fin = False; terminal = None; previous_clock = -1
+    previous_sequence, previous_ns = opening["production_sequence"], opening["production_monotonic_ns"]
+    for binding in sorted(bindings, key=lambda item: item["production_sequence"]):
+        key = (binding["production_sequence"], binding["production_monotonic_ns"])
+        observation = binding["observation"]; at = binding["controller_defense_elapsed_us"]
+        if (key in seen or not _exact_json(originals.get(key), observation)
+            or key[0] <= previous_sequence or key[1] < previous_ns or at < previous_clock):
+            raise ValueError("aggregate ACK lacks its unique original or honest reduction order")
+        seen.add(key); previous_sequence, previous_ns = key; previous_clock = at
+        ranges.append((observation["offset"], observation["offset"] + observation["bytes"]))
+        fin |= observation.get("fin", False)
+        covered = 0
+        for lower, upper in sorted(ranges):
+            if lower > covered:
+                break
+            covered = max(covered, upper)
+        if terminal is None and fin and covered == member["request_stream_final_size"]:
+            terminal = at
+    if set(originals) != seen or terminal != member["ack_observed_at_us"] or terminal > ready_at_us:
+        raise ValueError("aggregate member lacks full contiguous terminal request ACK before readiness")
+    return opening, bindings
+
+
+def validate_buflo_aggregate_startup_evidence(run: Mapping[str, Any], *, runner_directory: Path | None,
+                                           prepared: Mapping[str, Any] | None = None,
+                                           schedule_rows: list[Mapping[str, Any]] | None = None) -> Mapping[str, Any]:
+    """Prove five-member startup; never manufacture a single-stream cell."""
+    marker = run.get(FIELD)
+    diagnostics = run.get("defense_diagnostics")
+    summary = run.get("buflo_summary")
+    if (run.get("migration_commit") != AGGREGATE_STARTUP_NATIVE
+        or not isinstance(marker, Mapping) or marker.get("policy") != CADENCE64_ACK_START_POLICY
+        or not isinstance(diagnostics, Mapping) or not isinstance(summary, Mapping)):
+        raise ValueError("aggregate startup requires its distinct Native127 source and cadence64 contract")
+    startup = validate_buflo_aggregate_startup_receipt(summary.get("incoming_startup"))
+    if (not _exact_json(buflo_startup_diagnostics(diagnostics), startup)
+        or "buflo_incoming_startup" in diagnostics
+        or run.get("chaff_manifest_hash_sha256") != startup["qualification_manifest_sha256"]
+        or runner_directory is None):
+        raise ValueError("aggregate startup lacks its exact Native manifest, diagnostics or reopened evidence")
+    buflo_incoming_release_window(run)
+    directory = Path(runner_directory)
+    with _regular_child(directory, "events.csv").open(newline="", encoding="utf-8") as source:
+        events = list(csv.DictReader(source))
+    ready = []
+    for row in events:
+        if row.get("event") == "buflo_incoming_startup_ready":
+            detail = json.loads(row["details"])
+            if (row.get("outcome") != "armed" or not _exact_json(detail, startup)
+                or _csv_uint(row.get("connection")) != startup["aggregate_endpoint"]):
+                raise ValueError("aggregate startup ready event differs from its actual typed receipt")
+            ready.append(row)
+    if len(ready) != 1:
+        raise ValueError("aggregate startup needs exactly one ready event")
+    start_ns = run.get("defense_start_monotonic_ns")
+    if not _uint(start_ns):
+        raise ValueError("aggregate startup lacks its defense/process clock binding")
+    # Floor-microsecond Native readiness admits at most this enclosing clock bucket.
+    cutoff_us = (start_ns + startup["ready_at_us"] * 1_000 + 999) // 1_000
+    prepared_expected = {}
+    prepared_resources = {}
+    if prepared is not None:
+        resources = prepared.get("resources")
+        preparation = prepared.get("preparation")
+        expected = preparation.get("expected_responses") if isinstance(preparation, Mapping) else None
+        if (not isinstance(resources, list) or len(resources) != 20
+            or [item.get("id") for item in resources if isinstance(item, Mapping)] != list(range(20))
+            or not isinstance(expected, list)):
+            raise ValueError("aggregate startup requires the unchanged original20 prepared graph")
+        prepared_resources = {item["id"]: item for item in resources}
+        prepared_expected = {item["resource_id"]: item for item in expected if isinstance(item, Mapping)}
+    responses = run.get("chaff_responses")
+    if not isinstance(responses, list):
+        raise ValueError("aggregate startup lacks actual chaff response receipts")
+    minimum_capacity = 0
+    qualified_body = None
+    member_production_sequences = set()
+    for member in startup["members"]:
+        opening, bindings = _aggregate_member_ack_evidence(events, member, startup["ready_at_us"])
+        for observation in [opening, *bindings]:
+            sequence = observation["production_sequence"]
+            if sequence in member_production_sequences:
+                raise ValueError("aggregate members reuse a global Native observation sequence")
+            member_production_sequences.add(sequence)
+        if opening.get("expected_response_length") is not None:
+            raise ValueError("aggregate chaff opening fabricated an application-only body estimate")
+        matching = [item for item in responses if isinstance(item, Mapping)
+                    and item.get("resource_id") == member["resource_id"] and item.get("request_id") == member["request_id"]]
+        if (len(matching) != 1 or any(type(matching[0].get(key)) is not int
+                or matching[0][key] != member["request_stream_final_size"]
+                for key in ("request_stream_bytes", "expected_request_stream_bytes"))
+            or any(not _uint(matching[0].get(key)) for key in ("resource_id", "request_id"))
+            or type(matching[0].get("url")) is not str or not matching[0]["url"].startswith("https://")):
+            raise ValueError("aggregate member ACK differs from the genuine chaff request receipt")
+        issued = []; manual = []; requested = advertised = None; consumed = 0
+        for row in events:
+            if row.get("event") not in {"action", "observation"} or _csv_uint(row.get("monotonic_us")) > cutoff_us:
+                continue
+            detail = json.loads(row["details"])
+            if not isinstance(detail, Mapping) or detail.get("endpoint") != member["endpoint"]:
+                continue
+            if not _uint(detail.get("endpoint")):
+                raise ValueError("aggregate raw endpoint is not an unsigned Native identity")
+            kind = detail.get("type")
+            if row.get("event") == "action" and row.get("outcome") == "applied" and kind == "request_chaff":
+                resource = detail.get("resource")
+                if (detail.get("request_id") == member["request_id"] and isinstance(resource, Mapping)
+                    and resource.get("id") == member["resource_id"] and resource.get("url") == matching[0].get("url")):
+                    if not _uint(detail.get("request_id")) or not _uint(resource.get("id")):
+                        raise ValueError("aggregate issued request identity is not an unsigned Native identity")
+                    issued.append(detail)
+            if (row.get("event") == "observation" and row.get("outcome") == "recorded"
+                and kind == "endpoint_closed"):
+                raise ValueError("aggregate endpoint closed before readiness")
+            if detail.get("stream") != member["stream"]:
+                continue
+            if not _uint(detail.get("stream")):
+                raise ValueError("aggregate raw stream is not an unsigned Native identity")
+            if row.get("event") == "action" and row.get("outcome") == "applied":
+                if kind == "configure_manual_receive":
+                    if detail.get("initial_limit") != 16 or requested is not None:
+                        raise ValueError("aggregate member did not start at the exact manual16 frontier")
+                    requested = advertised = 16; manual.append(detail)
+                elif kind in {"increase_receive_limit", "lease_parser_receive"}:
+                    limit = detail.get("absolute_limit")
+                    if not _uint(requested) or not _uint(limit) or limit <= requested:
+                        raise ValueError("aggregate current receive frontier is not increasing")
+                    owner = detail.get("owner") if kind == "lease_parser_receive" else detail
+                    if isinstance(owner, Mapping) and owner.get("slot") is not None:
+                        raise ValueError("aggregate startup capacity was already spent on a scheduled owner")
+                    requested = limit
+                elif kind in {"configure_automatic_receive", "cancel_chaff"}:
+                    raise ValueError("aggregate member became unavailable before readiness")
+            if row.get("event") == "observation" and row.get("outcome") == "recorded":
+                if kind == "receive_limit_advertised":
+                    limit = detail.get("absolute_limit")
+                    if not _uint(limit) or not _uint(advertised) or limit < advertised:
+                        raise ValueError("aggregate advertised frontier is invalid")
+                    advertised = limit
+                elif kind == "bytes_read":
+                    amount = detail.get("bytes")
+                    if not _uint(amount):
+                        raise ValueError("invalid aggregate raw consumption")
+                    consumed += amount
+                elif kind in {"stream_finished", "stream_reset", "endpoint_closed"}:
+                    raise ValueError("aggregate startup contains a terminal member")
+        if (len(issued) != 1 or len(manual) != 1 or requested != member["requested_limit"]
+            or advertised != member["advertised_limit"] or consumed > advertised):
+            raise ValueError("aggregate member lacks its exact issued/current unspent receive capacity")
+        # Chaff StreamOpened intentionally has no expected_response_length.
+        # Native open_stream takes the estimate from the exact issued Resource.
+        resource = issued[0]["resource"]
+        content, data = resource.get("content_length"), resource.get("data_length")
+        if (content is not None and not _uint(content) or not _uint(data)
+            or resource.get("known_valid") is not True or resource.get("depends_on") != []):
+            raise ValueError("aggregate issued Resource lacks its exact qualified estimate")
+        body = max(1 if content is None else content, data)
+        if (not 1 <= body < 1_200 or member["known_limit"] < body
+            or qualified_body is not None and body != qualified_body):
+            raise ValueError("aggregate members disagree with their one qualified small-body floor")
+        qualified_body = body
+        if prepared is not None:
+            original = prepared_resources.get(member["resource_id"])
+            expected = prepared_expected.get(member["resource_id"])
+            if (not isinstance(original, Mapping) or not isinstance(expected, Mapping)
+                or original.get("known_valid") is not True or original.get("depends_on") != []
+                or original.get("url") != matching[0].get("url") or expected.get("bytes") != body):
+                raise ValueError("aggregate member differs from its exact original prepared auxiliary")
+        # Independent conservative floor: no framing reserve, parser budget or claims count.
+        minimum_capacity += max(0, body - requested)
+    if minimum_capacity < 1_200:
+        raise ValueError("five qualified current body floors do not independently fund one whole cell")
+    if schedule_rows is None:
+        with _regular_child(directory, "schedule.csv").open(newline="", encoding="utf-8") as source:
+            schedule_rows = list(csv.DictReader(source))
+    validate_buflo_startup_schedule(startup, schedule_rows, period_us=64_000)
+    return startup
+
+
+def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory: Path | None,
+                                  prepared: Mapping[str, Any] | None = None,
+                                  schedule_rows: list[Mapping[str, Any]] | None = None) -> Mapping[str, Any]:
+    summary = run.get("buflo_summary")
+    startup = summary.get("incoming_startup") if isinstance(summary, Mapping) else None
+    if isinstance(startup, Mapping) and type(startup.get("schema_version")) is int and startup["schema_version"] == 2:
+        return validate_buflo_aggregate_startup_evidence(run, runner_directory=runner_directory,
+            prepared=prepared, schedule_rows=schedule_rows)
+    return _validate_buflo_single_startup_evidence(run, runner_directory=runner_directory,
+        prepared=prepared, schedule_rows=schedule_rows)

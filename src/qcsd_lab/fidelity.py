@@ -12,6 +12,7 @@ from statistics import median_low
 from typing import Any, Iterable
 
 from .capture import read_normalized_trace
+from .capture_acceptance_policy import buflo_startup_diagnostics
 from .defenses import DEFENSE_ADAPTATIONS
 from .kernel_tx import (
     KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS,
@@ -730,12 +731,12 @@ def buflo_terminal_diagnostics_valid(
         from .capture_acceptance_policy import validate_buflo_startup_receipt
         try:
             validate_buflo_startup_receipt(incoming_startup, period_us=buflo_period_us)
-            validate_buflo_startup_receipt(diagnostics.get("buflo_incoming_startup"), period_us=buflo_period_us)
+            validate_buflo_startup_receipt(buflo_startup_diagnostics(diagnostics), period_us=buflo_period_us)
         except ValueError:
             return False
-        if diagnostics.get("buflo_incoming_startup") != incoming_startup:
+        if buflo_startup_diagnostics(diagnostics) != incoming_startup:
             return False
-    elif "buflo_incoming_startup" in diagnostics:
+    elif {"buflo_incoming_startup", "buflo_incoming_aggregate_startup"} & set(diagnostics):
         return False
 
     application_key = "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
@@ -4106,12 +4107,14 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any], *, bu
     else:
         selected = {key: value for key, value in diagnostics.items() if key.startswith("cs_buflo_")}
     expected = set(contract)
-    if defense == "buflo" and "buflo_incoming_startup" in selected:
+    if defense == "buflo" and {"buflo_incoming_startup", "buflo_incoming_aggregate_startup"} & set(selected):
         from .capture_acceptance_policy import validate_buflo_startup_receipt
         try:
-            validate_buflo_startup_receipt(selected.pop("buflo_incoming_startup"), period_us=buflo_period_us)
+            startup = buflo_startup_diagnostics(selected)
+            validate_buflo_startup_receipt(startup, period_us=buflo_period_us)
         except ValueError:
             return False
+        selected.pop("buflo_incoming_aggregate_startup" if startup["schema_version"] == 2 else "buflo_incoming_startup")
     if defense == "buflo" and (
         "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch" not in selected
     ):
@@ -4818,9 +4821,9 @@ def _legacy_new_defense_terminal_receipts_valid(
         except (OSError, ValueError, TypeError, KeyError):
             return False
         expected_fields.add("incoming_startup")
-        if diagnostics.get("buflo_incoming_startup") != incoming_startup:
+        if buflo_startup_diagnostics(diagnostics) != incoming_startup:
             return False
-    elif "buflo_incoming_startup" in diagnostics:
+    elif {"buflo_incoming_startup", "buflo_incoming_aggregate_startup"} & set(diagnostics):
         return False
     supported_summary_schemas = {2, 3, 4}
     if (
@@ -7732,7 +7735,10 @@ def fidelity_eligible(
             incoming_startup = _buflo_metric_startup(schedule_metrics) if isinstance(schedule_metrics, Mapping) else None
         except ValueError:
             return False
-        if diagnostics.get("buflo_incoming_startup") != incoming_startup:
+        try:
+            if buflo_startup_diagnostics(diagnostics) != incoming_startup:
+                return False
+        except ValueError:
             return False
         zero_keys = (
             "buflo_partial_outgoing_cells",

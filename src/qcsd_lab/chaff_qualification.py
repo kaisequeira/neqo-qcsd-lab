@@ -104,6 +104,8 @@ UDP_PAYLOAD_CEILING = 1_200
 INCOMING_UDP_PAYLOAD_LIMIT = 65_527
 RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 4
 RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 5
+SMALL_RESPONSE_AGGREGATE_SCOPE = "buflo-small-response-aggregate-v1"
+SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256 = "2ccc8a42e9ad289add902d44887d0e728c41ed61c18ef5a396108557918e4d76"
 PREFIX_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 3
 PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION = 4
 PRIMARY_ORIGIN_CAPACITY_SCOPE = "primary-origin-capacity-v1"
@@ -2270,6 +2272,26 @@ def derive_response_only_chaff_manifest_v2(
     }
 
 
+def small_response_aggregate_contract() -> dict[str, Any]:
+    """The exact Native127 five-stream known-capacity contract."""
+    return {"policy": "same-endpoint-five-acked-known-capacity-v1", "defense": "buflo",
+        "period_us": 64_000, "packet_size_bytes": 1200, "initial_max_stream_data": 16,
+        "member_count": 5, "max_members": 5, "connection_count": 1,
+        "minimum_initial_exact_capacity_bytes": 1200, "body_range_bytes": [1, 1199],
+        "count_claimable_or_parser_budget": False, "same_original_approved_origin_required": True}
+
+
+def derive_small_response_aggregate_manifest(sidecar: Mapping[str, Any],
+        base_resource: Mapping[str, Any]) -> dict[str, Any]:
+    value = derive_response_only_chaff_manifest_v2(sidecar, base_resource)
+    value.update(schema_version=5, qualification_scope=SMALL_RESPONSE_AGGREGATE_SCOPE,
+                 aggregate_capacity_contract=small_response_aggregate_contract())
+    value["resources"][0]["chaff_qualification"].update(schema_version=5,
+        qualification_scope=SMALL_RESPONSE_AGGREGATE_SCOPE,
+        aggregate_capacity_contract_sha256=SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256)
+    return value
+
+
 def derive_chaff_manifest(
     sidecar: Mapping[str, Any],
     base_resource: Mapping[str, Any],
@@ -4418,6 +4440,7 @@ def _run_response_qualifications_v2(
     neqo_client_sha256: str,
     timeout_seconds: int,
     interval_seconds: int,
+    small_response_aggregate: bool = False,
 ) -> list[tuple[int, dict[str, Any]]]:
     """Run three fresh sustained connection epochs for one candidate.
 
@@ -4457,6 +4480,7 @@ def _run_response_qualifications_v2(
                 str(RESPONSE_ONLY_REQUESTS_PER_EPOCH),
                 "--request-header-mode",
                 IDENTITY_REQUEST_HEADER_MODE,
+                *(["--small-response-aggregate"] if small_response_aggregate else []),
             ],
             log=directory / f"response-{index}.log",
             configured_timeout_seconds=timeout_seconds,
@@ -4493,6 +4517,7 @@ def _run_response_qualifications_v2(
                 selected_chaff_resource_id=selected_chaff_resource_id,
                 url=url,
                 headers=headers,
+                small_response_aggregate=small_response_aggregate,
             )
         except ValueError as error:
             raise PreparationError(
@@ -4805,14 +4830,16 @@ def _validate_response_receipt_v2(
     selected_chaff_resource_id: int,
     url: str,
     headers: list[list[str]],
+    small_response_aggregate: bool = False,
 ) -> tuple[list[tuple[int, str, int, str]], int, int, int, str, str | None]:
     """Validate one sustained 8x5 response epoch without hiding a rejection."""
 
     receipt, incoming_limit = _receipt_udp_policy(
         value,
-        legacy_keys=RESPONSE_V2_RECEIPT_KEYS,
+        legacy_keys=(RESPONSE_V2_RECEIPT_KEYS | {"capacity_policy", "aggregate_capacity_contract",
+            "capacity_contract_sha256"}) if small_response_aggregate else RESPONSE_V2_RECEIPT_KEYS,
         legacy_schema=RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION,
-        directional_schema=RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+        directional_schema=6 if small_response_aggregate else RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
         outgoing_ceiling=UDP_PAYLOAD_CEILING,
         label="sustained response qualification receipt",
     )
@@ -4823,10 +4850,10 @@ def _validate_response_receipt_v2(
     if (
         type(receipt["schema_version"]) is not int
         or receipt["schema_version"]
-        not in {
+        not in ({6} if small_response_aggregate else {
             RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION,
             RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
-        }
+        })
         or receipt["artifact_type"] != RESPONSE_ARTIFACT_TYPE
         or receipt["application_workload_sha256"] != application_manifest_sha256
         or type(receipt["application_resource_id"]) is not int
@@ -4869,6 +4896,11 @@ def _validate_response_receipt_v2(
         or failure_class not in {None, "identity", "capacity"}
     ):
         raise ValueError("sustained response qualification receipt binding is invalid")
+    if small_response_aggregate and (
+            receipt["capacity_policy"] != small_response_aggregate_contract()["policy"]
+            or canonical_bytes(receipt["aggregate_capacity_contract"]) != canonical_bytes(small_response_aggregate_contract())
+            or receipt["capacity_contract_sha256"] != SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256):
+        raise ValueError("small-response aggregate qualification contract differs")
     if receipt["passed"] is True:
         if failure_class is not None or receipt["error"] is not None:
             raise ValueError("passing sustained response receipt reports a failure")
@@ -4927,7 +4959,8 @@ def _validate_response_receipt_v2(
         sizes.append(size)
     if len(set(sizes)) != 1 or receipt["request_stream_bytes"] != sizes[0]:
         raise ValueError("sustained response qualification request primitive changed")
-    capacity_failure = any(identity[2] < UDP_PAYLOAD_CEILING for identity in identities)
+    capacity_failure = any((not 1 <= identity[2] < 1200 or 5 * (identity[2] - 16) < 1200)
+        if small_response_aggregate else identity[2] < UDP_PAYLOAD_CEILING for identity in identities)
     identity_failure = len(set(identities)) != 1 or any(
         not 200 <= identity[0] <= 299 or identity[1] != "identity" for identity in identities
     )
@@ -5012,6 +5045,7 @@ def _candidate_attempt_record_v2(
     application_manifest_sha256: str,
     application_resource_id: int,
     neqo_provenance: Mapping[str, Any] | None = None,
+    small_response_aggregate: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, int]:
     """Validate and bind all 120 completions for one deterministic candidate."""
 
@@ -5037,6 +5071,7 @@ def _candidate_attempt_record_v2(
                     selected_chaff_resource_id=base_resource["id"],
                     url=base_resource["url"],
                     headers=headers,
+                    small_response_aggregate=small_response_aggregate,
                 )
             )
         except ValueError as error:
@@ -5063,7 +5098,8 @@ def _candidate_attempt_record_v2(
     if len(set(sizes)) != 1:
         raise PreparationError("identity chaff request-stream bytes changed across epochs")
     capacity_failure = "capacity" in explicit_failures or any(
-        identity[2] < UDP_PAYLOAD_CEILING for identity in identities
+        (not 1 <= identity[2] < 1200 or 5 * (identity[2] - 16) < 1200)
+        if small_response_aggregate else identity[2] < UDP_PAYLOAD_CEILING for identity in identities
     )
     identity_failure = (
         "identity" in explicit_failures
@@ -5086,7 +5122,7 @@ def _candidate_attempt_record_v2(
             "body_bytes": body_bytes,
             "body_sha256": body_sha256,
         }
-        _validate_expected_response(expected_response)
+        _validate_expected_response(expected_response, small_response_aggregate=small_response_aggregate)
     attempt = {
         "candidate_index": candidate_index,
         "resource_id": base_resource["id"],
@@ -5110,6 +5146,7 @@ def _validate_response_only_candidate_attempt(
     application_manifest_sha256: str,
     application_resource_id: int,
     neqo_provenance: Mapping[str, Any],
+    small_response_aggregate: bool = False,
 ) -> dict[str, Any]:
     attempt = _exact_mapping(value, CANDIDATE_ATTEMPT_KEYS, "response-only v2 candidate attempt")
     prepared = _exact_mapping(
@@ -5161,6 +5198,7 @@ def _validate_response_only_candidate_attempt(
             application_manifest_sha256=application_manifest_sha256,
             application_resource_id=application_resource_id,
             neqo_provenance=neqo_provenance,
+            small_response_aggregate=small_response_aggregate,
         )
     except PreparationError as error:
         raise ValueError(str(error)) from error
@@ -5174,6 +5212,7 @@ def _validate_response_only_v2_resource_receipt(
     base_resource: Mapping[str, Any],
     *,
     selected_attempt: Mapping[str, Any],
+    small_response_aggregate: bool = False,
 ) -> dict[str, Any]:
     resource = _exact_mapping(
         value,
@@ -5191,7 +5230,7 @@ def _validate_response_only_v2_resource_receipt(
         != selected_attempt["response_qualification_sha256"]
     ):
         raise ValueError("response-only v2 qualified resource binding is invalid")
-    _validate_expected_response(resource["expected_response"])
+    _validate_expected_response(resource["expected_response"], small_response_aggregate=small_response_aggregate)
     if resource["expected_response"]["content_encoding"] != "identity":
         raise ValueError("response-only v2 authoritative response must use identity encoding")
     epochs = selected_attempt["connection_epochs"]
@@ -5467,7 +5506,7 @@ def _validate_resource_receipt(
     return dict(resource)
 
 
-def _validate_expected_response(value: object) -> None:
+def _validate_expected_response(value: object, *, small_response_aggregate: bool = False) -> None:
     response = _exact_mapping(value, EXPECTED_RESPONSE_KEYS, "qualified response")
     if (
         type(response["status"]) is not int
@@ -5475,7 +5514,8 @@ def _validate_expected_response(value: object) -> None:
         or not isinstance(response["content_encoding"], str)
         or response["content_encoding"] != _normalize_content_encoding(response["content_encoding"])
         or type(response["body_bytes"]) is not int
-        or response["body_bytes"] < UDP_PAYLOAD_CEILING
+        or ((not 1 <= response["body_bytes"] < 1200 or 5 * (response["body_bytes"] - 16) < 1200)
+            if small_response_aggregate else response["body_bytes"] < UDP_PAYLOAD_CEILING)
         or not _digest(response["body_sha256"])
     ):
         raise ValueError("qualified chaff expected response identity is invalid")
@@ -6051,6 +6091,22 @@ def _validate_response_only_v2_policy(value: object) -> None:
         or dict(policy) != response_only_v2_qualification_policy()
     ):
         raise ValueError("response-only v2 qualification policy is not the exact sustained policy")
+
+
+def small_response_aggregate_qualification_policy() -> dict[str, Any]:
+    value = response_only_v2_qualification_policy()
+    value.update(qualification_scope=SMALL_RESPONSE_AGGREGATE_SCOPE,
+        aggregate_capacity_contract_sha256=SMALL_RESPONSE_AGGREGATE_CONTRACT_SHA256)
+    return value
+
+
+def _validate_small_response_aggregate_policy(value: object) -> None:
+    if (not isinstance(value, Mapping)
+            or dict(value) != small_response_aggregate_qualification_policy()
+            or any(type(value[key]) is not int for key in RESPONSE_ONLY_V2_POLICY_KEYS - {
+                "qualification_scope", "profile", "response_defense", "separate_chaff_namespace"})
+            or value.get("separate_chaff_namespace") is not True):
+        raise ValueError("aggregate qualification policy is not the exact sustained policy")
 
 
 def _validate_response_only_request_header_primitive(value: object) -> None:

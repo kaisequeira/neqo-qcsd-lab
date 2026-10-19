@@ -205,9 +205,14 @@ def _selection_unused(store, hostname):
 def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            resource_selection: Path | None = None, resource_selection_sha256: str | None = None,
            buflo_chaff_cap_bytes: int | None = None,
+           buflo_small_response_aggregate: bool = False,
            buflo_duration_policy: str | None = None,
            frozen_application_manifest: Path | None = None,
            frozen_application_manifest_sha256: str | None = None) -> dict:
+    from .resource_study_native import _buflo_aggregate_option, BUFLO_AGGREGATE_NATIVE
+    aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
+    if aggregate and runtime.get("native_commit") != BUFLO_AGGREGATE_NATIVE:
+        raise ValueError("aggregate enrollment requires the exact Native127 runtime")
     cap = None
     if buflo_chaff_cap_bytes is not None:
         from .resource_study_native import _buflo_chaff_cap
@@ -238,6 +243,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         raise ValueError("explicit BuFLO duration requires a fresh enrollment; existing policies cannot change")
     if cap is not None and completed.intersection(hostnames):
         raise ValueError("capped BuFLO selection requires a fresh enrollment; existing inputs cannot change")
+    if aggregate and completed.intersection(hostnames):
+        raise ValueError("aggregate BuFLO selection requires fresh enrollment; existing inputs cannot change")
     results = []
     for hostname in hostnames:
         if hostname in completed:
@@ -264,12 +271,22 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
             require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
             duration_option = ({"buflo_duration_policy": buflo_duration_policy}
                                if buflo_duration_policy is not None else {})
+            if aggregate:
+                duration_option["buflo_small_response_aggregate"] = True
             if frozen_manifest is not None:
                 enrollment = backend.prepare(candidate, attempt, frozen_application_manifest=frozen_manifest,
                     **({"buflo_chaff_cap_bytes": cap} if cap is not None else {}), **duration_option)
             else:
                 enrollment = (backend.prepare(candidate, attempt, buflo_chaff_cap_bytes=cap, **duration_option)
                               if cap is not None else backend.prepare(candidate, attempt, **duration_option))
+            if aggregate:
+                from .resource_study_native import buflo_aggregate_selection
+                declaration = enrollment.get("buflo_small_response_aggregate_selection")
+                if (type(declaration) is not dict or type(declaration.get("schema_version")) is not int
+                        or declaration != buflo_aggregate_selection() or "buflo_chaff_selection" in enrollment):
+                    raise ValueError("aggregate preparation did not return its exact requested declaration")
+            elif "buflo_small_response_aggregate_selection" in enrollment:
+                raise ValueError("ordinary enrollment cannot claim aggregate selection")
             selected = enrollment.get("urls", [])
             if (enrollment.get("hostname") != hostname or len(selected) != 20
                     or len(set(selected)) != 20 or any(url not in candidate["urls"] for url in selected)
@@ -335,11 +352,20 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         if (destination / path).is_file():
             paths[key] = relative(destination / path)
     capped_binding = None
+    aggregate_binding = None
     if attempt["mode"] == "buflo" and "buflo_chaff_selection" in enrollment:
         from .resource_study_native import validate_buflo_capped_enrollment
         capped_binding = validate_buflo_capped_enrollment(root, enrollment)
         if capped_binding is None:
             raise ValueError("capped BuFLO receipt requires actual sustained qualification")
+        paths.update(buflo_chaff_sidecar=enrollment["paths"]["buflo_chaff_sidecar"],
+                     buflo_chaff_manifest=enrollment["paths"]["buflo_chaff_manifest"],
+                     buflo_chaff_prepared_workload=enrollment["paths"]["prepared_workload"])
+    if attempt["mode"] == "buflo" and "buflo_small_response_aggregate_selection" in enrollment:
+        from .resource_study_native import validate_buflo_aggregate_enrollment
+        aggregate_binding = validate_buflo_aggregate_enrollment(root, enrollment)
+        if aggregate_binding is None:
+            raise ValueError("aggregate BuFLO receipt requires actual sustained qualification")
         paths.update(buflo_chaff_sidecar=enrollment["paths"]["buflo_chaff_sidecar"],
                      buflo_chaff_manifest=enrollment["paths"]["buflo_chaff_manifest"],
                      buflo_chaff_prepared_workload=enrollment["paths"]["prepared_workload"])
@@ -381,6 +407,8 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         "completed_at": datetime.now(timezone.utc).isoformat()}
     if capped_binding is not None:
         receipt["buflo_chaff_selection"] = capped_binding
+    if aggregate_binding is not None:
+        receipt["buflo_small_response_aggregate_selection"] = aggregate_binding
     plan = StudyStore(root).plan()
     from .resource_study_epochs import stable_lineage_active
     if "class_selection" in plan or stable_lineage_active(StudyStore(root)):
@@ -863,6 +891,8 @@ def parser():
                                help="explicit prospective BuFLO duration policy; default640 and existing enrollments remain unchanged")
             child.add_argument("--buflo-chaff-cap-bytes", type=int,
                                help="prospective BuFLO-only prepared and sustained identity-body cap (1200..1048576); other mode inputs remain unchanged")
+            child.add_argument("--buflo-small-response-aggregate", action="store_true",
+                               help="explicit Native127 five-small-response known-capacity qualification; excludes the cap option")
             child.add_argument("--epoch-of", type=Path)
             child.add_argument("--epoch-change", choices=("resources", "mode", "native", "acceptance", "qualification", "add-host", "network", "replace-unused-class"))
             child.add_argument("--affected-hostname", action="append", default=[])
@@ -920,6 +950,10 @@ def main(argv=None):
             from .resource_study_cohorts import create_cover_replacement
             output = create_cover_replacement(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
+            from .resource_study_native import _buflo_aggregate_option
+            aggregate_requested = _buflo_aggregate_option(args.buflo_small_response_aggregate, args.buflo_chaff_cap_bytes)
+            if aggregate_requested and (not args.enroll or args.runtime is None or not args.hostname):
+                raise ValueError("aggregate selection requires live --enroll, --runtime and --hostname")
             if args.buflo_duration_policy is not None:
                 from .buflo_duration_budget import preparation_policy
                 preparation_policy(args.buflo_duration_policy)
@@ -988,9 +1022,11 @@ def main(argv=None):
                         "frozen_application_manifest_sha256": args.frozen_application_manifest_sha256}
                        if frozen_manifest_requested else {}),
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
+                    **({"buflo_small_response_aggregate": True} if aggregate_requested else {}),
                     **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}))
                     if selection_requested else enroll(root, runtime, args.hostname,
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
+                    **({"buflo_small_response_aggregate": True} if aggregate_requested else {}),
                     **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {})))
             else:
                 output = StudyStore(root).status()
