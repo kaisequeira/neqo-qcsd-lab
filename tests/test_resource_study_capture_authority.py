@@ -139,7 +139,7 @@ def test_real_capture_callbacks_replay_full_history_only_at_flight_ends(cohort_c
     assert report["progress"]["attempts"]["failed"] == 3
     assert report["progress"]["accepted_count"] == 1
     assert len(report["paused_cells"]) == 3
-    assert backend.full_reads == 2, "capture callbacks must retain only full entry/exit ancestry replays"
+    assert backend.full_reads == 1, "capture callbacks must retain one full entry validation and sealed closure checks"
     assert backend.steps[-3:] == ["kernel-teardown-restored", "authority-closed", "docker-unlock"]
 
 

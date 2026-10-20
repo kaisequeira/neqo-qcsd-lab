@@ -1998,7 +1998,8 @@ def _validate_candidate_schedule_diagnostic_counts(
         field: sum(_csv_unsigned(row[field], label=f"CS schedule {field}") for row in realized)
         for field in _COMPOSITION_FIELDS
     }
-    lateness = [_csv_unsigned(row["lateness_us"], label="CS schedule lateness") for row in realized]
+    lateness = [_csv_unsigned(row["lateness_us"], label="CS schedule lateness")
+                for row in outgoing if row["satisfaction"] in {"full", "partial", "suppressed"}]
     incoming_credit_bytes = sum(
         _csv_unsigned(row["size"], label="CS incoming cell size", positive=True)
         for row in incoming

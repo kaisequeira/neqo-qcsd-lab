@@ -326,6 +326,12 @@ def shared_docker(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "docker_lock", lock)
     monkeypatch.setattr(runtime.os, "fsync", lambda _: None)
     monkeypatch.setattr(runtime, "_host_routes", lambda: [])
+    # Topology-only fixture: these roots have no ledger or live enrollments.
+    ready_enrollments = {
+        first: [{"hostname": "alpha.example", "runtime": native(), "mode_readiness": {MODE: True}}],
+        second: [{"hostname": "beta.example", "runtime": native(), "mode_readiness": {MODE: True}}],
+    }
+    monkeypatch.setattr(StudyStore, "enrolled", lambda store: deepcopy(ready_enrollments[store.root]))
     monkeypatch.setattr(runtime, "public_ipv4", lambda host: {
         "hostname": host, "addresses": ["8.8.8.8"], "selected_ipv4": "8.8.8.8"})
     monkeypatch.setattr(docker_fixture, "IMAGE", native()["collection_image_digest"])

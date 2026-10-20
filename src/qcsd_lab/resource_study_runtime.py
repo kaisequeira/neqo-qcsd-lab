@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import ipaddress
 import json
 import os
@@ -22,7 +23,7 @@ import threading
 import time
 from typing import Any, Mapping
 
-from .resource_study_inputs import canonical_json, sha256_file
+from .resource_study_inputs import MODES, canonical_json, sha256_file
 from .resource_study_verify import load
 from .resource_study_network import (ATTACHMENT_RECORD, check_collisions, mapping_sha256,
                                      receipt_binding, validate_network_plan)
@@ -278,6 +279,52 @@ def docker_lock():
         finally:
             owner.active = False
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+
+def _checked_catalog_startup_authority(auth, roots, *, expected=None):
+    """Borrow one actually bound authority, never a caller's claimed handle."""
+    from . import resource_study_cohorts as cohorts
+    if (type(roots) not in (list, tuple) or not roots
+            or any(not isinstance(root, Path) for root in roots)
+            or len(roots) != len(set(map(str, roots)))):
+        raise ValueError("catalog startup requires distinct explicit owning roots")
+    writers = frozenset(str(root.absolute()) for root in roots)
+    if (type(auth) is not cohorts._CaptureAuthority
+            or type(auth.docker_owner) is not _DockerLockOwner
+            or type(auth.source_auth) is not cohorts._SourceAuthorization
+            or type(auth.parent) is not cohorts.StudyStore
+            or auth.records is None or auth.collecting or auth.writers != writers
+            or auth.pid != os.getpid() or auth.owner_thread != threading.get_ident()):
+        raise ValueError("catalog startup authority is foreign, incomplete or has different writers")
+    binding = cohorts._CAPTURE_AUTHORITY.get()
+    if (type(binding) is not tuple or len(binding) != 3 or binding[0] is not auth
+            or binding[1] != threading.get_ident() or binding[2] is not None
+            or cohorts._SOURCE_OPERATION.get() is not auth.source_auth):
+        raise ValueError("catalog startup authority is not bound to this coordinator and Source")
+    identity = (auth, auth.pid, auth.owner_thread, auth.parent, auth.parent.root,
+                auth.source_auth, auth.docker_owner, auth.writers)
+    if expected is not None and identity != expected:
+        raise ValueError("catalog startup authority parent, Source or Docker owner changed")
+    auth._collector()
+    auth.check()
+    return identity
+
+
+@contextmanager
+def _catalog_capture_authority(roots):
+    """One Docker owner spans startup validation, capture and topology closure.
+
+    This is the real public catalog path. The backend only borrows this owner;
+    the original cohort scope alone finishes and closes its actual authority.
+    """
+    with docker_lock() as owner:
+        if _docker("ps", "-q"):
+            raise ValueError("catalog startup requires no unaccounted running containers")
+        from .resource_study_cohorts import capture_authority_scope
+        with capture_authority_scope(roots, owner) as auth:
+            _checked_catalog_startup_authority(auth, roots)
+            yield auth
 
 
 def _runtime_check(runtime: dict):
@@ -618,11 +665,12 @@ class CaptureRuntime:
 
     @contextmanager
     def capture_authority_scope(self):
-        if type(self) not in (CaptureRuntime, MultiRootCaptureRuntime):
+        if type(self) not in (CaptureRuntime, MultiRootCaptureRuntime, CatalogCaptureRuntime):
             yield None
             return
         from .resource_study_cohorts import capture_authority_scope
-        roots = list(self.contexts) if type(self) is MultiRootCaptureRuntime else self.root
+        roots = (list(self.contexts) if type(self) in (MultiRootCaptureRuntime, CatalogCaptureRuntime)
+                 else self.root)
         with capture_authority_scope(roots, self._docker_owner) as auth:
             self._capture_authority = auth
             try:
@@ -790,6 +838,9 @@ class CaptureRuntime:
             self.__exit__(None, None, None)
             raise
 
+    def _router_runtime(self, hostname):
+        return self.runtime
+
     def _activate(self, index, hostname):
         with self.switch_lock:
             if sha256_file(self.root / "study.json") != self.study_sha256:
@@ -804,7 +855,7 @@ class CaptureRuntime:
             assignment = route["assignment"]
             network = json.loads(_docker("network", "inspect", route["network_id"]))[0]
             router = json.loads(_docker("container", "inspect", route["router_id"]))[0]
-            _, net_receipt, observer = topology_receipts(self.runtime["collection_image_digest"], route["name"],
+            _, net_receipt, observer = topology_receipts(self._router_runtime(hostname)["collection_image_digest"], route["name"],
                 network, assignment["subnet"], route["network"]["router"]["container"], router,
                 json.loads(_docker("network", "inspect", "bridge"))[0])
             if (network.get("Id") != route["network_id"] or network.get("Name") != route["name"]
@@ -953,8 +1004,40 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             "cell_roots": {host: str(root) for host, root in sorted(self.cell_roots.items())},
             "workers": self.count, "scientific_credit": False}
 
+    def _capacity(self):
+        info = _runtime_check(self.runtime)
+        ncpu = int(info["NCPU"])
+        available = json.loads(_docker("run", "--rm", "--network", "none", "--cap-drop", "ALL",
+            "--entrypoint", "/opt/qcsd-venv/bin/python3", self.runtime["collection_image_digest"],
+            "-I", "-c", "import json,os;print(json.dumps(sorted(os.sched_getaffinity(0))))"))
+        if (not isinstance(available, list) or any(type(cpu) is not int or cpu < 0 for cpu in available)
+                or available != sorted(set(available)) or not available or max(available) >= ncpu):
+            raise ValueError("Docker affinity probe did not report the actual CPU set")
+        return ncpu, available
+
+    def _lane_runtime(self, index):
+        return self.runtime
+
+    def _bind_enrollments(self, enrollments):
+        pass
+
+    def _job_runtime(self, index, attempt, enrollment):
+        return self.runtime
+
+    def _launch_runtime_fields(self):
+        return {"runtime": self.runtime}
+
+    def _flight_fields(self):
+        return {"shared_flight": self.flight_binding()}
+
+    def _closure_runtime_fields(self):
+        return {}
+
+    def _docker_lock_scope(self):
+        return docker_lock()
+
     def __enter__(self):
-        self.lock = docker_lock()
+        self.lock = self._docker_lock_scope()
         self._docker_owner = self.lock.__enter__()
         try:
             for root, context in self.contexts.items():
@@ -964,14 +1047,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             self.plan = load(self.root / "study.json")
             assignments = validate_network_plan(self.plan, require=True)
             self.study_sha256 = sha256_file(self.root / "study.json")
-            info = _runtime_check(self.runtime)
-            ncpu = int(info["NCPU"])
-            available = json.loads(_docker("run", "--rm", "--network", "none", "--cap-drop", "ALL",
-                "--entrypoint", "/opt/qcsd-venv/bin/python3", self.runtime["collection_image_digest"],
-                "-I", "-c", "import json,os;print(json.dumps(sorted(os.sched_getaffinity(0))))"))
-            if (not isinstance(available, list) or any(type(cpu) is not int or cpu < 0 for cpu in available)
-                    or available != sorted(set(available)) or not available or max(available) >= ncpu):
-                raise ValueError("Docker affinity probe did not report the actual CPU set")
+            ncpu, available = self._capacity()
             if len(available) < 2 * self.count + 1:
                 raise ValueError(f"{self.count} protected workers need {2*self.count+1} available logical CPUs")
             if _docker("ps", "-q"):
@@ -986,7 +1062,6 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                 self.flights[root] = flight
             self.flight = self.flights[self.root]
             _put(self.flight / "collision-check.json", collision)
-            image = self.runtime["collection_image_digest"]
             positive = [cpu for cpu in available if cpu >= 1]
             pairs = [(positive[2*i], positive[2*i+1]) for i in range(self.count)]
             sidecars = sorted(set(available) - {cpu for pair in pairs for cpu in pair})
@@ -999,6 +1074,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                                   if self.cell_roots.get(e["hostname"]) == root}
             if set(router_enrollments) != set(domains):
                 raise ValueError("shared router capture lacks its exact current enrolled class")
+            self._bind_enrollments(router_enrollments)
             router_capture_limits = {h: _router_capture_seconds(e) for h, e in router_enrollments.items()}
             if not domains:
                 raise ValueError("capture topology requires selected enrolled classes")
@@ -1010,6 +1086,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             observers = self.flight / "observers"
             observers.mkdir()
             for index, hostname in enumerate(sorted(domains)):
+                image = self._router_runtime(hostname)["collection_image_digest"]
                 assignment = assignments[hostname]
                 prefix = "qcsd-resource-" + self.flight.name + "-class-" + str(index)
                 class_directory = self.flight / "classes" / hostname
@@ -1067,6 +1144,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                     "router_id": router_id, "assignment": assignment, "environment": environment,
                     "network": net_receipt, "observer": binding}
             for index, (client_cpu, helper_cpu) in enumerate(pairs):
+                image = self._lane_runtime(index)["collection_image_digest"]
                 prefix = "qcsd-resource-" + self.flight.name + "-lane-" + str(index)
                 lane = self.flight / str(index)
                 lane.mkdir()
@@ -1116,12 +1194,12 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                 _docker("start", worker["id"])
             for root, flight in self.flights.items():
                 _put(flight / "launched.json", {"workers": declared, "sidecars": sidecar_ids,
-                    "runtime": self.runtime, "available_cpus": available,
+                    **self._launch_runtime_fields(), "available_cpus": available,
                     "coordinator_auxiliary_cpus": sidecars,
                     "coordinator_affinity_policy": "qcsd-Source029-outer-coordinator-affinity-v2",
                     "study_sha256": self.contexts[root]["study_sha256"],
                     "class_mapping_sha256": mapping_sha256(self.contexts[root]["plan"]),
-                    "shared_flight": self.flight_binding(), "scientific_credit": False})
+                    **self._flight_fields(), "scientific_credit": False})
             return self
         except BaseException:
             self.__exit__(None, None, None)
@@ -1141,6 +1219,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                 self.root, self.plan, self.study_sha256 = original
 
     def capture(self, index: int, attempt: dict, enrollment: dict) -> dict:
+        job_runtime = self._job_runtime(index, attempt, enrollment)
         worker = self.workers[index]
         attachment = self._activate(index, attempt["hostname"])
         root = self.cell_roots[attempt["hostname"]]
@@ -1148,7 +1227,7 @@ class MultiRootCaptureRuntime(CaptureRuntime):
         job = {"hostname": attempt["hostname"], "mode": attempt["mode"],
                "enrollment_dir": str(root / enrollment["preparation_dir"]),
                "attempt_dir": str(directory / "capture"), "seed": int(attempt["attempt_id"][:16], 16),
-               "runtime": self.runtime}
+               "runtime": job_runtime}
         _put(directory / "job.json", job)
         arguments = ["exec", "--env", "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256=" + worker["partition_sha256"]]
         for key, value in self.class_routes[attempt["hostname"]]["environment"].items():
@@ -1188,8 +1267,9 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                 try:
                     _put(flight / "closed.json", {"containers_removed": self.containers,
                         "networks_removed": self.networks, "cleanup_errors": failures,
+                        **self._closure_runtime_fields(),
                         "study_sha256": self.contexts[root]["study_sha256"],
-                        "shared_flight": self.flight_binding(), "scientific_credit": False})
+                        **self._flight_fields(), "scientific_credit": False})
                 except (OSError, ValueError, RuntimeError) as error:
                     publication_errors.append(str(error))
         finally:
@@ -1198,3 +1278,223 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             raise RuntimeError("shared flight closure metadata needs recovery")
         if failures:
             raise RuntimeError("capture topology cleanup needs recovery")
+
+
+class CatalogCaptureRuntime(MultiRootCaptureRuntime):
+    """One owned topology with fixed full-runtime worker lanes.
+
+    The coordinator authenticates current admitted members, own-pilots, shared
+    quotas and tuple exclusions under the parent epoch lock. This backend binds
+    those exact enrollments to actual images and per-attempt jobs. It does not
+    issue admission, pilots, proofs or scientific credit.
+    """
+
+    def __init__(self, contexts, workers, *, cell_roots, host_runtimes,
+                 worker_runtime_keys, host_modes, _startup_authority=None):
+        if type(workers) is not int or not 2 <= workers <= 11:
+            raise ValueError("catalog capture requires between two and eleven workers")
+        if (type(contexts) is not dict or not 1 <= len(contexts) <= 50
+                or any(not isinstance(root, Path) for root in contexts)):
+            raise ValueError("catalog capture requires authenticated root contexts")
+        roots = sorted(contexts)
+        if (any(not root.is_absolute() or root.resolve(strict=True) != root
+                or any(path.is_symlink() for path in (root, *root.parents))
+                or not root.is_dir() for root in roots)
+                or any(a in b.parents for a in roots for b in roots if a != b)):
+            raise ValueError("catalog roots must be canonical nonnested directories")
+        if (type(cell_roots) is not dict or not 1 <= len(cell_roots) <= 50
+                or any(not isinstance(root, Path) for root in cell_roots.values())
+                or set(cell_roots.values()) != set(roots)
+                or type(host_runtimes) is not dict or set(host_runtimes) != set(cell_roots)
+                or type(host_modes) is not dict or set(host_modes) != set(cell_roots)):
+            raise ValueError("catalog needs one owning root and full runtime per hostname")
+        self.contexts = {}
+        for root in roots:
+            context = contexts[root]
+            plan = load(root / "study.json")
+            if (type(context) is not dict or set(context) != {"plan", "study_sha256"}
+                    or context["plan"] != plan
+                    or context["study_sha256"] != sha256_file(root / "study.json")):
+                raise ValueError("catalog capture study context changed")
+            validate_network_plan(plan, require=True)
+            self.contexts[root] = {"plan": plan, "study_sha256": context["study_sha256"]}
+        first = self.contexts[roots[0]]["plan"]
+        if any(self.contexts[root]["plan"].get(key) != first.get(key)
+               for root in roots for key in ("class_network", "class_selection", "source_sha256",
+                                             "acceptance", "tuple_uniqueness_scope")):
+            raise ValueError("catalog roots have different frozen class plans")
+        assignments = validate_network_plan(first, require=True)
+        if any(type(host) is not str or host not in assignments for host in cell_roots):
+            raise ValueError("catalog host has no frozen class assignment")
+        self.cell_roots = dict(cell_roots)
+        self.host_runtimes = json.loads(canonical_json(host_runtimes))
+        self.host_modes = json.loads(canonical_json(host_modes))
+        self.runtime_catalog, self.host_runtime_keys = {}, {}
+        for host, value in self.host_runtimes.items():
+            if (type(value) is not dict
+                    or set(value) != {"canonical_sha256", "client_sha256", "platform", "native_commit",
+                                      "collection_image_digest", "prepare_image_digest", "source"}
+                    or value["platform"] not in ("linux/arm64", "linux/amd64")
+                    or type(value["source"]) is not dict
+                    or value["source"].get("neqo_commit") != value["native_commit"]
+                    or any(not self._hex(value.get(name), length)
+                           for name, length in (("canonical_sha256", 64), ("client_sha256", 64),
+                                                ("native_commit", 40)))
+                    or any(type(value.get(name)) is not str or not value[name].startswith("sha256:")
+                           or not self._hex(value[name][7:], 64)
+                           for name in ("collection_image_digest", "prepare_image_digest"))):
+                raise ValueError("catalog entry lacks its exact full immutable runtime")
+            modes = self.host_modes[host]
+            if (type(modes) is not list or not modes
+                    or any(type(mode) is not str or mode not in MODES for mode in modes)
+                    or modes != sorted(set(modes))):
+                raise ValueError("catalog host needs explicit sorted selected modes")
+            key = hashlib.sha256(canonical_json(value)).hexdigest()
+            self.runtime_catalog[key] = value
+            self.host_runtime_keys[host] = key
+        if (type(worker_runtime_keys) not in (list, tuple) or len(worker_runtime_keys) != workers
+                or any(type(key) is not str or key not in self.runtime_catalog for key in worker_runtime_keys)
+                or set(worker_runtime_keys) != set(self.runtime_catalog)):
+            raise ValueError("catalog requires a fixed compatible lane for every full runtime")
+        self.runtime_keys = tuple(worker_runtime_keys)
+        self.flights = {}
+        CaptureRuntime.__init__(self, roots[0], None, workers, hostnames=sorted(cell_roots))
+        self._catalog_seal = hashlib.sha256(canonical_json(self._catalog_config())).hexdigest()
+        self._enrollment_seal = None
+        self._startup_authority = _startup_authority
+        self._startup_identity = (None if _startup_authority is None else
+            _checked_catalog_startup_authority(_startup_authority, list(self.contexts)))
+
+    @contextmanager
+    def _docker_lock_scope(self):
+        if self._startup_authority is None:
+            if self._startup_identity is not None:
+                raise ValueError("catalog startup authority binding cannot be dropped")
+            with docker_lock() as owner:
+                yield owner
+            return
+        _checked_catalog_startup_authority(self._startup_authority,
+            list(self.contexts), expected=self._startup_identity)
+        # The outer startup scope is the only owner. Exiting this borrowed
+        # scope does not finish authority or release its Docker lifecycle FD.
+        yield self._startup_authority.docker_owner
+
+    @contextmanager
+    def capture_authority_scope(self):
+        if self._startup_authority is None:
+            if self._startup_identity is not None:
+                raise ValueError("catalog startup authority binding cannot be dropped")
+            with super().capture_authority_scope() as auth:
+                yield auth
+            return
+        _checked_catalog_startup_authority(self._startup_authority,
+            list(self.contexts), expected=self._startup_identity)
+        if self._docker_owner is not self._startup_authority.docker_owner:
+            raise ValueError("catalog backend has a different Docker lifecycle owner")
+        self._capture_authority = self._startup_authority
+        try:
+            yield self._capture_authority
+        finally:
+            del self._capture_authority
+
+    @staticmethod
+    def _hex(value, length):
+        return (type(value) is str and len(value) == length
+                and all(character in "0123456789abcdef" for character in value))
+
+    def _catalog_config(self):
+        return {"roots": [{"root": str(root), **context} for root, context in self.contexts.items()],
+                "cell_roots": {host: str(root) for host, root in sorted(self.cell_roots.items())},
+                "host_runtimes": self.host_runtimes, "runtime_catalog": self.runtime_catalog,
+                "host_modes": self.host_modes, "host_runtime_keys": self.host_runtime_keys,
+                "worker_runtime_keys": list(self.runtime_keys), "workers": self.count,
+                "selected_hostnames": sorted(self.selected_hostnames), "global_runtime": self.runtime}
+
+    def _catalog_guard(self):
+        if hashlib.sha256(canonical_json(self._catalog_config())).hexdigest() != self._catalog_seal:
+            raise ValueError("immutable catalog runtime or owning-root binding changed")
+
+    def flight_binding(self):
+        self._catalog_guard()
+        return {"record_type": "qcsd-resource-domain-runtime-catalog-flight-v1", "schema_version": 1,
+                "catalog_sha256": self._catalog_seal,
+                "roots": [{"root": str(root), "study_sha256": context["study_sha256"]}
+                          for root, context in self.contexts.items()],
+                "cell_roots": {host: str(root) for host, root in sorted(self.cell_roots.items())},
+                "runtime_catalog": json.loads(canonical_json(self.runtime_catalog)),
+                "host_runtime_keys": dict(self.host_runtime_keys),
+                "worker_runtime_keys": list(self.runtime_keys),
+                "host_modes": json.loads(canonical_json(self.host_modes)),
+                "workers": self.count, "scientific_credit": False}
+
+    def _capacity(self):
+        self._catalog_guard()
+        result = None
+        for value in self.runtime_catalog.values():
+            info = _runtime_check(value)
+            ncpu = int(info["NCPU"])
+            available = json.loads(_docker("run", "--rm", "--network", "none", "--cap-drop", "ALL",
+                "--entrypoint", "/opt/qcsd-venv/bin/python3", value["collection_image_digest"],
+                "-I", "-c", "import json,os;print(json.dumps(sorted(os.sched_getaffinity(0))))"))
+            if (type(available) is not list or not available
+                    or any(type(cpu) is not int or cpu < 0 for cpu in available)
+                    or available != sorted(set(available)) or max(available) >= ncpu):
+                raise ValueError("catalog image affinity probe did not report the actual CPU set")
+            observed = (ncpu, available)
+            if result is not None and observed != result:
+                raise ValueError("catalog images disagree on the available host CPU partition")
+            result = observed
+        return result
+
+    def _router_runtime(self, hostname):
+        self._catalog_guard()
+        return self.host_runtimes[hostname]
+
+    def _lane_runtime(self, index):
+        self._catalog_guard()
+        if type(index) is not int or not 0 <= index < self.count:
+            raise ValueError("catalog worker index is outside the fixed lane partition")
+        return self.runtime_catalog[self.runtime_keys[index]]
+
+    def _bind_enrollments(self, enrollments):
+        self._catalog_guard()
+        for host, enrollment in enrollments.items():
+            if (enrollment.get("hostname") != host
+                    or enrollment.get("runtime") != self.host_runtimes[host]
+                    or type(enrollment.get("mode_readiness")) is not dict
+                    or any(enrollment["mode_readiness"].get(mode) is not True for mode in self.host_modes[host])):
+                raise ValueError("catalog selected mode or full runtime differs from its actual enrollment")
+        self._catalog_enrollments = json.loads(canonical_json(enrollments))
+        self._enrollment_seal = hashlib.sha256(canonical_json(self._catalog_enrollments)).hexdigest()
+
+    def _job_runtime(self, index, attempt, enrollment):
+        self._catalog_guard()
+        self._lane_runtime(index)
+        host = attempt.get("hostname")
+        if (host not in self.cell_roots or attempt.get("mode") not in self.host_modes[host]
+                or self.runtime_keys[index] != self.host_runtime_keys[host]):
+            raise ValueError("catalog attempt is outside its selected host/mode or compatible worker lane")
+        if (self._enrollment_seal is None
+                or hashlib.sha256(canonical_json(self._catalog_enrollments)).hexdigest() != self._enrollment_seal
+                or enrollment != self._catalog_enrollments[host]):
+            raise ValueError("catalog job enrollment changed after topology launch")
+        return self.host_runtimes[host]
+
+    def _activate(self, index, hostname):
+        self._catalog_guard()
+        value = self._lane_runtime(index)
+        if hostname not in self.cell_roots or self.runtime_keys[index] != self.host_runtime_keys[hostname]:
+            raise ValueError("catalog hostname cannot activate on a different runtime lane")
+        inspected = json.loads(_docker("container", "inspect", self.workers[index]["id"]))[0]
+        if inspected.get("Image") != value["collection_image_digest"]:
+            raise ValueError("catalog worker image changed before capture")
+        return super()._activate(index, hostname)
+
+    def _launch_runtime_fields(self):
+        return {"record_type": "qcsd-resource-domain-runtime-catalog-launch-v1", "schema_version": 1}
+
+    def _flight_fields(self):
+        return {"catalog_flight": self.flight_binding()}
+
+    def _closure_runtime_fields(self):
+        return {"record_type": "qcsd-resource-domain-runtime-catalog-closed-v1", "schema_version": 1}

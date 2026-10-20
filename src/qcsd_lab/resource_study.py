@@ -36,18 +36,22 @@ INPUT_LIMIT = 16 * 1024 * 1024
 DEFAULT_STORAGE_RESERVE_BYTES = 60 * 1024 ** 3
 
 
-def coordinator_provenance(*, resource_selection=False, class_selection=False) -> dict:
+def coordinator_provenance(*, resource_selection=False, class_selection=False,
+                           resource_version=False) -> dict:
     """Record the host code actually coordinating and verifying this attempt."""
     source = Path(__file__).parent
     names = ("resource_study.py", "resource_study_runtime.py", "resource_study_store.py",
              "resource_study_verify.py", "resource_study_inputs.py", "resource_study_storage.py",
              "resource_study_supplements.py", "resource_study_epochs.py",
              "resource_study_network.py", "resource_study_audit.py", "resource_study_cohorts.py",
-             "fidelity.py", "capture.py", "process_scheduler.py", "resource_study_integrity.py")
+             "fidelity.py", "capture.py", "process_scheduler.py", "resource_study_integrity.py",
+             "resource_study_verify_child.py")
     if resource_selection:
         names += ("resource_study_selection.py",)
     if class_selection:
         names += ("resource_study_lineage.py",)
+    if resource_version:
+        names += ("resource_study_resource_version_inputs.py", "resource_study_resource_versions.py")
     return {"record_type": "qcsd-resource-study-host-code-v1",
             "files": {name: sha256_file(source / name) for name in names},
             "installed_native_and_sdk": "recorded separately in runtime"}
@@ -209,7 +213,23 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            buflo_duration_policy: str | None = None,
            cs_buflo_duration_policy: str | None = None,
            frozen_application_manifest: Path | None = None,
-           frozen_application_manifest_sha256: str | None = None) -> dict:
+           frozen_application_manifest_sha256: str | None = None,
+           resource_version_input: Path | None = None,
+           resource_version_input_sha256: str | None = None) -> dict:
+    version_requested = resource_version_input is not None or resource_version_input_sha256 is not None
+    if version_requested:
+        if (resource_version_input is None or resource_version_input_sha256 is None
+                or resource_selection is not None or resource_selection_sha256 is not None
+                or frozen_application_manifest is not None or frozen_application_manifest_sha256 is not None
+                or buflo_chaff_cap_bytes is not None or buflo_small_response_aggregate
+                or buflo_duration_policy is not None):
+            raise ValueError("resource-version preparation needs paired input flags and unchanged ordinary preparation")
+        from .resource_study_resource_version_inputs import enroll as enroll_version
+        return enroll_version(root, runtime, hostnames, resource_version_input,
+                              resource_version_input_sha256, backend=backend)
+    version_context = root / "inputs/resource-version-input-context.json"
+    if version_context.exists() or version_context.is_symlink():
+        raise ValueError("initialized resource-version preparation requires its explicit input flags")
     from .resource_study_native import _buflo_aggregate_option, buflo_aggregate_native_supported
     aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
     if aggregate and not buflo_aggregate_native_supported(runtime.get("native_commit")):
@@ -331,9 +351,14 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
     return {"enrollment": results, "progress": store.status()}
 
 
-def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dict, *, pilot=False) -> Path:
+def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dict, *, pilot=False, catalog_binding=None, proof_verifier=None) -> Path:
     """Publish one receipt after independently checking the complete staged session."""
     sealing_started = time.monotonic()
+    if catalog_binding is not None:
+        from .resource_study_catalog import validate_receipt_binding
+        if pilot:
+            raise ValueError("catalog capture is formal-only; no implicit pilot")
+        validate_receipt_binding(catalog_binding, root, attempt, enrollment, runtime)
     source = root / attempt["path"] / "capture"
     destination = root / StudyStore(root).publication_path(attempt)
     if pilot:
@@ -392,6 +417,9 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
                      class_selection_source=SOURCE)
         from .resource_study_cohorts import input_authority_artifact_paths
         paths.update(input_authority_artifact_paths(enrollment))
+        if "resource_version_input_authority" in enrollment:
+            from .resource_study_resource_version_inputs import artifact_paths
+            paths.update(artifact_paths(enrollment))
     from .capture import split_endpoint
     endpoint = load(destination / "neqo/run.json")["endpoints"][0]
     local_ip, local_port = split_endpoint(endpoint["local_address"])
@@ -425,7 +453,8 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
     from .resource_study_epochs import stable_lineage_active
     if "class_selection" in plan or stable_lineage_active(StudyStore(root)):
         receipt["coordinator_provenance"] = coordinator_provenance(
-            resource_selection="resource_selection" in enrollment, class_selection=True)
+            resource_selection="resource_selection" in enrollment, class_selection=True,
+            resource_version="resource_version_input_authority" in enrollment)
     if validate_network_plan(plan) is not None:
         receipt["acceptance"] = NETWORK_ACCEPTANCE
         receipt["study_sha256"] = sha256_file(root / "study.json")
@@ -437,7 +466,20 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         files["study.json"] = receipt["study_sha256"]
         if paths["class_network"] not in files or paths["scheduler"] not in files:
             raise ValueError("capture has no bound persistent class topology/scheduler observation")
-    facts = verify_receipt(root, receipt)
+    if catalog_binding is not None:
+        # This is observational provenance, never permission to reserve or
+        # credit. The unchanged reader and Store gates still run below.
+        receipt["capture_catalog"] = deepcopy(catalog_binding)
+        receipt["coordinator_provenance"]["files"]["resource_study_catalog.py"] = sha256_file(
+            Path(__file__).parent / "resource_study_catalog.py")
+    if proof_verifier is None:
+        facts = verify_receipt(root, receipt)
+    else:
+        from .resource_study_verify_child import VerificationChildren
+        if type(proof_verifier) is not VerificationChildren or pilot:
+            raise ValueError("exact Source106 formal proof child owner required")
+        facts, timing = proof_verifier.verify(root, receipt)
+        receipt["raw_verification_timing"] = timing
     # Scratch removal is allowed only after raw verification succeeds. Failed
     # attempts retain it for diagnosis; successful receipts bind the retained
     # inventory rather than two copies of the same primary observation.
@@ -868,6 +910,26 @@ def parser():
     shared.add_argument("--attempts", type=int, required=True)
     shared.add_argument("--chunk", type=int, default=CHUNK)
     shared.add_argument("--pilot", action="store_true")
+    catalog = actions.add_parser("capture-catalog", help="one bounded existing-member flight across exact runtime lanes")
+    catalog.add_argument("--proof-workers", type=int, choices=(1, 2), default=1,
+                         help="bounded read-only formal verifier children on existing auxiliary CPUs")
+    catalog.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
+    catalog.add_argument("--catalog", type=Path, required=True, help="immutable explicit current writer/runtime catalog")
+    catalog.add_argument("--catalog-sha256", required=True)
+    catalog.add_argument("--workers", type=int, default=11)
+    catalog.add_argument("--attempts", type=int, required=True)
+    catalog.add_argument("--chunk", type=int, default=CHUNK)
+    for action in ("cohort-resource-init", "cohort-resource-template", "cohort-resource-admit"):
+        child = actions.add_parser(action, help="explicit same-host all-five resource-version retirement")
+        child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
+        if action == "cohort-resource-init":
+            child.add_argument("--cohort-root", type=Path, required=True)
+        if action == "cohort-resource-admit":
+            child.add_argument("--declaration", type=Path, required=True)
+            child.add_argument("--declaration-sha256", required=True)
+        else:
+            child.add_argument("--resource-version-input", type=Path, required=True)
+            child.add_argument("--resource-version-input-sha256", required=True)
     for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit", "cohort-cs180-template", "cohort-cs180-admit"):
         child = actions.add_parser(action, help="explicit compatible-runtime cohort protocol; no imported credit")
         child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
@@ -898,6 +960,9 @@ def parser():
             child.add_argument("--resource-selection", type=Path,
                                help="immutable exact twenty-URL selection from the authenticated class pool")
             child.add_argument("--resource-selection-sha256", help="SHA-256 of the exact selection manifest bytes")
+            child.add_argument("--resource-version-input", type=Path,
+                               help="explicit initialized common20 all-five resource-version input")
+            child.add_argument("--resource-version-input-sha256")
             child.add_argument("--frozen-application-manifest", type=Path,
                                help="explicit same-host C019 donor Native application manifest; preserve exact bytes")
             child.add_argument("--frozen-application-manifest-sha256")
@@ -933,7 +998,18 @@ def main(argv=None):
     args = parser().parse_args(argv)
     root = args.root.absolute()
     try:
-        if args.action == "cohort-init":
+        if args.action == "cohort-resource-init":
+            from .resource_study_resource_version_inputs import initialize_resource_cohort
+            output = initialize_resource_cohort(root, args.cohort_root.absolute(),
+                args.resource_version_input.absolute(), args.resource_version_input_sha256)
+        elif args.action == "cohort-resource-template":
+            from .resource_study_cohorts import resource_template
+            output = resource_template(root, args.resource_version_input.absolute(),
+                args.resource_version_input_sha256)
+        elif args.action == "cohort-resource-admit":
+            from .resource_study_cohorts import create_resource_version
+            output = create_resource_version(root, args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-init":
             from .resource_study_cohorts import initialize_cohort
             output = initialize_cohort(root, args.cohort_root.absolute(),
                 **({"cs_buflo_duration_policy":args.cs_buflo_duration_policy}
@@ -974,6 +1050,18 @@ def main(argv=None):
             from .resource_study_cohorts import create_cs180_condition
             output = create_cs180_condition(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
+            version_requested = args.resource_version_input is not None or args.resource_version_input_sha256 is not None
+            if version_requested and (args.resource_version_input is None or args.resource_version_input_sha256 is None
+                    or not args.enroll or args.runtime is None or len(args.hostname) != 1
+                    or not (root / "inputs/resource-version-input-context.json").is_file()
+                    or args.source is not None or args.inventory or args.stable_map_parent is not None
+                    or args.epoch_of is not None or args.epoch_change is not None
+                    or args.affected_hostname or args.affected_mode or args.class_network_pool is not None
+                    or args.storage_reserve_bytes is not None or args.resource_selection is not None
+                    or args.resource_selection_sha256 is not None or args.frozen_application_manifest is not None
+                    or args.frozen_application_manifest_sha256 is not None or args.buflo_chaff_cap_bytes is not None
+                    or args.buflo_small_response_aggregate or args.buflo_duration_policy is not None):
+                raise ValueError("resource-version prepare requires an initialized fresh root, exact input/runtime/host, and ordinary preparation")
             from .resource_study_native import _buflo_aggregate_option
             aggregate_requested = _buflo_aggregate_option(args.buflo_small_response_aggregate, args.buflo_chaff_cap_bytes)
             if aggregate_requested and (not args.enroll or args.runtime is None or not args.hostname):
@@ -1047,6 +1135,9 @@ def main(argv=None):
                 output = (enroll(root, runtime, args.hostname,
                     resource_selection=args.resource_selection,
                     resource_selection_sha256=args.resource_selection_sha256,
+                    **({"resource_version_input": args.resource_version_input,
+                        "resource_version_input_sha256": args.resource_version_input_sha256}
+                       if version_requested else {}),
                     **({"frozen_application_manifest": args.frozen_application_manifest,
                         "frozen_application_manifest_sha256": args.frozen_application_manifest_sha256}
                        if frozen_manifest_requested else {}),
@@ -1055,6 +1146,9 @@ def main(argv=None):
                     **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}),
                     **({"cs_buflo_duration_policy": args.cs_buflo_duration_policy} if args.cs_buflo_duration_policy is not None else {}))
                     if selection_requested else enroll(root, runtime, args.hostname,
+                    **({"resource_version_input": args.resource_version_input,
+                        "resource_version_input_sha256": args.resource_version_input_sha256}
+                       if version_requested else {}),
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
                     **({"buflo_small_response_aggregate": True} if aggregate_requested else {}),
                     **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}),
@@ -1069,6 +1163,20 @@ def main(argv=None):
                     affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
             elif args.epoch_change is not None or args.affected_hostname or args.affected_mode:
                 raise ValueError("epoch scope needs --epoch-of")
+        elif args.action == "capture-catalog":
+            from .resource_study_catalog import load_capture_catalog, capture_catalog
+            catalog = load_capture_catalog(args.catalog.absolute(), args.catalog_sha256, root)
+            stop = threading.Event()
+            previous = {}
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                previous[sig] = signal.signal(sig, lambda *_: stop.set())
+            try:
+                output = capture_catalog(root, catalog, workers=args.workers,
+                    budget=args.attempts, stop=stop, chunk_sessions=args.chunk, proof_workers=args.proof_workers,
+                    catalog_source={"path": str(args.catalog.absolute()), "sha256": args.catalog_sha256})
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
         elif args.action == "capture-roots":
             cells = load_shared_capture_plan(args.cells.absolute(), args.cells_sha256, root)
             stop = threading.Event()

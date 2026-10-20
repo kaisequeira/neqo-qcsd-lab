@@ -317,7 +317,7 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     if ("class_selection" in plan or "class_selection" in enrollment
             or {"class_selection", "class_selection_inventory", "class_selection_source"}.intersection(paths)):
         from .resource_study_lineage import validate_receipt_enrollment, MANIFEST, INVENTORY, SOURCE
-        validate_receipt_enrollment(root, plan, enrollment)
+        validate_receipt_enrollment(root, plan, enrollment, receipt=receipt)
         if ("class_selection" not in plan
                 or paths.get("class_selection") != MANIFEST
                 or paths.get("class_selection_inventory") != INVENTORY

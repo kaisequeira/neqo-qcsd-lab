@@ -206,13 +206,18 @@ def _legacy_validate_enrollment(store, enrollment, *, plan=None):
 
 def validate_enrollment(store, enrollment, *, plan=None):
     """Keep V3 behavior whole; only explicit new cohort input authority dispatches."""
+    if ("resource_version_input_authority" in enrollment
+            or "inputs/resource-version-input-context.json" in enrollment.get("files", {})
+            or any(name.startswith("inputs/resource-versions/") for name in enrollment.get("files", {}))):
+        from .resource_study_resource_version_inputs import validate_enrollment as validate_version
+        return validate_version(store, enrollment, plan=store.plan() if plan is None else plan)
     from .resource_study_cohorts import INPUT_AUTHORITY_KEY, INPUT_CONTEXT, validate_input_authority
     if INPUT_AUTHORITY_KEY in enrollment or INPUT_CONTEXT in enrollment.get("files", {}):
         return validate_input_authority(store, enrollment, plan=store.plan() if plan is None else plan)
     return _legacy_validate_enrollment(store, enrollment, plan=plan)
 
 
-def validate_receipt_enrollment(root, plan, enrollment):
+def validate_receipt_enrollment(root, plan, enrollment, receipt=None):
     """Pure raw-proof reader: no Store, ledger connection, or write-capable API."""
     import stat
     from .resource_study_verify import within
@@ -230,6 +235,11 @@ def validate_receipt_enrollment(root, plan, enrollment):
                 raise ValueError("stable receipt context SHA256 differs")
             return raw, {"sha256": sha, "mode": f"{stat.S_IMODE(info.st_mode):04o}"}
     validate_enrollment(Files(), enrollment, plan=plan)
+    if receipt is not None:
+        if ("resource_version_input_authority" in enrollment
+                or any(name.startswith("resource_version_") for name in receipt.get("artifact_paths", {}))):
+            from .resource_study_resource_version_inputs import validate_receipt
+            validate_receipt(root, enrollment, receipt)
 
 
 def unused(parent, records):

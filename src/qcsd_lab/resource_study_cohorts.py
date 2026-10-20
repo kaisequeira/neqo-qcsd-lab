@@ -186,6 +186,7 @@ RAW_DEPENDENCIES = (
     'resource_study.py',
     'resource_study_audit.py',
     'resource_study_cohorts.py',
+    'resource_study_catalog.py',
     'resource_study_epochs.py',
     'resource_study_inputs.py',
     'resource_study_integrity.py',
@@ -193,12 +194,15 @@ RAW_DEPENDENCIES = (
     'resource_study_native.py',
     'resource_study_network.py',
     'resource_study_reader_compatibility.py',
+    'resource_study_resource_version_inputs.py',
+    'resource_study_resource_versions.py',
     'resource_study_runtime.py',
     'resource_study_selection.py',
     'resource_study_storage.py',
     'resource_study_store.py',
     'resource_study_supplements.py',
     'resource_study_verify.py',
+    'resource_study_verify_child.py',
     'response_budget_qualification.py',
     'runtime_provenance.py',
     'selected_capture_amendment.py',
@@ -442,6 +446,7 @@ class _CaptureAuthority:
             raise ValueError("capture authority requires distinct owning roots")
         self.writers = frozenset(str(Path(path).absolute()) for path in roots)
         self.records, self.parent, self.meta, self.fences = None, None, {}, {}
+        self._validation_digest = None
         self.epoch_lock = None
         self.source_auth = _SOURCE_OPERATION.get()
         self.owns_source = self.source_auth is None
@@ -502,6 +507,7 @@ class _CaptureAuthority:
                     self._bind_classes()
                     self.collecting = False
                     self.check(full_bytes=True)
+                    self._validation_digest = self._validated_digest()
         except BaseException:
             self.close()
             raise
@@ -513,6 +519,8 @@ class _CaptureAuthority:
         from . import resource_study_network as network
         from . import resource_study_lineage as lineage
         from . import resource_study_runtime as runtime
+        from . import resource_study_resource_version_inputs as resource_inputs
+        from . import resource_study_selection as selection
         return (StudyStore._file, StudyStore._connect, StudyStore._plan_data,
             _epochs()._read, _epochs()._cell, _epochs()._records, records, _records,
             _records_file, _records_root, _RecordsRead, _records_read_scope,
@@ -521,7 +529,9 @@ class _CaptureAuthority:
             _RecordsRead.frozen_value, _RecordsRead.science, _RecordsRead.finish,
             _RecordsRead.discard, _check_frozen, _uncached_frozen_value,
             network._uncached_validate_network_plan, canonical_json, deepcopy,
-            lineage.check_fence_connection, runtime._DockerLockOwner.check)
+            lineage.check_fence_connection, runtime._DockerLockOwner.check,
+            selection._read, resource_inputs._read, resource_inputs.read_context,
+            _CaptureAuthority._validated_digest)
 
     def _owner(self):
         if not self.active or self.pid != os.getpid():
@@ -701,15 +711,43 @@ class _CaptureAuthority:
             self._check_root(path, old)
         self._owner()
 
+    def _validated_digest(self):
+        """Seal the complete collected validation census, not mutable SQL state."""
+        files = []
+        for path, (stamp, digest, raw) in sorted(self.files.items()):
+            if type(raw) is not bytes or hashlib.sha256(raw).hexdigest() != digest:
+                raise ValueError("capture authority cached immutable bytes differ")
+            files.append((path, stamp, digest))
+        # FD numbers themselves are not ancestry: check() still authenticates
+        # the retained actual descriptors against these sealed identities.
+        roots = [(path, value[0], value[3]) for path, value in sorted(self.roots.items())]
+        classes = [(key, value) for key, value in sorted(self.classes.items())]
+        state = {"records": self.records, "parent_root": str(self.parent.root),
+            "writers": sorted(self.writers), "files": files, "roots": roots,
+            "classes": classes, "absences": sorted(self.absences),
+            "meta": self.meta, "fences": self.fences,
+            "epoch_lock": (str(self.epoch_lock[0]), self.epoch_lock[2])}
+        return hashlib.sha256(canonical_json(state)).digest()
+
     def finish(self):
-        self._collector(); self.check(full_bytes=True)
+        self._collector()
+        # Check before using the private parent path to acquire its lock, and
+        # before iterating a census which must not have lost a dependency.
+        parent_root = self.parent.root
+        if self._validation_digest is None or self._validated_digest() != self._validation_digest:
+            raise ValueError("capture authority private validated dependency census changed")
+        self.check(full_bytes=True)
         token = _AUTHORITY_INPUT_COLLECTOR.set(self)
         try:
-            with bind_source(self.source_auth), _epochs()._lock(self.parent.root):
-                actual = records(StudyStore(self.parent.root))
-                if not _same(actual, self.records):
-                    raise ValueError("capture authority full closure changed immutable ancestry")
+            with bind_source(self.source_auth), _epochs()._lock(parent_root):
+                if self._validated_digest() != self._validation_digest:
+                    raise ValueError("capture authority private validated dependency census changed")
+                # Entry ran full semantic ancestry validation. Its exact files,
+                # bindings and census remain sealed; fresh SQL/fence/head and
+                # both full immutable-byte checks still run at closure.
                 self.check(full_bytes=True)
+                if self._validated_digest() != self._validation_digest:
+                    raise ValueError("capture authority private validated dependency census changed")
                 if not _same(_load(self.source_auth.profile), _fresh_verifier_contract()):
                     raise ValueError("capture authority qualifying Source bytes changed")
         finally:
@@ -724,6 +762,7 @@ class _CaptureAuthority:
             os.close(db_fd); os.close(root_fd)
         self.roots.clear(); self.files.clear(); self.classes.clear(); self.absences.clear()
         self.meta.clear(); self.fences.clear(); self.records = None
+        self._validation_digest = None
         if self.owns_source:
             self.source_auth.active = False
 
@@ -1082,6 +1121,8 @@ def _accepted_attempts(store, key, rows, connection=None):
 
 
 def _accepted(entry, *, self_store=None, connection=None):
+    if "resource_versions" in entry:
+        return _accepted_resource_version(entry, self_store=self_store, connection=connection)
     result, slots, tuples = [], set(), set()
     for member in entry["members"]:
         root = member["cell"]["root"]
@@ -1109,6 +1150,43 @@ def _accepted(entry, *, self_store=None, connection=None):
             result.append((member, store, row))
     if len(result) > 400:
         raise ValueError("logical runtime-cohort cell exceeds four hundred")
+    return result
+
+
+def _accepted_resource_version(entry, *, self_store=None, connection=None):
+    """Recheck all historical SQL bindings; count only the active v1 members."""
+    from .resource_study_resource_versions import target_member_ids, member_version
+    eligible = target_member_ids(entry)
+    result, slots, tuples = [], {}, set()
+    for member in entry["members"]:
+        root = member["cell"]["root"]
+        store = self_store if self_store is not None and str(self_store.root) == root else StudyStore(root)
+        own = connection if store is self_store else None
+        key = entry["hostname"], entry["mode"]
+        rows = _rows(store, key, own)
+        _accepted_attempts(store, key, rows, own)
+        if member["frozen_accepted"] is not None:
+            marker = _epochs()._read(store.root / MARKER)
+            parent = StudyStore(marker["parent"])
+            if not _same(marker, _marker(store, parent)):
+                raise ValueError("historical resource-version parent membership differs")
+            frozen = _frozen_value(parent, member)
+            if not _same(frozen["rows"], [_row_ref(root, row) for row in rows]):
+                raise ValueError("historical resource-version accepted rows changed")
+            if _rows(store, key, own, active=True):
+                raise ValueError("historical resource-version member acquired a reservation")
+        version = member_version(entry, member["cohort_id"])
+        occupied = slots.setdefault(version, set())
+        for row in rows:
+            if (type(row["slot"]) is not int or not 1 <= row["slot"] <= 400
+                    or _json(_tuple(_load(row["five_tuple"]))).decode() != row["five_tuple"]
+                    or row["slot"] in occupied or row["five_tuple"] in tuples):
+                raise ValueError("resource-version history repeats a tuple or its own version's400 slots")
+            occupied.add(row["slot"]); tuples.add(row["five_tuple"])
+            if member["cohort_id"] in eligible:
+                result.append((member, store, row))
+        if len(occupied) > 400:
+            raise ValueError("resource-version logical cell exceeds four hundred")
     return result
 
 
@@ -1188,6 +1266,9 @@ def _uncached_frozen_value(parent, member):
 def _check_frozen(parent, registry):
     """Ancestry authenticates manifests; selected-cell guards join fresh SQL."""
     for entry in registry:
+        if "resource_versions" in entry:
+            _check_resource_frozen(parent, entry)
+            continue
         slots, tuples = set(), set()
         for member in entry["members"]:
             if member["frozen_accepted"] is None: continue
@@ -1196,6 +1277,21 @@ def _check_frozen(parent, registry):
                     raise ValueError("frozen runtime cohort manifests repeat global slots or tuples")
                 slots.add(row["slot"]); tuples.add(row["five_tuple"])
         if len(slots) > 400: raise ValueError("frozen runtime cohort manifest union exceeds four hundred")
+
+
+def _check_resource_frozen(parent, entry):
+    from .resource_study_resource_versions import member_version
+    slots, tuples = {}, set()
+    for member in entry["members"]:
+        if member["frozen_accepted"] is None:
+            continue
+        occupied = slots.setdefault(member_version(entry, member["cohort_id"]), set())
+        for row in _frozen_value(parent, member)["rows"]:
+            if row["slot"] in occupied or row["five_tuple"] in tuples:
+                raise ValueError("frozen resource-version members repeat their own slots or historical tuples")
+            occupied.add(row["slot"]); tuples.add(row["five_tuple"])
+        if len(occupied) > 400:
+            raise ValueError("frozen resource-version union exceeds its own four hundred")
 
 
 def _scope_keys(cells, hosts, modes):
@@ -1663,6 +1759,9 @@ def _stratum_sciences(entry):
     """Validate the closed ledger, retaining every historical full science value."""
     if "condition_strata" in entry:
         return _condition_sciences(entry)
+    if "resource_versions" in entry:
+        from .resource_study_resource_versions import member_sciences
+        return member_sciences(entry)
     base = {"hostname", "mode", "science", "members", "writer"}
     if "science_strata" not in entry:
         if set(entry) != base: raise ValueError("runtime cohort entry fields differ")
@@ -1746,6 +1845,25 @@ def create_budget_amendment(parent, cohort_root, declaration_path, declaration_s
     return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=False, budget=True)
 
 
+def _resource_member_input(cell, *, context=None):
+    """Authenticate a distinct v1 input; never reinterpret it as old catalogue data."""
+    from . import resource_study_resource_version_inputs as inputs
+    root = Path(cell["root"]); path = root / inputs.INPUT_CONTEXT
+    if not (path.exists() or path.is_symlink()):
+        if context is not None:
+            raise ValueError("current resource-version member lost its separate frozen input authority")
+        return False
+    if context is None:
+        context, _ = inputs.read_context(root, StudyStore(root).plan())
+    scope = {(context["input"]["hostname"], row["mode"])
+             for row in context["input"]["mode_roots"] if row["root"] == str(root)}
+    if (context["context"]["root"] != str(root) or (cell["hostname"], cell["mode"]) not in scope
+            or cell["definition"]["urls"] != context["urls"]
+            or cell["definition"]["workload_sha256"] != context["context"]["application_manifest_sha256"]):
+        raise ValueError("current resource-version member differs from its separate frozen input authority")
+    return True
+
+
 def _initialization_inputs(current, source, candidates):
     """Authenticate immutable preparation inputs, never enrollment or evidence.
 
@@ -1768,7 +1886,19 @@ def _initialization_inputs(current, source, candidates):
              if current[-1]["record_type"] == ADMISSION else current[-1]["cells"])
     for store in candidates:
         member_cells = [cell for cell in bound if cell["root"] == str(store.root)]
+        from . import resource_study_resource_version_inputs as resource_inputs
+        resource_context = store.root / resource_inputs.INPUT_CONTEXT
+        resource_version = resource_context.exists() or resource_context.is_symlink()
+        if resource_version:
+            # A v1 member is explicitly outside its old catalogue. Preserve its
+            # new frozen authority, without copying those URLs into the old
+            # source pool or making unrelated49 initialization depend on it.
+            context, _ = resource_inputs.read_context(store.root, store.plan())
+            for cell in member_cells:
+                _resource_member_input(cell, context=context)
         for host in sorted({cell["hostname"] for cell in member_cells}):
+            if resource_version:
+                continue
             urls = _pool(store.root, host)["urls"]
             for cell in member_cells:
                 if cell["hostname"] != host: continue
@@ -2053,6 +2183,8 @@ def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None):
             copied[relative] = hashlib.sha256(raw).hexdigest()
         pool = candidate_pool(root)
         for cell in current[-1]["cells"]:
+            if _resource_member_input(cell):
+                continue
             urls = pool.get(cell["hostname"], {}).get("urls", [])
             wanted = cell["definition"]["urls"]
             if any(url not in urls for url in wanted) or wanted != sorted(wanted, key=urls.index):
@@ -2243,11 +2375,15 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
                 entry["condition_strata"] = _cs180_strata(entry, science, member["cohort_id"])
                 entry["science"] = science
             elif budget:
+                if "resource_versions" in entry:
+                    raise ValueError("a resource version cannot silently acquire a joint budget amendment")
                 science = _science(candidate, records[-1]["class_transition"])
                 entry["science_strata"] = _budget_strata(entry, science, member["cohort_id"])
                 entry["science"] = science
             elif "condition_strata" in entry:
                 entry["condition_strata"]["strata"][1]["members"].append(member["cohort_id"])
+            elif "resource_versions" in entry:
+                entry["resource_versions"]["strata"][-1]["members"].append(member["cohort_id"])
             elif "science_strata" in entry:
                 entry["science_strata"]["strata"][1]["members"].append(member["cohort_id"])
             entry["members"].append(member); entry["writer"] = member["cohort_id"]
@@ -2289,6 +2425,8 @@ def _validate_record(parent, records, value, *, contract=None):
     contract = verifier_contract() if contract is None else contract
     qualified = reader_compatibility.qualify_execution(verifier_contract())
     reader_compatibility.require_supported(contract, qualified)
+    if type(value) is dict and value.get("change") == "resource-version-retirement":
+        return _validate_resource_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == COVER_CHANGE:
         return _validate_cover_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == "first-mode":
@@ -2357,6 +2495,9 @@ def _validate_record(parent, records, value, *, contract=None):
         expected_fields = {"hostname", "mode", "science", "members", "writer"}
         if condition or "condition_strata" in old: expected_fields.add("condition_strata")
         if budget or "science_strata" in old: expected_fields.add("science_strata")
+        if "resource_versions" in old:
+            if budget: raise ValueError("resource-version and budget changes need separate explicit authority")
+            expected_fields.add("resource_versions")
         if (set(entry) != expected_fields
                 or not (budget or condition) and not _same(entry["science"], old["science"])
                 or len(entry["members"]) != len(old["members"])+1):
@@ -2393,6 +2534,11 @@ def _validate_record(parent, records, value, *, contract=None):
             expected_strata["strata"][1]["members"].append(member["cohort_id"])
             if not _same(entry["science_strata"], expected_strata):
                 raise ValueError("Native-only cohort rewrites budget strata")
+        if "resource_versions" in old:
+            expected_versions = deepcopy(old["resource_versions"])
+            expected_versions["strata"][-1]["members"].append(member["cohort_id"])
+            if not _same(entry["resource_versions"], expected_versions):
+                raise ValueError("Native-only cohort rewrites the active or historical resource-version membership")
         row = next((row for row in declaration["affected"] if (row["hostname"], row["mode"]) == key), None)
         if not _same(row, {"hostname": key[0], "mode": key[1],
                           "previous_definition_sha256": old_cells[key]["definition_sha256"],
@@ -2709,6 +2855,7 @@ def credit(store, parent, records, receipt_path, operation):
     member = next((m for m in entry["members"] if m["cell"]["root"] == str(store.root)), None)
     if member is None: raise ValueError("runtime cohort receipt has no immutable member")
     _check_input_receipt(member, receipt)
+    _check_resource_receipt(entry, member, receipt)
     if row["state"] == "accepted":
         if not any(m["cell"]["root"] == str(store.root) for m in entry["members"]):
             raise ValueError("accepted replay is outside the cohort registry")
@@ -2758,6 +2905,25 @@ def _check_input_receipt(member, receipt):
             raise ValueError("runtime-cohort receipt omits its immutable input-context artifact")
     elif "runtime_cohort_input_context" in receipt.get("artifact_paths", {}):
         raise ValueError("receipt claims partial runtime-cohort input authority")
+    if "resource_version_input_authority" in enrollment:
+        from .resource_study_resource_version_inputs import validate_receipt
+        validate_receipt(Path(cell["root"]), enrollment, receipt)
+
+
+def _check_resource_receipt(entry, member, receipt):
+    """Additional active-version identity only; original raw replay stays required."""
+    if "resource_versions" not in entry:
+        return
+    from . import resource_study_resource_versions as versions
+    if member["cohort_id"] not in versions.target_member_ids(entry):
+        # Original accepted replays remain historical; allocation/counting never
+        # includes these members and a new credit still requires the v1 writer.
+        return
+    ref = entry["resource_versions"]["declaration"]
+    raw = _epochs()._read(ref["path"])
+    if sha256_file(ref["path"]) != ref["sha256"] or _epochs()._sha(raw) != ref["sha256"]:
+        raise ValueError("active resource receipt declaration changed")
+    versions.validate_target_receipt_binding(receipt, member["cell"], raw, resource_entry=entry)
 
 
 def status(parent, *, deep=False, verification_workers=1):
@@ -2789,6 +2955,7 @@ def status(parent, *, deep=False, verification_workers=1):
                                 (row["hostname"], row["mode"], row["slot"], row["attempt_id"])):
                             raise ValueError("runtime cohort receipt/index identity differs")
                         _receipt_verifier_contract(member, receipt)
+                        _check_resource_receipt(entry, member, receipt)
                         if replay is not None: replay.submit(store.root, raw, row["five_tuple"])
                         else:
                             facts = verify_by_contract(member, store.root, receipt)
@@ -2803,6 +2970,15 @@ def status(parent, *, deep=False, verification_workers=1):
                         "science_sha256": e._sha(stratum["science"]), "cohort_ids": list(stratum["members"]),
                         "accepted": sum(member["cohort_id"] in stratum["members"] for member, _, _ in rows)}
                         for stratum in entry["science_strata"]["strata"]]
+                if "resource_versions" in entry:
+                    versions = entry["resource_versions"]
+                    cells[-1]["resource_version_strata"] = {
+                        "policy": versions["policy"], "declaration": deepcopy(versions["declaration"]),
+                        "active_workload_sha256": entry["science"]["workload_sha256"],
+                        "historically_valid_target_excluded": sum(len(_frozen_value(parent, member)["rows"])
+                            for member in entry["members"]
+                            if member["cohort_id"] not in versions["strata"][-1]["members"]),
+                        "active_target_accepted": len(rows)}
                 count += len(rows)
             if not _same(contract, verifier_contract()): raise ValueError("raw verifier source changed during cohort audit")
             complete = len(cells) == 250 and len({c["hostname"] for c in cells}) == 50 and all(c["accepted"] == 400 for c in cells) and count == 100000
@@ -2817,7 +2993,311 @@ def status(parent, *, deep=False, verification_workers=1):
                     "complete": complete, "raw_deep_verified": deep, "scientific_credit": deep and complete,
                     "scope": "explicit Native and, only where admitted, separately labelled640/1280 budget strata; separate immutable roots; shared logical-cell400 slots",
                     "status_authority": "raw-deep-verified" if deep else "existing-accepted-SQL-index; no fresh raw qualification"}
+            if any("resource_version_strata" in cell for cell in cells):
+                result["historically_valid_target_excluded"] = sum(
+                    cell.get("resource_version_strata", {}).get("historically_valid_target_excluded", 0)
+                    for cell in cells)
+                result["target_count_policy"] = "only active resource versions count; exact retired receipts remain immutable history and tuple exclusions"
 
         if not _same(contract, verifier_contract()):
             raise ValueError("raw verifier source changed before all cohort workers joined")
         return result
+
+
+RESOURCE_CHANGE = "resource-version-retirement"
+RESOURCE_PRIOR = "qcsd-resource-domain-resource-retirement-prior-accepted-v1"
+
+
+def _resource_material(parent, prior, input_ref, contract, *, accepted_rows=None, replacements=None):
+    """Read original member/preparation identities; never import target credit."""
+    from . import resource_study_resource_version_inputs as inputs
+    from . import resource_study_resource_versions as versions
+    e = _epochs()
+    if type(input_ref) is not dict or set(input_ref) != {"path", "sha256"}:
+        raise ValueError("resource retirement input plan reference differs")
+    inputs._path(input_ref["path"]); _digest(input_ref["sha256"])
+    if replacements is None:
+        # Constructors require the exact original operator operands. An issued
+        # admission instead replays the immutable copies in its prepared roots.
+        plan, raw, application = inputs.load_input_plan(input_ref["path"], input_ref["sha256"])
+        if hashlib.sha256(raw).hexdigest() != input_ref["sha256"]:
+            raise ValueError("resource retirement input plan bytes changed")
+    else:
+        if type(replacements) is not list or len(replacements) != 5:
+            raise ValueError("resource retirement local replay needs all five declared replacements")
+        for cell in replacements:
+            versions._cell(cell)
+        host = replacements[0]["hostname"]
+        if ([(cell["hostname"], cell["mode"]) for cell in replacements]
+                != [(host, mode) for mode in versions.MODE_ORDER]):
+            raise ValueError("resource retirement local replay replacement scope differs")
+        first = StudyStore(replacements[0]["root"])
+        context, _ = inputs.read_context(first.root, first.plan())
+        plan, application = context["input"], context["application_manifest_raw"]
+        if (context["context"]["input_plan_sha256"] != input_ref["sha256"]
+                or plan["hostname"] != host
+                or plan["mode_roots"] != [{"mode": cell["mode"], "root": cell["root"]}
+                                          for cell in replacements]):
+            raise ValueError("resource retirement local plan differs from the issued all5 declaration")
+    inputs.validate_input_plan(plan, prior, application)
+    candidates = []
+    stores = {}
+    for scope in plan["mode_roots"]:
+        root = scope["root"]; store = stores.setdefault(root, StudyStore(root))
+        context, _ = inputs.read_context(store.root, store.plan())
+        original = context["original_context"]
+        if (context["context"]["input_plan_sha256"] != input_ref["sha256"]
+                or not _same(context["input"], plan)
+                or not _same(original["predecessor"], prior)
+                or original["predecessor_sha256"] != e._sha(prior)
+                or original["parent"] != {"root": str(parent.root),
+                                          "study_sha256": parent._file("study.json")[1]["sha256"]}):
+            raise ValueError("resource retirement preparation uses a stale/foreign original parent or input plan")
+        candidates.append(e._cell(store, plan["hostname"], scope["mode"]))
+    if replacements is not None and not _same(candidates, replacements):
+        raise ValueError("resource retirement local members differ from the issued replacements")
+    rows = _manifest(prior["cohorts"]) if accepted_rows is None else accepted_rows
+    expected = versions.replacement_template(prior, rows, candidates, application,
+        hostname=plan["hostname"], verifier=contract, missing_mode_templates=plan["mode_templates"])
+    return plan, application, candidates, rows, stores, expected
+
+
+def resource_template(parent, input_path, input_sha256):
+    """Prospective all5 template; actual preparation/publication remain separate."""
+    e = _epochs(); parent = StudyStore(Path(parent).absolute())
+    input_ref = {"path": str(Path(input_path).absolute()), "sha256": _digest(input_sha256)}
+    with e._lock(parent.root):
+        current = e._records(parent)
+        if not current or current[-1]["record_type"] != ADMISSION:
+            raise ValueError("resource retirement requires the actual current cohort head")
+        value = _resource_material(parent, current[-1], input_ref, verifier_contract())[-1]
+        return {**value, "resource_version_input": input_ref}
+
+
+def _resource_exclusions(prior, declaration):
+    """Original exclusion schema, extended across every retired cohort member."""
+    e = _epochs(); result = []
+    rows = declaration["retirement"]["rows"]
+    for entry in sorted(prior["cohorts"], key=lambda item: (item["hostname"], item["mode"])):
+        if entry["hostname"] != declaration["hostname"]:
+            continue
+        for member in entry["members"]:
+            cell = member["cell"]
+            selected = [row for row in rows if row["root"] == cell["root"] and row["mode"] == cell["mode"]]
+            if not selected:
+                continue
+            value = {"cell": [cell["hostname"], cell["mode"]], "root": cell["root"],
+                     "study_sha256": cell["study_sha256"], "enrollment_sha256": cell["enrollment_sha256"],
+                     "receipts": [{"five_tuple": _tuple(_load(row["five_tuple"])),
+                         "receipt_path": row["receipt_path"], "receipt_sha256": row["receipt_sha256"],
+                         "attempt_id": row["attempt_id"]} for row in selected], "scientific_credit": False}
+            relative = "epoch-ancestry/" + e._sha(value) + ".json"
+            ref = {"cell": value["cell"], "path": relative, "sha256": e._sha(value)}
+            if ref not in prior["exclusions"]:
+                result.append((ref, value))
+    return result
+
+
+def _freeze_resource_writer(parent, entry):
+    """Freeze only the current old writer; previous immutable members stay whole."""
+    e = _epochs(); previous = _writer(entry)
+    root = previous["cell"]["root"]
+    frozen = {"record_type": SNAPSHOT, "cohort_id": previous["cohort_id"],
+              "rows": [_row_ref(root, row) for row in _rows(StudyStore(root), (entry["hostname"], entry["mode"]))],
+              "authority": "existing-accepted-SQL-rows; no new raw qualification"}
+    relative = "runtime-cohorts/" + e._sha(frozen) + ".json"
+    path = parent.root / relative
+    if path.exists():
+        if not _same(e._read(path), frozen): raise ValueError("resource retirement frozen writer manifest differs")
+    else:
+        _create(path, canonical_json(frozen))
+    previous["frozen_accepted"] = {"path": relative, "sha256": e._sha(frozen)}
+
+
+def _resource_entry(before, candidate, declaration_ref, contract, transition):
+    from . import resource_study_resource_versions as versions
+    member = _member(candidate, contract); science = _science(candidate, transition)
+    strata = []; members = []
+    if before is not None:
+        if "resource_versions" in before or "science_strata" in before:
+            raise ValueError("resource retirement cannot silently repeat a version or combine a budget change")
+        members = deepcopy(before["members"])
+        strata.append({"version": 0, "science": deepcopy(before["science"]),
+                       "members": [old["cohort_id"] for old in members], "target_eligible": False})
+    members.append(member)
+    strata.append({"version": 1, "science": science, "members": [member["cohort_id"]], "target_eligible": True})
+    value = {"hostname": candidate["hostname"], "mode": candidate["mode"], "science": science,
+             "members": members, "writer": member["cohort_id"],
+             "resource_versions": {"record_type": versions.STRATA, "schema_version": 1, "policy": versions.POLICY,
+                                   "declaration": deepcopy(declaration_ref), "strata": strata}}
+    versions.member_sciences(value)
+    return value
+
+
+def create_resource_version(parent, declaration_path, declaration_sha256):
+    """Atomic same-host all5 target retirement under the original ownership gates."""
+    from . import resource_study_resource_version_inputs as inputs
+    from . import resource_study_resource_versions as versions
+    from .resource_study_lineage import prepare_fences, publication_scope, no_retired_history
+    e = _epochs(); parent = StudyStore(Path(parent).absolute())
+    path = e._regular(Path(declaration_path).absolute()); declaration = e._read(path)
+    if sha256_file(path) != declaration_sha256 or e._sha(declaration) != declaration_sha256:
+        raise ValueError("resource retirement declaration requires exact canonical immutable bytes")
+    input_ref = declaration.get("resource_version_input")
+    if type(input_ref) is not dict or set(input_ref) != {"path", "sha256"}:
+        raise ValueError("resource retirement declaration lacks its exact prepared input plan")
+    core = {name: value for name, value in declaration.items() if name != "resource_version_input"}
+    with e.docker_lock(), e._lock(parent.root):
+        records = e._records(parent); prior = records[-1]; contract = verifier_contract()
+        plan, application, candidates, rows, stores, _ = _resource_material(parent, prior, input_ref, contract)
+        versions.validate_declaration(core, prior, rows, candidates, application,
+            hostname=plan["hostname"], verifier=contract, missing_mode_templates=plan["mode_templates"])
+        previous_roots = {cell["root"] for record in records for cell in record["cells"]}
+        if set(stores) & previous_roots:
+            raise ValueError("resource retirement requires genuinely new independent roots")
+        e._idle([StudyStore(root) for root in sorted(previous_roots | set(stores))])
+        for store in stores.values():
+            inputs.require_current_context(store, parent, prior, input_ref)
+            no_retired_history(store)
+            if (store.root / MARKER).exists() or (store.root / MARKER).is_symlink():
+                raise ValueError("resource version has an existing membership marker")
+            with store._transaction() as connection:
+                if connection.execute("SELECT 1 FROM attempts").fetchone() or connection.execute("SELECT 1 FROM accepted").fetchone():
+                    raise ValueError("resource retirement cannot import prior attempts, pilots or accepted rows")
+            e._verify_preparation(store, plan["hostname"])
+        declaration_ref = {"path": str(path), "sha256": declaration_sha256}
+        registry = deepcopy(prior["cohorts"]); entries = {e._key(entry): entry for entry in registry}
+        cells = {e._key(cell): deepcopy(cell) for cell in prior["cells"]}
+        for candidate in candidates:
+            key = e._key(candidate); before = entries.get(key)
+            if before is not None: _freeze_resource_writer(parent, before)
+            replacement = _resource_entry(before, candidate, declaration_ref, contract, prior["class_transition"])
+            if before is None: registry.append(replacement)
+            else: registry[registry.index(before)] = replacement
+            entries[key] = replacement; cells[key] = candidate
+        exclusions = deepcopy(prior["exclusions"])
+        for exclusion_ref, value in _resource_exclusions(prior, core):
+            destination = parent.root / exclusion_ref["path"]
+            if destination.exists():
+                if not _same(e._read(destination), value): raise ValueError("resource retirement exclusion bytes differ")
+            else: _create(destination, canonical_json(value))
+            exclusions.append(exclusion_ref)
+        snapshot = {"record_type": RESOURCE_PRIOR, "predecessor_admission_sha256": e._sha(prior), "rows": rows}
+        snapshot_relative = "resource-versions/" + e._sha(snapshot) + ".json"
+        _create(parent.root / snapshot_relative, canonical_json(snapshot))
+        retired = core["retirement"]; retired_relative = "resource-versions/" + e._sha(retired) + ".json"
+        _create(parent.root / retired_relative, canonical_json(retired))
+        for store in stores.values(): e._bind(store, parent)
+        fences = prepare_fences(parent, records, cells, prior["class_transition"])
+        markers = dict(prior.get("cohort_memberships", {}))
+        for root in sorted(stores):
+            store = stores[root]; marker = _marker(store, parent)
+            _create(store.root / MARKER, canonical_json(marker)); markers[root] = e._sha(marker)
+        value = {"record_type": ADMISSION, "sequence": len(records), "previous_sha256": e._sha(prior),
+            "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": RESOURCE_CHANGE,
+            "affected": [[plan["hostname"], mode] for mode in versions.MODE_ORDER],
+            "cells": [cells[key] for key in sorted(cells)], "exclusions": exclusions,
+            "class_transition": deepcopy(prior["class_transition"]), "write_fences": fences,
+            "cohorts": sorted(registry, key=lambda entry: (entry["hostname"], entry["mode"])),
+            "cohort_memberships": markers, "compatibility_declaration": declaration_ref,
+            "resource_version_input": input_ref,
+            "prior_accepted_snapshot": {"path": snapshot_relative, "sha256": e._sha(snapshot)},
+            "resource_retirement": {"path": retired_relative, "sha256": e._sha(retired)}}
+        _validate_record(parent, records, value, contract=contract)
+        e._idle([StudyStore(root) for root in sorted(previous_roots | set(stores))])
+        if sha256_file(path) != declaration_sha256 or not _same(contract, verifier_contract()):
+            raise ValueError("resource retirement source or declaration changed before publication")
+        _create(parent.root / "epoch-admissions" / f"{len(records):06d}.json", canonical_json(value))
+        with publication_scope(parent, records, value), parent._transaction() as connection:
+            old = canonical_json({"sequence": len(records)-1, "sha256": e._sha(prior)}).decode()
+            actual = connection.execute("SELECT value FROM meta WHERE key='epoch_head'").fetchone()
+            if actual is None or actual[0] != old: raise ValueError("resource retirement current parent changed")
+            connection.execute("UPDATE meta SET value=? WHERE key='epoch_head'",
+                (canonical_json({"sequence": len(records), "sha256": e._sha(value)}).decode(),))
+        return value
+
+
+def _validate_resource_record(parent, records, value, contract):
+    from . import resource_study_resource_versions as versions
+    e = _epochs(); prior = records[-1]
+    fields = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells",
+              "exclusions", "class_transition", "write_fences", "cohorts", "cohort_memberships", "compatibility_declaration",
+              "resource_version_input", "prior_accepted_snapshot", "resource_retirement"}
+    if (type(value) is not dict or set(value) != fields or value["record_type"] != ADMISSION
+            or value["change"] != RESOURCE_CHANGE or type(value["sequence"]) is not int or value["sequence"] != len(records)
+            or value["previous_sha256"] != e._sha(prior)
+            or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
+            or value["parent_study_sha256"] != prior["parent_study_sha256"]
+            or not _same(value["class_transition"], prior["class_transition"])):
+        raise ValueError("resource retirement parent/class-lineage envelope differs")
+    ref = value["compatibility_declaration"]; declaration = e._read(ref["path"])
+    if sha256_file(ref["path"]) != ref["sha256"] or e._sha(declaration) != ref["sha256"]:
+        raise ValueError("resource retirement exact declaration bytes differ")
+    if declaration.get("resource_version_input") != value["resource_version_input"]:
+        raise ValueError("resource retirement input plan reference differs")
+    core = {name: item for name, item in declaration.items() if name != "resource_version_input"}
+    snapshot_ref = value["prior_accepted_snapshot"]
+    if set(snapshot_ref) != {"path", "sha256"} or not snapshot_ref["path"].startswith("resource-versions/"):
+        raise ValueError("resource retirement prior accepted manifest reference differs")
+    snapshot = e._read(parent._relative(snapshot_ref["path"]))
+    if (set(snapshot) != {"record_type", "predecessor_admission_sha256", "rows"}
+            or snapshot["record_type"] != RESOURCE_PRIOR or snapshot["predecessor_admission_sha256"] != e._sha(prior)
+            or e._sha(snapshot) != snapshot_ref["sha256"]
+            or sha256_file(parent._relative(snapshot_ref["path"])) != snapshot_ref["sha256"]):
+        raise ValueError("resource retirement prior accepted snapshot changed")
+    affected = core.get("affected")
+    if type(affected) is not list or any(type(row) is not dict or "replacement" not in row for row in affected):
+        raise ValueError("resource retirement declared replacement inventory differs")
+    plan, application, candidates, rows, _, _ = _resource_material(parent, prior, value["resource_version_input"],
+        contract, accepted_rows=snapshot["rows"], replacements=[row["replacement"] for row in affected])
+    versions.validate_declaration(core, prior, rows, candidates, application,
+        hostname=plan["hostname"], verifier=contract, missing_mode_templates=plan["mode_templates"])
+    retired_ref = value["resource_retirement"]
+    if set(retired_ref) != {"path", "sha256"} or not retired_ref["path"].startswith("resource-versions/"):
+        raise ValueError("resource retirement historical manifest reference differs")
+    retired = e._read(parent._relative(retired_ref["path"]))
+    if (e._sha(retired) != retired_ref["sha256"]
+            or sha256_file(parent._relative(retired_ref["path"])) != retired_ref["sha256"]
+            or not _same(retired, core["retirement"])):
+        raise ValueError("resource retirement must preserve the exact target-excluded valid historical rows")
+    added_exclusions = _resource_exclusions(prior, core)
+    for exclusion_ref, expected in added_exclusions:
+        actual = e._read(parent._relative(exclusion_ref["path"]))
+        if not _same(actual, expected) or e._sha(actual) != exclusion_ref["sha256"]:
+            raise ValueError("resource retirement ancestor tuple exclusion differs")
+    if value["exclusions"] != [*prior["exclusions"], *[ref for ref, _ in added_exclusions]]:
+        raise ValueError("resource retirement loses old exclusions or adds undeclared tuples")
+    selected = {(plan["hostname"], mode) for mode in MODES}
+    old_entries = {e._key(entry): entry for entry in prior["cohorts"]}
+    entries = {e._key(entry): entry for entry in value["cohorts"]}
+    old_cells = {e._key(cell): cell for cell in prior["cells"]}; cells = {e._key(cell): cell for cell in value["cells"]}
+    if (len(entries) != len(value["cohorts"]) or set(entries) != set(old_entries) | selected
+            or len(cells) != len(value["cells"]) or set(cells) != set(old_cells) | selected
+            or value["affected"] != [list(key) for key in sorted(selected)]):
+        raise ValueError("resource retirement must change exactly one hostname and all five modes")
+    candidate_map = {e._key(cell): cell for cell in candidates}
+    previous_roots = {cell["root"] for record in records for cell in record["cells"]}
+    if any(cell["root"] in previous_roots for cell in candidates):
+        raise ValueError("resource retirement reuses an old ledger root")
+    for key, entry in entries.items():
+        if key not in selected:
+            if not _same(entry, old_entries[key]) or not _same(cells[key], old_cells[key]):
+                raise ValueError("resource retirement changes one of the unaffected49 classes")
+            continue
+        before = deepcopy(old_entries.get(key))
+        if before is not None:
+            old_writer = _writer(before)
+            actual_old = next((member for member in entry["members"]
+                               if member["cohort_id"] == old_writer["cohort_id"]), None)
+            if actual_old is None or actual_old["frozen_accepted"] is None:
+                raise ValueError("resource retirement fails to freeze the old writer")
+            old_writer["frozen_accepted"] = deepcopy(actual_old["frozen_accepted"])
+            frozen = _frozen_value(parent, actual_old)
+            expected_rows = [row for row in rows if row["root"] == old_writer["cell"]["root"]
+                             and (row["hostname"], row["mode"]) == key]
+            if not _same(frozen["rows"], expected_rows):
+                raise ValueError("resource retirement old writer receipt set differs from actual prior inventory")
+        expected = _resource_entry(before, candidate_map[key], ref, contract, prior["class_transition"])
+        if not _same(entry, expected) or not _same(cells[key], candidate_map[key]):
+            raise ValueError("resource retirement rewrites old members or invents new source/science/credit carry")
+    _validate_members(parent, value, cells, contract)

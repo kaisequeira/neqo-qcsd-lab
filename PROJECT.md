@@ -1,5 +1,37 @@
 # QCSD thesis project ledger
 
+## 21 October 2026: combined condition and verification-child coordinator
+
+This prospective source combines the tested bounded verification child with
+the explicit Angkanet CS180 condition. Its current package has 183 Python
+files and a 175-file reader contract; the original 106, 107 and earlier
+admission profiles retain their exact historical identities. The parent
+continues to own reservations, quotas and commits, and the child performs the
+complete original raw verification. The same fifty resource-domain classes,
+twenty URLs per class and shared 400-session class/mode quotas apply.
+
+The counter reader now includes suppressed outgoing opportunities in CS-BuFLO
+lateness total/max, matching Native's existing accounting. All other byte,
+terminal-partial, clock and packet predicates retain their original behavior.
+On one saved trace, the original counter check omitted 19 microseconds;
+the existing corrected function passed the complete counter and terminal
+partial checks on unchanged raw files in 2.22 seconds. This diagnostic adds
+no capture credit.
+
+The focused HOST run passed 33 tests; the remaining condition-to-catalog
+integration case passed in 33.48 seconds after correcting its synthetic
+fixture to expect the original missing-pilot exception and to unseal/reseal
+its run file around its endpoint edit. Production guards were unchanged.
+The tests cover condition history, source profiles, child dispatch, counter
+accounting and real Store quota/tuple operations with declared synthetic
+packet and child leaves. See the [merge integration tests](tests/test_resource_study_source108_merge.py)
+and [counter controls](tests/test_cs_suppressed_lateness_counters108.py).
+
+This source has not been adopted into acquisition. The current immutable
+publishers can expose a temporary second hard link; the subsequent atomic
+publication correction must be validated before another large capture.
+Historical captures and failed workflow evidence remain unchanged.
+
 ## 21 October 2026: prospective Angkanet CS180 condition SDK
 
 The prospective SDK provides an explicit 180-second CS-BuFLO timeout and
