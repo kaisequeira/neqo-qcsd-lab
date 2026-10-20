@@ -9,6 +9,7 @@ from copy import deepcopy
 import hashlib
 import json
 import os
+from .resource_study_atomic_publish import publish_noreplace
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -249,7 +250,7 @@ def freeze_selection(root, selected):
         with temporary.open("xb") as stream:
             stream.write(raw); stream.flush(); os.fsync(stream.fileno())
         temporary.chmod(0o444)
-        os.link(temporary, path)
+        publish_noreplace(temporary, path)
         fd = os.open(path.parent, os.O_RDONLY)
         try: os.fsync(fd)
         finally: os.close(fd)

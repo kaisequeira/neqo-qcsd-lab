@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+from .resource_study_atomic_publish import publish_noreplace
 from pathlib import Path
 import signal
 import threading
@@ -48,6 +49,7 @@ def coordinator_provenance(*, resource_selection=False, class_selection=False,
              "resource_study_verify_child.py")
     if resource_selection:
         names += ("resource_study_selection.py",)
+    names += ("resource_study_atomic_publish.py",)
     if class_selection:
         names += ("resource_study_lineage.py",)
     if resource_version:
@@ -75,7 +77,7 @@ def create_json(path: Path, value: Any) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         temporary.chmod(0o444)
-        os.link(temporary, path)
+        publish_noreplace(temporary, path)
         descriptor = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(descriptor)

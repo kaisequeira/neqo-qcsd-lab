@@ -15,6 +15,7 @@ import ipaddress
 import json
 import math
 import os
+from .resource_study_atomic_publish import publish_noreplace
 from pathlib import Path, PurePosixPath
 import re
 import sqlite3
@@ -132,12 +133,12 @@ def _create(path, raw):
             stream.write(raw); stream.flush()
             os.fchmod(stream.fileno(), 0o444)
             os.fsync(stream.fileno())
-        os.link(temporary, path)
-        temporary.unlink(); temporary = None
+        publish_noreplace(temporary, path)
+        temporary = None
         _fsync(path.parent)
     finally:
         if temporary is not None:
-            temporary.unlink()
+            temporary.unlink(missing_ok=True)
 
 
 def _tuple(value):

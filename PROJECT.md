@@ -1,5 +1,30 @@
 # QCSD thesis project ledger
 
+## 21 October 2026: atomic immutable publication
+
+The three immutable publishers now use an exclusive atomic rename instead
+of a temporary hard-link pair. Linux uses `renameat2(RENAME_NOREPLACE)` and
+macOS uses `renamex_np(RENAME_EXCL)`. An existing destination is never
+overwritten, and unavailable platform support refuses publication. Readers
+retain the strict single-link requirement; source and destination file
+descriptors authenticate the same complete immutable inode and bytes.
+The current package contains 184 files with a 176-file execution contract.
+All historical source profiles and original scientific gates are preserved.
+
+All fourteen real macOS filesystem cases passed in 0.14 seconds, including
+reproduction of the old two-link window, all three publishers, concurrent
+readers, existing destinations and temporary cleanup. The three current
+reader, condition and catalog integration cases passed in 41 seconds.
+Their inherited fixture's current dependency-count assertion was updated
+from 175 to 176; the production graph and guards were unchanged. See the
+[publication tests](tests/test_resource_study_atomic_publish109.py) and
+[current integration tests](tests/test_resource_study_source109_merge.py).
+
+Linux filesystem and owned-process tests remain pending. This source is not
+yet adopted for capture. The original partial capture and proof refusals
+remain negative, and pending captures receive no certified credit from this
+code change.
+
 ## 21 October 2026: combined condition and verification-child coordinator
 
 This prospective source combines the tested bounded verification child with
