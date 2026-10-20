@@ -312,6 +312,7 @@ class PreparationRuntime:
     def prepare(self, candidate: dict, output: Path, *, buflo_chaff_cap_bytes: int | None = None,
                 buflo_small_response_aggregate: bool = False,
                 buflo_duration_policy: str | None = None,
+                cs_buflo_duration_policy: str | None = None,
                 frozen_application_manifest: dict | None = None) -> dict:
         from .resource_study_native import _buflo_aggregate_option, buflo_aggregate_native_supported
         aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
@@ -320,6 +321,11 @@ class PreparationRuntime:
         if buflo_duration_policy is not None:
             from .buflo_duration_budget import preparation_policy
             preparation_policy(buflo_duration_policy)
+        if cs_buflo_duration_policy is not None:
+            from .resource_study_native import cs_duration_policy, CS180_HOST, CS180_NATIVE
+            cs_duration_policy(cs_buflo_duration_policy)
+            if candidate["hostname"] != CS180_HOST or self.runtime.get("native_commit") != CS180_NATIVE:
+                raise ValueError("CS180 requires exact Ang Native137 preparation")
         frozen_raw = None
         if frozen_application_manifest is not None:
             from .resource_study_selection import read_frozen_application_manifest
@@ -341,6 +347,8 @@ class PreparationRuntime:
             native_prepare_options = ("--buflo-chaff-cap-bytes", str(cap))
         if buflo_duration_policy is not None:
             native_prepare_options += ("--buflo-duration-policy", buflo_duration_policy)
+        if cs_buflo_duration_policy is not None:
+            native_prepare_options += ("--cs-buflo-duration-policy", cs_buflo_duration_policy)
         if frozen_application_manifest is not None:
             native_prepare_options += ("--frozen-application-manifest",
                 str(self.root / frozen_application_manifest["manifest_path"]),
@@ -368,6 +376,16 @@ class PreparationRuntime:
         if (buflo_duration_policy is not None
                 and enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy") != buflo_duration_policy):
             raise ValueError("prepared BuFLO duration differs from the explicit Native CLI option")
+        from .resource_study_native import CS180_POLICY
+        actual_cs = enrollment.get("mode_policies", {}).get("cs-buflo", {}).get("cs_buflo_duration_policy")
+        if actual_cs != cs_buflo_duration_policy:
+            raise ValueError("prepared CS duration differs from explicit Native CLI option")
+        if actual_cs == CS180_POLICY:
+            from .resource_study_native import _cs180_scope
+            _cs180_scope(candidate["hostname"], self.runtime, enrollment["workload_sha256"])
+            if (enrollment["mode_settings"]["cs-buflo"]["timeout_seconds"],
+                    enrollment["mode_settings"]["cs-buflo"]["capture_seconds"]) != (180, 240):
+                raise ValueError("returned CS180 preparation limits differ")
         if buflo_chaff_cap_bytes is not None:
             selection = enrollment.get("buflo_chaff_selection")
             if (type(selection) is not dict

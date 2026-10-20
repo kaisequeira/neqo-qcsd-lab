@@ -1498,6 +1498,134 @@ def compatibility_template(parent, cohort_root, *, affected_hostnames=(), affect
         return _declaration(parent, new, e._records(parent), list(affected_hostnames), list(affected_modes))
 
 
+CS180_DECLARATION = "qcsd-resource-domain-Ang-CS180-condition-amendment-declaration-v1"
+CS180_STRATA = "qcsd-resource-domain-Ang-CS120-CS180-science-strata-v1"
+CS180_CHANGE = "Ang-CS120-to-CS180-current20-native137-condition-v1"
+CS180_AMENDMENT = "prospective Ang CS120-to-CS180/240 and exact current20 resource19 content version; genuine Native137; separately labelled full science; original shared400 and history unchanged"
+
+
+def _cs180_science(old):
+    """Exact prospective science transform; no arbitrary duration/workload waiver."""
+    from .resource_study_native import (CS180_OLD_WORKLOAD, CS180_WORKLOAD,
+        CS180_PARAMETERS, CS180_POLICY)
+    try:
+        settings=old["settings"]
+        if (old["workload_sha256"] != CS180_OLD_WORKLOAD
+                or len(old["urls"]) != 20 or len(set(old["urls"])) != 20
+                or settings["parameters_sha256"] != CS180_PARAMETERS
+                or [settings["timeout_seconds"],settings["capture_seconds"]] != [120,180]
+                or old["policies"].get("parameter_policy") != "fixed-cs-buflo-cpsp-live-v1"
+                or "cs_buflo_duration_policy" in old["policies"]
+                or not _same(settings["policies"],old["policies"])):
+            raise ValueError("CS180 requires exact original Ang CS120 science")
+        result=deepcopy(old)
+        result["workload_sha256"]=CS180_WORKLOAD
+        result["policies"]["cs_buflo_duration_policy"]=CS180_POLICY
+        result["settings"].update(timeout_seconds=180,capture_seconds=240)
+        result["settings"]["policies"]=deepcopy(result["policies"])
+        return result
+    except (KeyError,TypeError) as error:
+        raise ValueError("CS180 original science is malformed") from error
+
+
+def _cs180_pair(old_cell,new_cell,transition):
+    from .resource_study_native import CS180_HOST,CS180_NATIVE
+    if ((old_cell["hostname"],old_cell["mode"]) != (CS180_HOST,"cs-buflo")
+            or (new_cell["hostname"],new_cell["mode"]) != (CS180_HOST,"cs-buflo")
+            or new_cell["definition"]["native"][2] != CS180_NATIVE
+            or _same(old_cell["definition"]["native"],new_cell["definition"]["native"])
+            or new_cell["definition"]["ready"] is not True
+            or not _same(_cs180_science(_science(old_cell,transition)),_science(new_cell,transition))):
+        raise ValueError("CS180 changes another cell, Native, workload, parameters, acceptance or ordered20")
+
+
+def _cs180_strata(old,science,member_id):
+    if (old["hostname"] != "angkanet26.com" or old["mode"] != "cs-buflo"
+            or "science_strata" in old or "condition_strata" in old
+            or not _same(_cs180_science(old["science"]),science)):
+        raise ValueError("CS180 requires one exact prospective condition transition")
+    return {"record_type":CS180_STRATA,"schema_version":1,"shared_quota":400,
+        "strata":[{"condition":"original-CS120/180","science":deepcopy(old["science"]),
+                   "members":[m["cohort_id"] for m in old["members"]]},
+                  {"condition":CS180_CHANGE,"science":deepcopy(science),"members":[member_id]}]}
+
+
+def _condition_sciences(entry):
+    value=entry["condition_strata"]
+    if (set(entry)!={"hostname","mode","science","members","writer","condition_strata"}
+            or (entry["hostname"],entry["mode"])!=("angkanet26.com","cs-buflo")
+            or type(value) is not dict or set(value)!={"record_type","schema_version","shared_quota","strata"}
+            or value["record_type"]!=CS180_STRATA or type(value["schema_version"]) is not int
+            or value["schema_version"]!=1 or type(value["shared_quota"]) is not int or value["shared_quota"]!=400
+            or type(value["strata"]) is not list or len(value["strata"])!=2):
+        raise ValueError("CS180 requires the exact two-condition shared400 ledger")
+    assigned=[];sciences={}
+    for stratum,label in zip(value["strata"],("original-CS120/180",CS180_CHANGE)):
+        if (type(stratum) is not dict or set(stratum)!={"condition","science","members"}
+                or stratum["condition"]!=label or type(stratum["members"]) is not list
+                or not stratum["members"] or any(type(i) is not str for i in stratum["members"])):
+            raise ValueError("CS180 condition member schema differs")
+        assigned.extend(stratum["members"])
+        sciences.update({identity:stratum["science"] for identity in stratum["members"]})
+    if (len(assigned)!=len(set(assigned)) or assigned!=[m["cohort_id"] for m in entry["members"]]
+            or entry["writer"] not in value["strata"][1]["members"]
+            or not _same(_cs180_science(value["strata"][0]["science"]),value["strata"][1]["science"])
+            or not _same(entry["science"],value["strata"][1]["science"])):
+        raise ValueError("CS180 rewrites full science, member history or writer")
+    return sciences
+
+
+def _cs180_declaration_value(parent,prior,affected,retained_digest,contract):
+    return {"record_type":CS180_DECLARATION,"schema_version":1,
+        "parent_study_sha256":parent._file("study.json")[1]["sha256"],
+        "predecessor_admission_sha256":_epochs()._sha(prior),
+        "selected_hostnames":prior["class_transition"]["class_selection"]["selected_hostnames"],
+        "affected":affected,"retained_accepted_manifest_sha256":retained_digest,
+        "verifier":contract,"stable_lineage_projection":_projection(prior["class_transition"]),
+        "condition_change_authorized":False,"methodology_amendment":CS180_AMENDMENT,
+        "two_condition_strata_shared400":True,"historical_credit_preserved":True,"rationale":""}
+
+
+def _validate_cs180_declaration(value,expected):
+    if (type(value) is not dict or set(value)!=set(expected)
+            or value.get("condition_change_authorized") is not True
+            or value.get("two_condition_strata_shared400") is not True
+            or value.get("historical_credit_preserved") is not True
+            or type(value.get("rationale")) is not str or not value["rationale"].strip()):
+        raise ValueError("explicit Ang CS180 condition methodology declaration required")
+    actual=dict(value);actual.update(condition_change_authorized=False,rationale="")
+    if not _same(actual,expected):
+        raise ValueError("CS180 declaration changes actual parent, science, retained history or source")
+
+
+def _cs180_declaration(parent,new,records,hosts,modes):
+    e=_epochs()
+    if (hosts!=["angkanet26.com"] or modes!=["cs-buflo"] or not records
+            or records[-1].get("class_transition") is None):
+        raise ValueError("CS180 admission requires exact one Ang CS cell and genuine selected50 parent")
+    cells={e._key(c):c for c in records[-1]["cells"]};key=(hosts[0],modes[0])
+    if key not in cells: raise ValueError("CS180 cannot introduce a first mode")
+    old,candidate=cells[key],e._cell(new,*key)
+    _cs180_pair(old,candidate,records[-1]["class_transition"])
+    contract=verifier_contract()
+    registry=records[-1]["cohorts"] if records[-1]["record_type"]==ADMISSION else _initial_registry(records[-1],contract)
+    if "science_strata" in _entry(registry,key) or "condition_strata" in _entry(registry,key):
+        raise ValueError("CS180 condition was already amended")
+    affected=[{"hostname":key[0],"mode":key[1],"previous_definition_sha256":old["definition_sha256"],
+        "new_definition_sha256":candidate["definition_sha256"]}]
+    return _cs180_declaration_value(parent,records[-1],affected,e._sha(_manifest(registry)),contract)
+
+
+def cs180_template(parent,cohort_root,*,affected_hostnames=(),affected_modes=()):
+    e=_epochs();parent,new=StudyStore(Path(parent).absolute()),StudyStore(Path(cohort_root).absolute())
+    with e._lock(parent.root):
+        return _cs180_declaration(parent,new,e._records(parent),list(affected_hostnames),list(affected_modes))
+
+
+def create_cs180_condition(parent,cohort_root,declaration_path,declaration_sha256):
+    return _create_admission(parent,cohort_root,declaration_path,declaration_sha256,first=False,condition=True)
+
+
 def _budget_science(old):
     """Only the explicitly approved640-to1280 budget/settings delta is legal."""
     from . import buflo_duration_budget as budget
@@ -1533,6 +1661,8 @@ def _budget_strata(old, science, member_id):
 
 def _stratum_sciences(entry):
     """Validate the closed ledger, retaining every historical full science value."""
+    if "condition_strata" in entry:
+        return _condition_sciences(entry)
     base = {"hostname", "mode", "science", "members", "writer"}
     if "science_strata" not in entry:
         if set(entry) != base: raise ValueError("runtime cohort entry fields differ")
@@ -1689,6 +1819,21 @@ def _initialization_inputs(current, source, candidates):
     return files, admissions, observed
 
 
+def _cs180_input_declaration(prior):
+    """Preparation intent bound to the actual old snapshot; grants no admission."""
+    from .resource_study_native import CS180_HOST,CS180_NATIVE,CS180_POLICY,CS180_OLD_WORKLOAD,CS180_WORKLOAD
+    cells=[cell for cell in prior["cells"] if (cell["hostname"],cell["mode"])==(CS180_HOST,"cs-buflo")]
+    if len(cells)!=1:
+        raise ValueError("CS180 input authority requires exactly one existing Ang CS writer")
+    cell=cells[0]
+    _cs180_science(_science(cell,prior["class_transition"]))
+    return {"record_type":"qcsd-Ang-CS180-prospective-preparation-intent-v1","schema_version":1,
+        "policy":CS180_POLICY,"hostname":CS180_HOST,"mode":"cs-buflo",
+        "previous_definition_sha256":cell["definition_sha256"],"old_workload_sha256":CS180_OLD_WORKLOAD,
+        "new_workload_sha256":CS180_WORKLOAD,"native_commit":CS180_NATIVE,"shared_quota":400,
+        "scientific_credit":False}
+
+
 def _input_context(root, plan):
     """Local immutable input proof only; never construct a Store or query SQL."""
     from .resource_study_selection import _read
@@ -1700,6 +1845,8 @@ def _input_context(root, plan):
     study_raw = _read(root / "study.json")
     fields = {"record_type", "schema_version", "root", "study_sha256", "parent", "predecessor",
               "predecessor_sha256", "class_selection_sha256", "source_sha256", "scientific_credit"}
+    if type(value) is dict and "cs180_condition" in value:
+        fields.add("cs180_condition")
     prior = value.get("predecessor", {}) if type(value) is dict else {}
     transition = prior.get("class_transition") if type(prior) is dict else None
     parent = value.get("parent", {}) if type(value) is dict else {}
@@ -1721,6 +1868,8 @@ def _input_context(root, plan):
             or not _same(transition.get("class_selection"), plan["class_selection"])
             or not _same(transition.get("class_network"), plan["class_network"])):
         raise ValueError("runtime-cohort local input context root/source/map/predecessor differs")
+    if "cs180_condition" in value and not _same(value["cs180_condition"],_cs180_input_declaration(prior)):
+        raise ValueError("CS180 input intent changes original parent cell, policy or full scope")
     return value, hashlib.sha256(raw).hexdigest()
 
 
@@ -1824,8 +1973,20 @@ def validate_input_authority(store, enrollment, *, plan):
     if host == INCLUDED or host not in plan["class_network"]["assignments"]:
         raise ValueError("supplemental cohort authority cannot replace literal MAL or selected50")
     cells = _input_cells(context, host); definition = cells[0]["definition"]
+    from .resource_study_native import CS180_POLICY,CS180_WORKLOAD,_cs180_scope
+    selected_cs=enrollment.get("mode_policies",{}).get("cs-buflo",{}).get("cs_buflo_duration_policy")
+    intent=context.get("cs180_condition")
+    workload=definition["workload_sha256"]
+    if intent is not None:
+        if (host!="angkanet26.com" or selected_cs!=CS180_POLICY
+                or not _same(intent,_cs180_input_declaration(context["predecessor"]))):
+            raise ValueError("explicit CS180 initialization requires its genuine new policy enrollment")
+        _cs180_scope(host,enrollment["runtime"],enrollment["workload_sha256"])
+        workload=CS180_WORKLOAD
+    elif selected_cs is not None:
+        raise ValueError("CS180 enrollment lacks explicit original-parent condition input intent")
     if (not _same(enrollment.get("urls"), definition["urls"])
-            or enrollment.get("workload_sha256") != definition["workload_sha256"]
+            or enrollment.get("workload_sha256") != workload
             or not _same(definition["network"]["assignment"], plan["class_network"]["assignments"][host])):
         raise ValueError("runtime-cohort enrollment changes frozen twenty resources/workload/class address")
     if "resource_selection" not in enrollment: raise ValueError("runtime-cohort input authority needs full explicit selection proof")
@@ -1853,7 +2014,7 @@ def input_authority_artifact_paths(enrollment):
     return {"runtime_cohort_input_context": INPUT_CONTEXT}
 
 
-def initialize_cohort(parent, cohort_root):
+def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None):
     """Freeze current plan, catalogue and reserve inputs in a fresh empty ledger.
 
     Preparation/enrollment are separate original live operations. This copies
@@ -1870,6 +2031,10 @@ def initialize_cohort(parent, cohort_root):
         current = e._records(parent)
         if not current or current[-1].get("class_transition") is None:
             raise ValueError("runtime cohort initialization requires stable selected50 authority")
+        if cs_buflo_duration_policy is not None:
+            from .resource_study_native import cs_duration_policy
+            cs_duration_policy(cs_buflo_duration_policy)
+            _cs180_input_declaration(current[-1])
         roots = ({m["cell"]["root"] for entry in current[-1]["cohorts"] for m in entry["members"]}
                  if current[-1]["record_type"] == ADMISSION else {c["root"] for c in current[-1]["cells"]})
         candidates = [StudyStore(path) for path in sorted(roots)]
@@ -1899,6 +2064,8 @@ def initialize_cohort(parent, cohort_root):
             "predecessor": deepcopy(current[-1]), "predecessor_sha256": e._sha(current[-1]),
             "class_selection_sha256": e._sha(plan["class_selection"]), "source_sha256": plan["source_sha256"],
             "scientific_credit": False}
+        if cs_buflo_duration_policy is not None:
+            context["cs180_condition"]=_cs180_input_declaration(current[-1])
         _create(root / INPUT_CONTEXT, canonical_json(context))
         _, context_sha = _input_context(root, plan)
         return {"record_type": "qcsd-resource-domain-runtime-cohort-initialization-v1",
@@ -2008,7 +2175,7 @@ def create_first_modes(parent, cohort_root, declaration_path, declaration_sha256
     return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=True)
 
 
-def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False, cover=False):
+def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False, cover=False, condition=False):
     e = _epochs()
     from .resource_study_lineage import prepare_fences, publication_scope, validate_cells, no_retired_history
     parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
@@ -2022,13 +2189,20 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
         if (not _same(context["parent"], {"root": str(parent.root), "study_sha256": parent._file("study.json")[1]["sha256"]})
                 or not _same(context["predecessor"], records[-1]) or context["predecessor_sha256"] != e._sha(records[-1])):
             raise ValueError("runtime cohort input authority has a stale or foreign actual parent head")
+        if condition and ("cs180_condition" not in context
+                or not _same(context["cs180_condition"],_cs180_input_declaration(records[-1]))):
+            raise ValueError("CS180 admission lacks its original actual-parent preparation intent")
+        if not condition and "cs180_condition" in context:
+            raise ValueError("CS180 initialized root requires explicit condition admission")
         hosts = sorted({row["hostname"] for row in declaration["affected"]})
         modes = sorted({row["mode"] for row in declaration["affected"]})
+        if condition and (first or budget or cover):
+            raise ValueError("CS180 condition cannot combine another admission authority")
         if cover and (first or budget):
             raise ValueError("cover replacement cannot combine first-mode or budget authority")
         if first and budget: raise ValueError("budget amendment cannot introduce a first mode")
-        expected = (_cover_declaration if cover else _budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
-        (_validate_cover_declaration if cover else _validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
+        expected = (_cs180_declaration if condition else _cover_declaration if cover else _budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
+        (_validate_cs180_declaration if condition else _validate_cover_declaration if cover else _validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
         current_plans = [StudyStore(root).plan() for root in
                          sorted({c["root"] for c in records[-1]["cells"]})]
         if not any("class_selection" in plan and _same(e._plan(new), plan) for plan in current_plans):
@@ -2064,10 +2238,16 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
             previous["frozen_accepted"] = {"path": relative, "sha256": e._sha(frozen)}
             candidate = e._cell(new, *key)
             member = _member(candidate, declaration["verifier"])
-            if budget:
+            if condition:
+                science = _science(candidate, records[-1]["class_transition"])
+                entry["condition_strata"] = _cs180_strata(entry, science, member["cohort_id"])
+                entry["science"] = science
+            elif budget:
                 science = _science(candidate, records[-1]["class_transition"])
                 entry["science_strata"] = _budget_strata(entry, science, member["cohort_id"])
                 entry["science"] = science
+            elif "condition_strata" in entry:
+                entry["condition_strata"]["strata"][1]["members"].append(member["cohort_id"])
             elif "science_strata" in entry:
                 entry["science_strata"]["strata"][1]["members"].append(member["cohort_id"])
             entry["members"].append(member); entry["writer"] = member["cohort_id"]
@@ -2084,7 +2264,7 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
                 _create(store.root / MARKER, canonical_json(value))
             markers[root] = e._sha(value)
         value = {"record_type": ADMISSION, "sequence": len(records), "previous_sha256": e._sha(records[-1]),
-                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": COVER_CHANGE if cover else "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
+                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": CS180_CHANGE if condition else COVER_CHANGE if cover else "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
                  "affected": [[row["hostname"], row["mode"]] for row in declaration["affected"]],
                  "cells": [cells[key] for key in sorted(cells)], "exclusions": records[-1]["exclusions"],
                  "class_transition": records[-1]["class_transition"], "write_fences": fences,
@@ -2113,13 +2293,14 @@ def _validate_record(parent, records, value, *, contract=None):
         return _validate_cover_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == "first-mode":
         return _validate_first_record(parent, records, value, contract)
+    condition = type(value) is dict and value.get("change") == CS180_CHANGE
     budget = type(value) is dict and value.get("change") == "buflo-duration-budget"
     fields = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells",
               "exclusions", "class_transition", "write_fences", "cohorts", "cohort_memberships", "compatibility_declaration"}
     prior = records[-1]
     if (type(value) is not dict or set(value) != fields or value["record_type"] != ADMISSION
             or type(value["sequence"]) is not int or value["sequence"] != len(records)
-            or value["previous_sha256"] != e._sha(prior) or value["change"] != ("buflo-duration-budget" if budget else "runtime-cohort")
+            or value["previous_sha256"] != e._sha(prior) or value["change"] != (CS180_CHANGE if condition else "buflo-duration-budget" if budget else "runtime-cohort")
             or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
             or not _same(value["class_transition"], prior.get("class_transition"))
             or value["class_transition"] is None or not _same(value["exclusions"], prior["exclusions"])):
@@ -2155,12 +2336,18 @@ def _validate_record(parent, records, value, *, contract=None):
                 "verifier": contract, "compatible_treatment": False,
                 "stable_lineage_projection": _projection(value["class_transition"]),
                 "runtime_is_analysis_stratum": True, "rationale": ""}
+    if condition:
+        if affected != {("angkanet26.com", "cs-buflo")}:
+            raise ValueError("CS180 cannot change another logical cell")
+        _cs180_pair(old_cells[("angkanet26.com", "cs-buflo")], new_cells[("angkanet26.com", "cs-buflo")], value["class_transition"])
+        expected = _cs180_declaration_value(parent, prior, declaration["affected"],
+            declaration["retained_accepted_manifest_sha256"], contract)
     if budget:
         if any(key[1] != "buflo" for key in affected):
             raise ValueError("budget amendment cannot change another mode")
         expected = _budget_declaration_value(parent, prior, declaration["affected"],
             declaration["retained_accepted_manifest_sha256"], contract)
-    (_validate_budget_declaration if budget else _validate_declaration)(declaration, expected)
+    (_validate_cs180_declaration if condition else _validate_budget_declaration if budget else _validate_declaration)(declaration, expected)
     for key, entry in new_entries.items():
         old = old_entries[key]
         if key not in affected:
@@ -2168,9 +2355,10 @@ def _validate_record(parent, records, value, *, contract=None):
                 raise ValueError("runtime cohort changed an unaffected cell")
             continue
         expected_fields = {"hostname", "mode", "science", "members", "writer"}
+        if condition or "condition_strata" in old: expected_fields.add("condition_strata")
         if budget or "science_strata" in old: expected_fields.add("science_strata")
         if (set(entry) != expected_fields
-                or not budget and not _same(entry["science"], old["science"])
+                or not (budget or condition) and not _same(entry["science"], old["science"])
                 or len(entry["members"]) != len(old["members"])+1):
             raise ValueError("runtime cohort changes logical science or member ancestry")
         for before, after in zip(old["members"], entry["members"][:-1]):
@@ -2187,6 +2375,15 @@ def _validate_record(parent, records, value, *, contract=None):
                 or not budget and _same(candidate["definition"]["native"], old_cells[key]["definition"]["native"])
                 or candidate["definition"]["ready"] is not True):
             raise ValueError("runtime cohort writer/Native/ready identity differs")
+        if condition:
+            expected_strata = _cs180_strata(old, entry["science"], member["cohort_id"])
+            if not _same(entry["condition_strata"], expected_strata):
+                raise ValueError("CS180 rewrites historical condition science strata")
+        elif "condition_strata" in old:
+            expected_strata = deepcopy(old["condition_strata"])
+            expected_strata["strata"][1]["members"].append(member["cohort_id"])
+            if not _same(entry["condition_strata"], expected_strata):
+                raise ValueError("Native-only cohort rewrites CS condition strata")
         if budget:
             expected_strata = _budget_strata(old, entry["science"], member["cohort_id"])
             if not _same(entry["science_strata"], expected_strata):

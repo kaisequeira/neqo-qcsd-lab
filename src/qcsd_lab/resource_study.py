@@ -207,6 +207,7 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            buflo_chaff_cap_bytes: int | None = None,
            buflo_small_response_aggregate: bool = False,
            buflo_duration_policy: str | None = None,
+           cs_buflo_duration_policy: str | None = None,
            frozen_application_manifest: Path | None = None,
            frozen_application_manifest_sha256: str | None = None) -> dict:
     from .resource_study_native import _buflo_aggregate_option, buflo_aggregate_native_supported
@@ -220,7 +221,14 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
     if buflo_duration_policy is not None:
         from .buflo_duration_budget import preparation_policy
         preparation_policy(buflo_duration_policy)
+    if cs_buflo_duration_policy is not None:
+        from .resource_study_native import cs_duration_policy, CS180_HOST, CS180_NATIVE
+        cs_duration_policy(cs_buflo_duration_policy)
+        if hostnames != [CS180_HOST] or runtime.get("native_commit") != CS180_NATIVE:
+            raise ValueError("CS180 enrollment requires exact single Ang Native137 scope")
     selection_requested = _selection_request(resource_selection, resource_selection_sha256, hostnames)
+    if cs_buflo_duration_policy is not None and not selection_requested:
+        raise ValueError("CS180 requires an explicit original20 resource selection")
     frozen_manifest_requested = frozen_application_manifest is not None or frozen_application_manifest_sha256 is not None
     if frozen_manifest_requested and (frozen_application_manifest is None
             or frozen_application_manifest_sha256 is None or not selection_requested or len(hostnames) != 1):
@@ -239,6 +247,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         backend = PreparationRuntime(root, runtime)
     candidates = candidate_pool(root)
     completed = {r["hostname"] for r in store.enrolled()}
+    if cs_buflo_duration_policy is not None and completed.intersection(hostnames):
+        raise ValueError("CS180 requires fresh enrollment; existing inputs cannot change")
     if buflo_duration_policy is not None and completed.intersection(hostnames):
         raise ValueError("explicit BuFLO duration requires a fresh enrollment; existing policies cannot change")
     if cap is not None and completed.intersection(hostnames):
@@ -271,6 +281,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
             require_storage(root, reserve_bytes=store.plan().get("storage_reserve_bytes", 2 * 1024 ** 3))
             duration_option = ({"buflo_duration_policy": buflo_duration_policy}
                                if buflo_duration_policy is not None else {})
+            if cs_buflo_duration_policy is not None:
+                duration_option["cs_buflo_duration_policy"] = cs_buflo_duration_policy
             if aggregate:
                 duration_option["buflo_small_response_aggregate"] = True
             if frozen_manifest is not None:
@@ -856,14 +868,16 @@ def parser():
     shared.add_argument("--attempts", type=int, required=True)
     shared.add_argument("--chunk", type=int, default=CHUNK)
     shared.add_argument("--pilot", action="store_true")
-    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit"):
+    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit", "cohort-cs180-template", "cohort-cs180-admit"):
         child = actions.add_parser(action, help="explicit compatible-runtime cohort protocol; no imported credit")
         child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
         child.add_argument("--cohort-root", type=Path, required=True, help="fresh separate immutable cohort ledger")
-        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template", "cohort-buflo-cover-template"}:
+        if action == "cohort-init":
+            child.add_argument("--cs-buflo-duration-policy", help="explicit Ang CS180 prospective preparation intent")
+        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template", "cohort-buflo-cover-template", "cohort-cs180-template"}:
             child.add_argument("--affected-hostname", action="append", required=True)
             child.add_argument("--affected-mode", choices=MODES, action="append", required=True)
-        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit"}:
+        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit", "cohort-cs180-admit"}:
             child.add_argument("--declaration", type=Path, required=True)
             child.add_argument("--declaration-sha256", required=True)
     for action in ("prepare", "capture", "status", "verify", "export"):
@@ -887,6 +901,7 @@ def parser():
             child.add_argument("--frozen-application-manifest", type=Path,
                                help="explicit same-host C019 donor Native application manifest; preserve exact bytes")
             child.add_argument("--frozen-application-manifest-sha256")
+            child.add_argument("--cs-buflo-duration-policy", help="explicit Ang Native137 CS180/240 prospective condition")
             child.add_argument("--buflo-duration-policy",
                                help="explicit prospective BuFLO duration policy; default640 and existing enrollments remain unchanged")
             child.add_argument("--buflo-chaff-cap-bytes", type=int,
@@ -920,7 +935,9 @@ def main(argv=None):
     try:
         if args.action == "cohort-init":
             from .resource_study_cohorts import initialize_cohort
-            output = initialize_cohort(root, args.cohort_root.absolute())
+            output = initialize_cohort(root, args.cohort_root.absolute(),
+                **({"cs_buflo_duration_policy":args.cs_buflo_duration_policy}
+                   if args.cs_buflo_duration_policy is not None else {}))
         elif args.action == "cohort-template":
             from .resource_study_cohorts import compatibility_template
             output = compatibility_template(root, args.cohort_root.absolute(),
@@ -949,11 +966,23 @@ def main(argv=None):
         elif args.action == "cohort-buflo-cover-admit":
             from .resource_study_cohorts import create_cover_replacement
             output = create_cover_replacement(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-cs180-template":
+            from .resource_study_cohorts import cs180_template
+            output = cs180_template(root, args.cohort_root.absolute(),
+                affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
+        elif args.action == "cohort-cs180-admit":
+            from .resource_study_cohorts import create_cs180_condition
+            output = create_cs180_condition(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
             from .resource_study_native import _buflo_aggregate_option
             aggregate_requested = _buflo_aggregate_option(args.buflo_small_response_aggregate, args.buflo_chaff_cap_bytes)
             if aggregate_requested and (not args.enroll or args.runtime is None or not args.hostname):
                 raise ValueError("aggregate selection requires live --enroll, --runtime and --hostname")
+            if args.cs_buflo_duration_policy is not None:
+                from .resource_study_native import cs_duration_policy
+                cs_duration_policy(args.cs_buflo_duration_policy)
+                if not args.enroll or args.runtime is None or args.hostname != ["angkanet26.com"]:
+                    raise ValueError("CS180 needs live exact Ang enrollment and runtime")
             if args.buflo_duration_policy is not None:
                 from .buflo_duration_budget import preparation_policy
                 preparation_policy(args.buflo_duration_policy)
@@ -1023,11 +1052,13 @@ def main(argv=None):
                        if frozen_manifest_requested else {}),
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
                     **({"buflo_small_response_aggregate": True} if aggregate_requested else {}),
-                    **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}))
+                    **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}),
+                    **({"cs_buflo_duration_policy": args.cs_buflo_duration_policy} if args.cs_buflo_duration_policy is not None else {}))
                     if selection_requested else enroll(root, runtime, args.hostname,
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
                     **({"buflo_small_response_aggregate": True} if aggregate_requested else {}),
-                    **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {})))
+                    **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}),
+                    **({"cs_buflo_duration_policy": args.cs_buflo_duration_policy} if args.cs_buflo_duration_policy is not None else {})))
             else:
                 output = StudyStore(root).status()
             if args.epoch_of is not None:

@@ -1,5 +1,29 @@
 # QCSD thesis project ledger
 
+## 21 October 2026: prospective Angkanet CS180 condition SDK
+
+The prospective SDK provides an explicit 180-second CS-BuFLO timeout and
+240-second capture condition for `angkanet26.com` on the pinned Native137
+client. It preserves the same ordered twenty URLs while binding the current
+resource bodies as a separate condition stratum. The original 120-second
+condition and its receipts remain intact, with one shared 400-session quota;
+the other 249 class/mode definitions are unchanged.
+
+All 36 focused policy controls passed. The five real public API, history,
+SQLite, quota and pilot controls in
+[the condition integration tests](tests/test_resource_study_ang_cs180_condition_integration.py)
+passed in 63.54 seconds. They use explicit synthetic Native preparation and
+packet-proof leaves, so they establish metadata behavior without scientific
+capture credit. Earlier failures exposed two incomplete test fixtures: unsealed
+preparation files and a missing receipt input-context binding. Both were fixed
+in the fixtures while the production acceptance guards remained unchanged.
+
+The source is prospective. Its new image, installed runtime, public
+preparation, one-cell admission, matching pilot and formal captures have not
+been produced. The separate Native137 engineering case does not supply that
+public authority. Same-root continuation is supported after genuine admission;
+a fresh replacement root after the mixed condition is conservatively refused.
+
 Checkpoint: **9 October 2026, Australia/Sydney (AEDT, UTC+11)**.
 
 ## Current approved study: 100,000 resource-domain sessions
