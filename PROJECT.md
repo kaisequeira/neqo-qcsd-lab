@@ -1,5 +1,18 @@
 # QCSD thesis project ledger
 
+## 22 October 2026: exact known-stopped publisher parent
+
+SDK113 adds the exact Source109 known-stopped004 standard publisher to the R3
+parent registry and records a distinct reader execution profile. It preserves
+the complete SDK112 profile and every older supported profile. The semantic
+functions, Native139 source, runtime images, scientific checks, SQL history,
+quotas and tuple exclusions are unchanged. This source checkpoint claims no
+admission, public pilot or scientific credit.
+
+Four focused metadata API cases passed in 16.48 seconds. They exercise the
+actual parent reader, template, creation and later history paths, with explicit
+synthetic standard, scope, preparation and scientific proof leaves.
+
 ## 22 October 2026: prospective common-resource preparation and scheduling
 
 The explicit Fonts resource-version v2 keeps the same fifty classes and replaces
