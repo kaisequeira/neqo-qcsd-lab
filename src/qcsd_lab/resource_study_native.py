@@ -725,13 +725,22 @@ def probe_urls(hostname: str, urls: Iterable[str], output: str | Path, *,
                max_response_bytes: int = MAX_RESPONSE_BYTES,
                stop_after: int | None = None,
                transport_failure_limit: int = 3,
-               runtime: Mapping[str, Any] | None = None) -> dict[str, Any]:
+               runtime: Mapping[str, Any] | None = None,
+               frozen_application_manifest_raw: bytes | None = None) -> dict[str, Any]:
     """Probe URLs independently in source order; failed attempts remain on disk.
 
     A stop_after cutoff leaves the unattempted tail explicitly unassessed. This
     probe establishes no captured connection or scientific session count.
     """
     pool = _manifest(hostname, urls, require_twenty=False)
+    if frozen_application_manifest_raw is not None:
+        # Probes keep their original independent IDs/length rules, while the
+        # explicit twenty's authenticated application request headers are exact.
+        from .resource_study_selection import validate_frozen_application_manifest_bytes
+        frozen = validate_frozen_application_manifest_bytes(frozen_application_manifest_raw, hostname,
+            [resource["url"] for resource in pool["resources"]])
+        for resource, original in zip(pool["resources"], frozen["resources"]):
+            resource["headers"] = [pair[:] for pair in original["headers"]]
     _positive(timeout, "timeout")
     _positive(max_response_bytes, "max_response_bytes")
     if stop_after is not None:
@@ -862,6 +871,7 @@ def _qualify(prepared: Path, resources: list[dict[str, Any]], responses: list[di
     for candidate in candidates:
         identifier = candidate["resource_id"]
         selected = resources[identifier]
+        qualified_headers = chaff.project_compact_headers(selected)
         directory = _new_directory(root / f"resource-{identifier:02d}")
         try:
             if candidate["bytes"] > MAX_RESPONSE_BYTES:
@@ -881,7 +891,7 @@ def _qualify(prepared: Path, resources: list[dict[str, Any]], responses: list[di
             expected, request_size = chaff._stable_response_identity(runs,
                 application_manifest_sha256=prepared_sha, application_resource_id=0,
                 selected_chaff_resource_id=identifier, qualified_parallel_chaff_streams=5,
-                url=selected["url"], headers=selected["headers"],
+                url=selected["url"], headers=qualified_headers,
                 resource_domain_max_response_bytes=MAX_RESPONSE_BYTES)
             records = [chaff._response_run_record(index, run) for index, run in enumerate(runs)]
             digest = chaff.qualification_digest("qcsd-chaff-response-qualification-v2", records)
@@ -893,13 +903,13 @@ def _qualify(prepared: Path, resources: list[dict[str, Any]], responses: list[di
                 "scientific_credit": False}
             _write(root / "response-qualification.json", evidence)
             core = chaff.derive_chaff_core(application_manifest_sha256=prepared_sha,
-                base_resource=selected, headers=selected["headers"], request_stream_bytes=request_size,
+                base_resource=selected, headers=qualified_headers, request_stream_bytes=request_size,
                 expected_response=expected, response_qualification_sha256=digest,
                 application_resource_id=0, selected_chaff_resource_id=identifier,
                 qualified_parallel_chaff_streams=5, walkie_talkie_required_chaff_streams=20)
             sidecar = {"base_manifest": {"sha256": prepared_sha}, "application_resource_id": 0,
                 "selected_chaff_resource_id": identifier, "resource": {
-                    "headers": selected["headers"], "expected_response": expected,
+                    "headers": qualified_headers, "expected_response": expected,
                     "request_stream_bytes": request_size, "response_qualification_sha256": digest}}
             return {"core": core, "manifest": chaff.derive_response_only_chaff_manifest(sidecar, selected),
                     "evidence": evidence, "error": None}
@@ -993,7 +1003,8 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
             [resource["url"] for resource in pool["resources"]])
     root = _new_directory(output)
     probe = probe_urls(hostname, [resource["url"] for resource in pool["resources"]],
-        root / "probe", client=executable, stop_after=RESOURCES_PER_SESSION, runtime=bound)
+        root / "probe", client=executable, stop_after=RESOURCES_PER_SESSION, runtime=bound,
+        **({"frozen_application_manifest_raw": frozen_raw} if frozen_raw is not None else {}))
     urls20 = probe["selected_urls"]
     if probe["deferred"] is not None:
         _write(root / "preparation-deferred.json", {**probe["deferred"], "role": ROLE,
@@ -1003,6 +1014,10 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     if len(urls20) != RESOURCES_PER_SESSION:
         raise ValueError("candidate pool did not yield20 actual complete nonempty HTTP3 GETs")
     input_manifest = _manifest(hostname, urls20, require_twenty=True)
+    if frozen_value is not None:
+        if urls20 != [resource["url"] for resource in frozen_value["resources"]]:
+            raise ValueError("frozen original twenty did not all complete their exact ordered probes")
+        input_manifest = frozen_value
     actual_dir = _new_directory(root / "preparation-get")
     _, responses = _checked_operation(actual_dir, input_manifest, client=executable,
         runtime=bound, client_sha256=bound["client_sha256"], timeout=120,

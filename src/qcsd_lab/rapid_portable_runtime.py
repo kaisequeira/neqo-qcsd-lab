@@ -329,7 +329,8 @@ PY
     return before + replacement + value[finish:]
 
 
-def dockerfile_bytes(raw: bytes, *, cache_namespace: str, original=None, check_policy="full") -> bytes:
+def dockerfile_bytes(raw: bytes, *, cache_namespace: str, original=None, check_policy="full",
+                     original_check_policy=None) -> bytes:
     """Reuse tracked stages; substitute only authenticated snapshot metadata.
 
     Named contexts keep generated metadata outside the complete tracked source.
@@ -339,8 +340,9 @@ def dockerfile_bytes(raw: bytes, *, cache_namespace: str, original=None, check_p
     value = raw.decode()
     _defaults(value)
     check_policy = _cold_check_policy(check_policy)
-    if original is not None and check_policy != "full":
-        raise ValueError("cold-check policy cannot relabel authenticated client reuse")
+    if (original is not None and check_policy != "full"
+            and (check_policy != "resource-domain-live-pilot-v1" or original_check_policy != check_policy)):
+        raise ValueError("resource-policy client reuse must preserve the verified original policy")
     value = _cold_check_recipe(value, check_policy)
     if SHA.fullmatch(cache_namespace) is None:
         raise ValueError("portable runtime cache namespace is malformed")
@@ -395,6 +397,9 @@ def _original(ref, *, seen=frozenset()):
     if is_portable(value):
         if str(path) in seen:
             raise ValueError("portable runtime reuse ancestry contains a cycle")
+        producer = path.parent / "image-context/source" / SOURCE_PATH
+        if _read(producer) != _read(Path(__file__).resolve()):
+            return _retained_original_verify(path, value, seen=seen | {str(path)})
         return _verify(path.parent, value, seen=seen | {str(path)})
     source = path.parent / "image-context/source"
     runtime = {"runtime_source_root": str(source), "module_root": str(source),
@@ -419,8 +424,8 @@ def _reuse_equal(before, after):
 def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docker, original_canonical=None,
           cold_check_policy="full"):
     cold_check_policy = _cold_check_policy(cold_check_policy)
-    if original_canonical is not None and cold_check_policy != "full":
-        raise ValueError("cold-check policy cannot relabel authenticated client reuse")
+    # The existing full branch is unchanged. The separate same-policy resource
+    # branch is checked only after the complete original canonical is verified.
     checkout = _path(checkout, directory=True)
     if selected_platform not in PLATFORMS:
         raise ValueError("explicit native Linux runtime platform required")
@@ -445,6 +450,8 @@ def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docke
     from .rapid_rolling_readiness import _clean_source
     _clean_source(source)
     original, _ = (None, None) if original_canonical is None else _original(original_canonical)
+    original_policy = (None if original is None else
+        _authenticated_reuse_policy(original_canonical, original, cold_check_policy, native_commit))
     root = Path(root)
     if not root.is_absolute() or ".." in root.parts or root.exists() or any(p.is_symlink() for p in (root, *root.parents)):
         raise ValueError("portable runtime build namespace is create-only and absolute")
@@ -477,7 +484,8 @@ def stage(checkout, lab_commit, native_commit, root, *, selected_platform, docke
     _create(recipe / "verify_installed.py", _read(snapshot / VERIFIER_PATH))
     images = None if original is None else {role: original[role + "_image_digest"] for role in ("collection", "prepare")}
     _create(root / "image-context/Portable.Dockerfile", dockerfile_bytes(_read(snapshot / "Dockerfile"), cache_namespace=_sha(str(root).encode()), original=images,
-                                                                    check_policy=cold_check_policy))
+                                                                    check_policy=cold_check_policy,
+                                                                    original_check_policy=original_policy))
     # Dockerfile-specific ignore takes precedence over the tracked root ignore.
     # The clean archive already excludes Git metadata and untracked caches.
     _create(root / "image-context/Portable.Dockerfile.dockerignore", b"")
@@ -505,8 +513,8 @@ def _inputs(root, *, seen=frozenset()):
     expected_keys = INPUT_KEYS | ({"cold_check_policy"} if isinstance(inputs, dict) and "cold_check_policy" in inputs else set())
     _keys(inputs, expected_keys, "portable runtime inputs")
     check_policy = _cold_check_policy(inputs.get("cold_check_policy", "full"))
-    if inputs["mode"] == "authenticated-client-reuse" and check_policy != "full":
-        raise ValueError("cold-check policy cannot relabel authenticated client reuse")
+    # A resource-policy reuse is reauthenticated below against its full original
+    # canonical, actual build-input policy and protected complete inventories.
     _exact({key: inputs[key] for key in ("schema_version", "artifact_type", "contract", *ZERO)},
            {"schema_version": 1, "artifact_type": INPUT_TYPE, "contract": CONTRACT, **ZERO}, "portable input identity")
     if inputs["platform"] not in PLATFORMS or re.fullmatch(r"[0-9]+:[0-9]+", inputs["actor"]) is None:
@@ -541,9 +549,11 @@ def _inputs(root, *, seen=frozenset()):
             raise ValueError("portable runtime producer source changed")
     if _read(snapshot / SOURCE_PATH) != _read(Path(__file__).resolve()):
         raise ValueError("portable runtime executing consumer differs from its declared finite contract")
-    original = None
+    original = None; original_policy = None
     if inputs["mode"] == "authenticated-client-reuse":
         original, _ = _original(inputs["original_canonical"], seen=seen)
+        original_policy = _authenticated_reuse_policy(inputs["original_canonical"], original,
+            check_policy, inputs["source"]["neqo_commit"])
         old_inventory = _load(_open(inputs["original_source_inventory"]))
         if (inputs["original_source_inventory"] != reference(_open(inputs["original_canonical"]).parent / "source-inventory.json")
             or original["source"]["neqo_commit"] != inputs["source"]["neqo_commit"]):
@@ -559,7 +569,7 @@ def _inputs(root, *, seen=frozenset()):
         if _sha(_read(root / relative)) != digest:
             raise ValueError("portable runtime recipe bytes changed")
     if (_read(root / "image-context/Portable.Dockerfile") != dockerfile_bytes(_read(snapshot / "Dockerfile"), cache_namespace=_sha(str(root).encode()), original=images,
-                                                                         check_policy=check_policy)
+                                                                         check_policy=check_policy, original_check_policy=original_policy)
         or _read(root / "image-context/Portable.Dockerfile.dockerignore") != b""
         or _load(root / "image-context/recipe/source-metadata.json") != inputs["source"]
         or _read(root / "image-context/recipe/verify_installed.py") != _read(snapshot / VERIFIER_PATH)):
@@ -800,7 +810,11 @@ def reopen_runtime(ref, runtime, *, seen=frozenset()):
     path = _open(ref)
     if str(path) in seen:
         raise ValueError("portable runtime reuse ancestry contains a cycle")
-    value, sources = _verify(path.parent, _load(path), seen=seen | {str(path)})
+    producer = path.parent / "image-context/source" / SOURCE_PATH
+    if _read(producer) != _read(Path(__file__).resolve()):
+        value, sources = _retained_original_verify(path, _load(path), seen=seen | {str(path)})
+    else:
+        value, sources = _verify(path.parent, _load(path), seen=seen | {str(path)})
     if (runtime["collection_image_digest"] != value["collection_image_digest"]
         or str(_path(runtime["source_manifest"])) != value["source_manifest"]
         or str(_path(runtime["client_binary"])) != value["client_binary"]
@@ -891,3 +905,47 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(json.dumps({"operation": args.action, "status": "refused", "error_type": type(error).__name__, "error_message": str(error), **ZERO}, sort_keys=True))
         return 1
+
+
+# A retained producer is never relabelled as the executing Source112 module.
+# Its actual frozen snapshot path executes its own unchanged full verifier,
+# including the original source-equality guard, input/operation/installed proof.
+RETAINED_PORTABLE_PRODUCER_SHA256 = "55a3836ef6010c19589945706ec5936d53b3c8c26953f96a8b9607de104c07df"
+RETAINED_PORTABLE_PRODUCER_BYTES = 55191
+RESOURCE_REUSE_NATIVE139 = "6e50096dbce397e3f4e7be88de17d75986da5dff"
+
+
+def _retained_original_verify(path, value, *, seen):
+    from types import ModuleType
+    producer = path.parent / "image-context/source" / SOURCE_PATH
+    raw = _read(producer)
+    if len(raw) != RETAINED_PORTABLE_PRODUCER_BYTES or _sha(raw) != RETAINED_PORTABLE_PRODUCER_SHA256:
+        raise ValueError("portable reuse has an unsupported retained producer source")
+    module = ModuleType("qcsd_lab._retained_portable_source55a3836e")
+    module.__file__ = str(producer); module.__package__ = __package__
+    exec(compile(raw, str(producer), "exec"), module.__dict__)
+    # This runs the full original verifier at its actual source path. No source
+    # equality bypass, invented original state or partial-projection verifier.
+    return module._verify(path.parent, value, seen=seen)
+
+
+def _authenticated_reuse_policy(original_ref, original, selected_policy, native_commit):
+    selected_policy = _cold_check_policy(selected_policy)
+    if selected_policy == "full":
+        return None  # Preserve the historical full reuse recipe byte-for-byte.
+    path = _open(original_ref)
+    raw = _read(path.parent / "build-inputs.json")
+    if _sha(raw) != original["build_inputs_sha256"]:
+        raise ValueError("portable reuse original build-input policy bytes changed")
+    before = json.loads(raw)
+    if (selected_policy != "resource-domain-live-pilot-v1"
+            or before.get("cold_check_policy", "full") != selected_policy
+            or native_commit != RESOURCE_REUSE_NATIVE139
+            or original["source"]["neqo_commit"] != native_commit
+            or before["source"] != original["source"]):
+        raise ValueError("resource-policy reuse requires the same verified Native139 policy and source")
+    # stage/_inputs retain _reuse_equal for every Native/config/docker/dependency
+    # byte. execute/_verify still bind both actual base images, layers, installed
+    # new Python payload and the byte-identical original executable. No site or
+    # raw qualification credit is issued by this source-only policy branch.
+    return selected_policy

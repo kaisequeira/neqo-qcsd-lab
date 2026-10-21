@@ -432,22 +432,27 @@ def _capture_catalog_owned(parent,catalog,*,workers,budget,stop,backend,
 
     with _capture_executor(backend,workers)as executor:
         check_catalog_head(parent,catalog,roots[0])
-        futures={};available=list(range(workers));dispatches={}
+        futures={};available=list(range(workers));dispatches={};reschedule=True
         while futures or(available and not stop.is_set()):
-            eligible=[cell for cell in cell_order if cell not in paused and cell[0]not in busy]
-            counts=scheduling_counts(eligible)if available and not stop.is_set()and attempts<budget and eligible else{}
-            while available and not stop.is_set()and attempts<budget:
-                # Pure choice sees the frozen lane map; no incompatible cell
-                # ever obtains a durable reservation on the wrong lane.
-                chosen=choose_assignment(available,cell_order,{**jobs,"_lane_keys":lanes},counts,paused,busy,dispatches)
-                if chosen is None:break
-                cell,worker=chosen
-                allowance=min(chunk_sessions,400-counts[cell],budget-attempts)
-                available.remove(worker);attempts+=allowance;busy.add(cell[0])
-                dispatches[cell]=dispatches.get(cell,0)+1
-                futures[executor.submit(chunk,worker,cell,allowance,counts[cell],getattr(backend,"_capture_authority",None))]=worker
+            if reschedule:
+                eligible=[cell for cell in cell_order if cell not in paused and cell[0]not in busy]
+                counts=scheduling_counts(eligible)if available and not stop.is_set()and attempts<budget and eligible else{}
+                while available and not stop.is_set()and attempts<budget:
+                    # Pure choice sees the frozen lane map; no incompatible cell
+                    # ever obtains a durable reservation on the wrong lane.
+                    chosen=choose_assignment(available,cell_order,{**jobs,"_lane_keys":lanes},counts,paused,busy,dispatches)
+                    if chosen is None:break
+                    cell,worker=chosen
+                    allowance=min(chunk_sessions,400-counts[cell],budget-attempts)
+                    available.remove(worker);attempts+=allowance;busy.add(cell[0])
+                    dispatches[cell]=dispatches.get(cell,0)+1
+                    futures[executor.submit(chunk,worker,cell,allowance,counts[cell],getattr(backend,"_capture_authority",None))]=worker
             if not futures:break
             done,_=wait(futures,timeout=1,return_when=FIRST_COMPLETED)
+            # A timeout changes no lane/busy/pause/budget state. Keep waiting;
+            # fresh scheduling counts run only at initial dispatch or after an
+            # actual chunk completion. Reservation/commit checks stay fresh.
+            reschedule=bool(done)
             for future in done:
                 worker=futures.pop(future);available.append(worker);value=future.result();busy.remove(value["cell"][0])
                 if value["paused"]:paused.add(value["cell"])

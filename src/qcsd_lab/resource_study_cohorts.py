@@ -2262,6 +2262,8 @@ def _validate_record(parent, records, value, *, contract=None):
     if type(value) is dict and value.get("change") == "scientific-refusal-retirement-CS211-three-v1":
         from .resource_study_semantic_refusals import validate_record
         return validate_record(parent, records, value, contract)
+    if type(value) is dict and value.get("change") == "Fonts-all5-aggregate8-to-ordinary5-resource-version-retirement-v2":
+        return _v2_validate_resource_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == "resource-version-retirement":
         return _validate_resource_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == COVER_CHANGE:
@@ -2900,7 +2902,8 @@ def _resource_material(parent, prior, input_ref, contract, *, accepted_rows=None
         raise ValueError("resource retirement local members differ from the issued replacements")
     rows = _manifest(prior["cohorts"]) if accepted_rows is None else accepted_rows
     expected = versions.replacement_template(prior, rows, candidates, application,
-        hostname=plan["hostname"], verifier=contract, missing_mode_templates=plan["mode_templates"])
+        hostname=plan["hostname"], verifier=contract, missing_mode_templates=plan["mode_templates"],
+        preparation_policy=plan.get("preparation_policy"))
     return plan, application, candidates, rows, stores, expected
 
 
@@ -2976,7 +2979,7 @@ def _resource_entry(before, candidate, declaration_ref, contract, transition):
     return value
 
 
-def create_resource_version(parent, declaration_path, declaration_sha256):
+def _v1_create_resource_version(parent, declaration_path, declaration_sha256):
     """Atomic same-host all5 target retirement under the original ownership gates."""
     from . import resource_study_resource_version_inputs as inputs
     from . import resource_study_resource_versions as versions
@@ -3154,3 +3157,207 @@ def semantic_refusal_template(parent, cohort_root, *, evidence_path, evidence_sh
 def create_semantic_refusal(parent, cohort_root, declaration_path, declaration_sha256):
     from .resource_study_semantic_refusals import create
     return create(parent, cohort_root, declaration_path, declaration_sha256)
+
+
+RESOURCE_CHANGE_V2 = "Fonts-all5-aggregate8-to-ordinary5-resource-version-retirement-v2"
+
+
+def _v2_resource_entry(before, candidate, declaration_ref, contract, transition, preparation_policy):
+    from . import resource_study_resource_versions as versions
+    member = _member(candidate, contract); science = _science(candidate, transition)
+    strata = []; members = []
+    if before is not None:
+        if "resource_versions" in before or "science_strata" in before:
+            raise ValueError("resource retirement cannot silently repeat a version or combine a budget change")
+        members = deepcopy(before["members"])
+        strata.append({"version": 0, "science": deepcopy(before["science"]),
+                       "members": [old["cohort_id"] for old in members], "target_eligible": False})
+    members.append(member)
+    strata.append({"version": 1, "science": science, "members": [member["cohort_id"]], "target_eligible": True})
+    value = {"hostname": candidate["hostname"], "mode": candidate["mode"], "science": science,
+             "members": members, "writer": member["cohort_id"],
+             "resource_versions": {"record_type": versions.STRATA_V2, "schema_version": 2, "policy": versions.POLICY_V2,
+                                   "preparation_policy": deepcopy(preparation_policy),
+                                   "declaration": deepcopy(declaration_ref), "strata": strata}}
+    versions.member_sciences(value)
+    return value
+
+def _v2_create_resource_version(parent, declaration_path, declaration_sha256):
+    """Atomic same-host all5 target retirement under the original ownership gates."""
+    from . import resource_study_resource_version_inputs as inputs
+    from . import resource_study_resource_versions as versions
+    from .resource_study_lineage import prepare_fences, publication_scope, no_retired_history
+    e = _epochs(); parent = StudyStore(Path(parent).absolute())
+    path = e._regular(Path(declaration_path).absolute()); declaration = e._read(path)
+    if sha256_file(path) != declaration_sha256 or e._sha(declaration) != declaration_sha256:
+        raise ValueError("resource retirement declaration requires exact canonical immutable bytes")
+    input_ref = declaration.get("resource_version_input")
+    if type(input_ref) is not dict or set(input_ref) != {"path", "sha256"}:
+        raise ValueError("resource retirement declaration lacks its exact prepared input plan")
+    core = {name: value for name, value in declaration.items() if name != "resource_version_input"}
+    with e.docker_lock(), e._lock(parent.root):
+        records = e._records(parent); prior = records[-1]; contract = verifier_contract()
+        plan, application, candidates, rows, stores, _ = _resource_material(parent, prior, input_ref, contract)
+        versions.validate_declaration(core, prior, rows, candidates, application,
+            hostname=plan["hostname"], verifier=contract, missing_mode_templates=plan["mode_templates"],
+            preparation_policy=plan["preparation_policy"])
+        previous_roots = {cell["root"] for record in records for cell in record["cells"]}
+        if set(stores) & previous_roots:
+            raise ValueError("resource retirement requires genuinely new independent roots")
+        e._idle([StudyStore(root) for root in sorted(previous_roots | set(stores))])
+        for store in stores.values():
+            inputs.require_current_context(store, parent, prior, input_ref)
+            no_retired_history(store)
+            if (store.root / MARKER).exists() or (store.root / MARKER).is_symlink():
+                raise ValueError("resource version has an existing membership marker")
+            with store._transaction() as connection:
+                if connection.execute("SELECT 1 FROM attempts").fetchone() or connection.execute("SELECT 1 FROM accepted").fetchone():
+                    raise ValueError("resource retirement cannot import prior attempts, pilots or accepted rows")
+            e._verify_preparation(store, plan["hostname"])
+        declaration_ref = {"path": str(path), "sha256": declaration_sha256}
+        registry = deepcopy(prior["cohorts"]); entries = {e._key(entry): entry for entry in registry}
+        cells = {e._key(cell): deepcopy(cell) for cell in prior["cells"]}
+        for candidate in candidates:
+            key = e._key(candidate); before = entries.get(key)
+            if before is not None: _freeze_resource_writer(parent, before)
+            replacement = _v2_resource_entry(before, candidate, declaration_ref, contract, prior["class_transition"],
+                plan["preparation_policy"])
+            if before is None: registry.append(replacement)
+            else: registry[registry.index(before)] = replacement
+            entries[key] = replacement; cells[key] = candidate
+        exclusions = deepcopy(prior["exclusions"])
+        for exclusion_ref, value in _resource_exclusions(prior, core):
+            destination = parent.root / exclusion_ref["path"]
+            if destination.exists():
+                if not _same(e._read(destination), value): raise ValueError("resource retirement exclusion bytes differ")
+            else: _create(destination, canonical_json(value))
+            exclusions.append(exclusion_ref)
+        snapshot = {"record_type": RESOURCE_PRIOR, "predecessor_admission_sha256": e._sha(prior), "rows": rows}
+        snapshot_relative = "resource-versions/" + e._sha(snapshot) + ".json"
+        _create(parent.root / snapshot_relative, canonical_json(snapshot))
+        retired = core["retirement"]; retired_relative = "resource-versions/" + e._sha(retired) + ".json"
+        _create(parent.root / retired_relative, canonical_json(retired))
+        for store in stores.values(): e._bind(store, parent)
+        fences = prepare_fences(parent, records, cells, prior["class_transition"])
+        markers = dict(prior.get("cohort_memberships", {}))
+        for root in sorted(stores):
+            store = stores[root]; marker = _marker(store, parent)
+            _create(store.root / MARKER, canonical_json(marker)); markers[root] = e._sha(marker)
+        value = {"record_type": ADMISSION, "sequence": len(records), "previous_sha256": e._sha(prior),
+            "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": RESOURCE_CHANGE_V2,
+            "affected": [[plan["hostname"], mode] for mode in versions.MODE_ORDER],
+            "cells": [cells[key] for key in sorted(cells)], "exclusions": exclusions,
+            "class_transition": deepcopy(prior["class_transition"]), "write_fences": fences,
+            "cohorts": sorted(registry, key=lambda entry: (entry["hostname"], entry["mode"])),
+            "cohort_memberships": markers, "compatibility_declaration": declaration_ref,
+            "resource_version_input": input_ref,
+            "prior_accepted_snapshot": {"path": snapshot_relative, "sha256": e._sha(snapshot)},
+            "resource_retirement": {"path": retired_relative, "sha256": e._sha(retired)}}
+        _validate_record(parent, records, value, contract=contract)
+        e._idle([StudyStore(root) for root in sorted(previous_roots | set(stores))])
+        if sha256_file(path) != declaration_sha256 or not _same(contract, verifier_contract()):
+            raise ValueError("resource retirement source or declaration changed before publication")
+        _create(parent.root / "epoch-admissions" / f"{len(records):06d}.json", canonical_json(value))
+        with publication_scope(parent, records, value), parent._transaction() as connection:
+            old = canonical_json({"sequence": len(records)-1, "sha256": e._sha(prior)}).decode()
+            actual = connection.execute("SELECT value FROM meta WHERE key='epoch_head'").fetchone()
+            if actual is None or actual[0] != old: raise ValueError("resource retirement current parent changed")
+            connection.execute("UPDATE meta SET value=? WHERE key='epoch_head'",
+                (canonical_json({"sequence": len(records), "sha256": e._sha(value)}).decode(),))
+        return value
+
+def _v2_validate_resource_record(parent, records, value, contract):
+    from . import resource_study_resource_versions as versions
+    e = _epochs(); prior = records[-1]
+    fields = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells",
+              "exclusions", "class_transition", "write_fences", "cohorts", "cohort_memberships", "compatibility_declaration",
+              "resource_version_input", "prior_accepted_snapshot", "resource_retirement"}
+    if (type(value) is not dict or set(value) != fields or value["record_type"] != ADMISSION
+            or value["change"] != RESOURCE_CHANGE_V2 or type(value["sequence"]) is not int or value["sequence"] != len(records)
+            or value["previous_sha256"] != e._sha(prior)
+            or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
+            or value["parent_study_sha256"] != prior["parent_study_sha256"]
+            or not _same(value["class_transition"], prior["class_transition"])):
+        raise ValueError("resource retirement parent/class-lineage envelope differs")
+    ref = value["compatibility_declaration"]; declaration = e._read(ref["path"])
+    if sha256_file(ref["path"]) != ref["sha256"] or e._sha(declaration) != ref["sha256"]:
+        raise ValueError("resource retirement exact declaration bytes differ")
+    if declaration.get("resource_version_input") != value["resource_version_input"]:
+        raise ValueError("resource retirement input plan reference differs")
+    core = {name: item for name, item in declaration.items() if name != "resource_version_input"}
+    snapshot_ref = value["prior_accepted_snapshot"]
+    if set(snapshot_ref) != {"path", "sha256"} or not snapshot_ref["path"].startswith("resource-versions/"):
+        raise ValueError("resource retirement prior accepted manifest reference differs")
+    snapshot = e._read(parent._relative(snapshot_ref["path"]))
+    if (set(snapshot) != {"record_type", "predecessor_admission_sha256", "rows"}
+            or snapshot["record_type"] != RESOURCE_PRIOR or snapshot["predecessor_admission_sha256"] != e._sha(prior)
+            or e._sha(snapshot) != snapshot_ref["sha256"]
+            or sha256_file(parent._relative(snapshot_ref["path"])) != snapshot_ref["sha256"]):
+        raise ValueError("resource retirement prior accepted snapshot changed")
+    affected = core.get("affected")
+    if type(affected) is not list or any(type(row) is not dict or "replacement" not in row for row in affected):
+        raise ValueError("resource retirement declared replacement inventory differs")
+    plan, application, candidates, rows, _, _ = _resource_material(parent, prior, value["resource_version_input"],
+        contract, accepted_rows=snapshot["rows"], replacements=[row["replacement"] for row in affected])
+    versions.validate_declaration(core, prior, rows, candidates, application,
+        hostname=plan["hostname"], verifier=contract, missing_mode_templates=plan["mode_templates"],
+            preparation_policy=plan["preparation_policy"])
+    retired_ref = value["resource_retirement"]
+    if set(retired_ref) != {"path", "sha256"} or not retired_ref["path"].startswith("resource-versions/"):
+        raise ValueError("resource retirement historical manifest reference differs")
+    retired = e._read(parent._relative(retired_ref["path"]))
+    if (e._sha(retired) != retired_ref["sha256"]
+            or sha256_file(parent._relative(retired_ref["path"])) != retired_ref["sha256"]
+            or not _same(retired, core["retirement"])):
+        raise ValueError("resource retirement must preserve the exact target-excluded valid historical rows")
+    added_exclusions = _resource_exclusions(prior, core)
+    for exclusion_ref, expected in added_exclusions:
+        actual = e._read(parent._relative(exclusion_ref["path"]))
+        if not _same(actual, expected) or e._sha(actual) != exclusion_ref["sha256"]:
+            raise ValueError("resource retirement ancestor tuple exclusion differs")
+    if value["exclusions"] != [*prior["exclusions"], *[ref for ref, _ in added_exclusions]]:
+        raise ValueError("resource retirement loses old exclusions or adds undeclared tuples")
+    selected = {(plan["hostname"], mode) for mode in MODES}
+    old_entries = {e._key(entry): entry for entry in prior["cohorts"]}
+    entries = {e._key(entry): entry for entry in value["cohorts"]}
+    old_cells = {e._key(cell): cell for cell in prior["cells"]}; cells = {e._key(cell): cell for cell in value["cells"]}
+    if (len(entries) != len(value["cohorts"]) or set(entries) != set(old_entries) | selected
+            or len(cells) != len(value["cells"]) or set(cells) != set(old_cells) | selected
+            or value["affected"] != [list(key) for key in sorted(selected)]):
+        raise ValueError("resource retirement must change exactly one hostname and all five modes")
+    candidate_map = {e._key(cell): cell for cell in candidates}
+    previous_roots = {cell["root"] for record in records for cell in record["cells"]}
+    if any(cell["root"] in previous_roots for cell in candidates):
+        raise ValueError("resource retirement reuses an old ledger root")
+    for key, entry in entries.items():
+        if key not in selected:
+            if not _same(entry, old_entries[key]) or not _same(cells[key], old_cells[key]):
+                raise ValueError("resource retirement changes one of the unaffected49 classes")
+            continue
+        before = deepcopy(old_entries.get(key))
+        if before is not None:
+            old_writer = _writer(before)
+            actual_old = next((member for member in entry["members"]
+                               if member["cohort_id"] == old_writer["cohort_id"]), None)
+            if actual_old is None or actual_old["frozen_accepted"] is None:
+                raise ValueError("resource retirement fails to freeze the old writer")
+            old_writer["frozen_accepted"] = deepcopy(actual_old["frozen_accepted"])
+            frozen = _frozen_value(parent, actual_old)
+            expected_rows = [row for row in rows if row["root"] == old_writer["cell"]["root"]
+                             and (row["hostname"], row["mode"]) == key]
+            if not _same(frozen["rows"], expected_rows):
+                raise ValueError("resource retirement old writer receipt set differs from actual prior inventory")
+        expected = _v2_resource_entry(before, candidate_map[key], ref, contract, prior["class_transition"],
+            plan["preparation_policy"])
+        if not _same(entry, expected) or not _same(cells[key], candidate_map[key]):
+            raise ValueError("resource retirement rewrites old members or invents new source/science/credit carry")
+    _validate_members(parent, value, cells, contract)
+
+def create_resource_version(parent, declaration_path, declaration_sha256):
+    # Declaration dispatch precedes the unchanged original ownership gates.
+    from . import resource_study_resource_versions as versions
+    e = _epochs(); path = e._regular(Path(declaration_path).absolute())
+    value = e._read(path)
+    if type(value) is dict and value.get("record_type") == versions.DECLARATION_V2:
+        return _v2_create_resource_version(parent, declaration_path, declaration_sha256)
+    return _v1_create_resource_version(parent, declaration_path, declaration_sha256)

@@ -1,5 +1,34 @@
 # QCSD thesis project ledger
 
+## 22 October 2026: prospective common-resource preparation and scheduling
+
+The explicit Fonts resource-version v2 keeps the same fifty classes and replaces
+only Fonts' resources across all five modes. It requires twenty complete bodies
+of at least 8,192 bytes, preserves the existing Native130 runtime and mode
+settings, and explicitly records the change from eight-stream aggregate BuFLO
+preparation to ordinary five-stream preparation. Admission retains historical
+rows and requires exact retirement accounting and fresh cell pilots. Enrollment
+validation chooses its validator from the authenticated input context.
+
+The exact original Euronews application manifest retains its four headers during
+both individual probes and the full preparation GET. Native chaff qualification
+uses its existing compact three-header projection. Updated Python images are
+required before this preparation behavior can be used live.
+
+The public runtime producer can reuse the built Native139 client under the same
+resource-domain live-pilot policy after authenticating its retained original
+producer and complete runtime. Protected Native, dependency and build inputs must
+remain identical. Catalog capture retains its one-second stop polling and makes
+a fresh scheduling count after completed work, avoiding repeated recounts during
+empty waits. Reservation, quota, request and raw-traffic checks are unchanged.
+
+Fourteen distinct focused API cases passed across targeted runs; the final five
+passed in 17.94 seconds. They include real SQLite, preparation, receipt and
+executor paths with disclosed synthetic network, Native and raw-proof leaves.
+The package retains 185 Python files and a 177-file reader contract, including
+the exact historical SDK111 profile. No runtime build, live preparation,
+admission, pilot or scientific credit is claimed by this source checkpoint.
+
 ## 21 October 2026: exact scientific refusal accounting
 
 The prospective SDK records an append-only retirement of the exact three

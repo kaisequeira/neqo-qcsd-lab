@@ -273,6 +273,12 @@ def frozen_application_manifest_declaration(digest):
             "scientific_credit": False}
 
 
+EURONEWS_ORIGINAL20_FOUR_HEADER_MANIFEST = "b952aa649b456eeb192888ae3ffb329902a4467499661f6dbdc292b8ee3ee406"
+EURONEWS_ORIGINAL20_HOST = "www.euronews.com"
+EURONEWS_ORIGINAL20_REQUEST_HEADERS = [["accept", "*/*"], ["accept-encoding", "identity"],
+    ["accept-language", "en-US,en;q=0.9"], ["user-agent", "qcsd-resource-study/1.0"]]
+
+
 def validate_frozen_application_manifest_bytes(raw, hostname, urls):
     """Validate the existing Native resource schema; never regenerate its bytes."""
     from .resource_study_native import REQUEST_HEADERS
@@ -286,7 +292,10 @@ def validate_frozen_application_manifest_bytes(raw, hostname, urls):
                    or row.get("content_length") != row["data_length"] for row in rows)):
         raise ValueError("frozen application manifest differs from the exact twenty Native resources")
     expected = inputs.native_manifest(hostname, urls, {row["url"]: row["data_length"] for row in rows})
-    for row in expected["resources"]: row["headers"] = [pair[:] for pair in REQUEST_HEADERS]
+    headers = (EURONEWS_ORIGINAL20_REQUEST_HEADERS
+        if hostname == EURONEWS_ORIGINAL20_HOST and _sha(raw) == EURONEWS_ORIGINAL20_FOUR_HEADER_MANIFEST
+        else REQUEST_HEADERS)
+    for row in expected["resources"]: row["headers"] = [pair[:] for pair in headers]
     expected["resources"][0]["type"] = "Document"
     if inputs.canonical_json(value) != inputs.canonical_json(expected):
         raise ValueError("frozen application manifest changed its original Native request fields")

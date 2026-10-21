@@ -50,7 +50,7 @@ def _path(value):
     return Path(value)
 
 
-def validate_input_plan(value, prior, application_manifest_raw, *, root=None):
+def _v1_validate_input_plan(value, prior, application_manifest_raw, *, root=None):
     """Authenticate new input intent against the complete original cohort head.
 
     Readiness is deliberately not required here. It remains an independent
@@ -156,7 +156,7 @@ def _baseline_enrollment(raw, cell):
     return value
 
 
-def initialize_resource_cohort(parent, root, input_path, input_sha256):
+def _v1_initialize_resource_cohort(parent, root, input_path, input_sha256):
     """Create fresh original cohort inputs plus a distinct unissued v1 context."""
     from . import resource_study_cohorts as cohorts
     from .resource_study_store import StudyStore, _create
@@ -202,7 +202,7 @@ def initialize_resource_cohort(parent, root, input_path, input_sha256):
         "prepared": False, "admitted": False, "scientific_credit": False}
 
 
-def read_context(root, plan=None):
+def _v1_read_context(root, plan=None):
     """Pure frozen context replay; never read a ledger or the original host paths."""
     from . import resource_study_cohorts as cohorts
     from .resource_study_selection import _relative, _json
@@ -279,7 +279,7 @@ def _runtime(context, root, runtime):
     return modes
 
 
-def preparation_options(context, root):
+def _v1_preparation_options(context, root):
     """Preserve only the original mapped BF treatment's explicit options.
 
     Capped qualification, when genuinely required by that old donor, still runs
@@ -311,7 +311,7 @@ def preparation_options(context, root):
     return options
 
 
-def bind_preparation(store, enrollment, job_path):
+def _v1_bind_preparation(store, enrollment, job_path):
     from .resource_study_cohorts import INPUT_CONTEXT as ORIGINAL_CONTEXT
     from .resource_study_selection import _relative
     _need(AUTHORITY_KEY not in enrollment and "runtime_cohort_input_authority" not in enrollment
@@ -333,7 +333,7 @@ def bind_preparation(store, enrollment, job_path):
     return value
 
 
-def validate_enrollment(store, enrollment, *, plan):
+def _v1_validate_enrollment(store, enrollment, *, plan):
     """Pure input/job/Native workload proof; original GET/raw validators follow."""
     from .resource_study_cohorts import INPUT_CONTEXT as ORIGINAL_CONTEXT
     from .resource_study_lineage import bind_enrollment
@@ -483,3 +483,358 @@ def enroll(root, runtime, hostnames, input_path, input_sha256, *, backend=None):
             "reason": str(error), "exception": type(error).__name__, "scientific_credit": False})
         result = {"hostname": host, "status": "not-enrolled", "reason": str(error)}
     return {"enrollment": [result], "progress": store.status()}
+
+
+INPUT_TYPE_V2 = "qcsd-resource-domain-Fonts-ordinary-resource-version-preparation-input-v2"
+CONTEXT_TYPE_V2 = "qcsd-resource-domain-Fonts-ordinary-resource-version-input-context-v2"
+BINDING_TYPE_V2 = "qcsd-resource-domain-Fonts-ordinary-resource-version-preparation-binding-v2"
+
+
+def _v2_validate_input_plan(value, prior, application_manifest_raw, *, root=None):
+    """Authenticate new input intent against the complete original cohort head.
+
+    Readiness is deliberately not required here. It remains an independent
+    per-mode admission/capture predicate. An absent mode needs an exact current
+    global donor, never an invented historical same-host member.
+    """
+    from . import resource_study_resource_versions as versions
+    from .resource_study_selection import validate_frozen_application_manifest_bytes, _json
+    from .resource_study_store import _digest, _hostname
+    _need(type(value) is dict and set(value) == {
+        "record_type", "schema_version", "hostname", "application_manifest",
+        "mode_roots", "mode_templates", "scientific_credit", "preparation_policy"}
+        and value["record_type"] == INPUT_TYPE_V2
+        and type(value["schema_version"]) is int and value["schema_version"] == 2
+        and value["scientific_credit"] is False, "resource-version preparation input schema differs")
+    versions.checked_fonts_preparation_policy(value["preparation_policy"], prior=prior)
+    host = value["hostname"]
+    _need(host == versions.FONTS_HOST and value["mode_templates"] == [],
+          "Fonts v2 requires its one exact all-five current class")
+    _need(_hostname(host) == host, "resource-version input hostname is not canonical")
+    cells, old_roots = versions._prior(prior)
+    siblings = [cell for key, cell in cells.items() if key[0] == host]
+    _need(siblings and host in prior["class_transition"]["class_selection"]["selected_hostnames"],
+          "resource-version input must retain an admitted selected hostname")
+    ref = value["application_manifest"]
+    _need(type(ref) is dict and set(ref) == {"path", "sha256"},
+          "resource-version input needs the exact application manifest reference")
+    _path(ref["path"]); _digest(ref["sha256"])
+    _need(type(application_manifest_raw) is bytes and _sha(application_manifest_raw) == ref["sha256"],
+          "resource-version application manifest SHA differs")
+    manifest = _json(application_manifest_raw)
+    rows = manifest.get("resources")
+    _need(type(rows) is list and all(type(row) is dict and "url" in row for row in rows),
+          "resource-version application resources differ")
+    urls = [row["url"] for row in rows]
+    validate_frozen_application_manifest_bytes(application_manifest_raw, host, urls)
+    _need(all(type(row.get("data_length")) is int and row["data_length"] >= 8192
+              for row in rows), "Fonts v2 common20 must retain actual all20 bodies at least8192 bytes")
+    old = siblings[0]["definition"]
+    _need(all(cell["definition"]["urls"] == old["urls"]
+              and cell["definition"]["workload_sha256"] == old["workload_sha256"] for cell in siblings),
+          "resource-version old modes already have mixed workloads")
+    _need((urls, ref["sha256"]) != (old["urls"], old["workload_sha256"]),
+          "resource-version preparation must declare a changed workload")
+    mappings = value["mode_roots"]
+    _need(type(mappings) is list and len(mappings) == 5
+          and all(type(row) is dict and set(row) == {"mode", "root"} for row in mappings)
+          and [row["mode"] for row in mappings] == sorted(MODES),
+          "resource-version input must map all five modes exactly once")
+    roots = {_path(row["root"]) for row in mappings}
+    _need(all(str(path) not in old_roots
+              and all(Path(old_root) not in path.parents and path not in Path(old_root).parents
+                      for old_root in old_roots) for path in roots),
+          "resource-version preparation roots must be fresh and separate from all old members")
+    if root is not None:
+        _need(Path(root).absolute() in roots, "preparation root is outside the explicit all-five plan")
+    templates = value["mode_templates"]
+    _need(type(templates) is list and all(type(cell) is dict for cell in templates),
+          "resource-version absent-mode templates must be explicit")
+    missing = {mode for mode in MODES if (host, mode) not in cells}
+    _need(len(templates) == len(missing)
+          and {cell.get("mode") for cell in templates} == missing,
+          "resource-version input needs templates only for absent modes")
+    donors = {}
+    for cell in templates:
+        versions._cell(cell)
+        _need(cells.get((cell["hostname"], cell["mode"])) == cell,
+              "resource-version absent-mode template is not an actual current global cell")
+        donors[cell["mode"]] = cell
+    baselines = {mode: cells.get((host, mode), donors.get(mode)) for mode in MODES}
+    for path in roots:
+        selected = [baselines[row["mode"]]["definition"]["native"]
+                    for row in mappings if row["root"] == str(path)]
+        _need(all(native == selected[0] for native in selected),
+              "one preparation root cannot change or combine distinct old Native strata")
+    return {"input": deepcopy(value), "urls": urls, "baselines": deepcopy(baselines)}
+
+def _v2_initialize_resource_cohort(parent, root, input_path, input_sha256):
+    """Create fresh original cohort inputs plus a distinct unissued v1 context."""
+    from . import resource_study_cohorts as cohorts
+    from .resource_study_store import StudyStore, _create
+    from .resource_study_selection import _relative
+    e = cohorts._epochs()
+    parent, root = StudyStore(Path(parent).absolute()), Path(root).absolute()
+    value, raw, application_raw = load_input_plan(input_path, input_sha256)
+    # Validate every operand before the original create-only initializer writes.
+    with e._lock(parent.root):
+        records = e._records(parent)
+        _need(records, "resource-version preparation requires a current cohort head")
+        checked = validate_input_plan(value, records[-1], application_raw, root=root)
+        baseline_raw = {}
+        for mode, cell in checked["baselines"].items():
+            data = _read(_relative(Path(cell["root"]), cell["enrollment_path"]), cell["enrollment_sha256"])
+            _baseline_enrollment(data, cell)
+            baseline_raw[mode] = data
+        predecessor_sha = e._sha(records[-1])
+    original = cohorts.initialize_cohort(parent.root, root)
+    store = StudyStore(root)
+    context, context_sha = cohorts._input_context(root, store.plan())
+    _need(context["predecessor_sha256"] == predecessor_sha,
+          "actual parent changed before resource-version initialization")
+    cohorts._require_current_input_context(context)
+    _create(root / INPUT_PLAN, raw)
+    _create(root / APPLICATION_MANIFEST, application_raw)
+    baseline_refs = _baseline_refs(checked["baselines"])
+    copied = set()
+    for mode, ref in baseline_refs.items():
+        if ref["path"] not in copied:
+            _create(root / ref["path"], baseline_raw[mode]); copied.add(ref["path"])
+    binding = {"record_type": CONTEXT_TYPE_V2, "schema_version": 2, "root": str(root),
+        "study_sha256": store._file("study.json")[1]["sha256"],
+        "original_context_sha256": context_sha, "input_plan_sha256": _sha(raw),
+        "application_manifest_sha256": _sha(application_raw),
+        "baseline_enrollments": baseline_refs, "scientific_credit": False}
+    _create(root / INPUT_CONTEXT, canonical_json(binding))
+    read_context(root, store.plan())
+    return {"record_type": "qcsd-resource-domain-Fonts-resource-version-initialization-v2",
+        "original_initialization": original, "input_context": {
+            "path": INPUT_CONTEXT, "sha256": _sha(canonical_json(binding))},
+        "root": str(root), "hostname": value["hostname"],
+        "prepared": False, "admitted": False, "scientific_credit": False}
+
+def _v2_read_context(root, plan=None):
+    """Pure frozen context replay; never read a ledger or the original host paths."""
+    from . import resource_study_cohorts as cohorts
+    from .resource_study_selection import _relative, _json
+    root = Path(root).absolute()
+    actual_plan = _json(_read(_relative(root, "study.json")))
+    _need(plan is None or canonical_json(plan) == canonical_json(actual_plan),
+          "resource-version plan differs from the immutable study")
+    original, original_sha = cohorts._input_context(root, actual_plan)
+    _need(_sha(_read(_relative(root, cohorts.INPUT_CONTEXT))) == original_sha,
+          "resource-version original local context bytes changed during replay")
+    raw = _read(_relative(root, INPUT_CONTEXT)); context = _json(raw)
+    input_raw = _read(_relative(root, INPUT_PLAN)); value = _json(input_raw)
+    application_raw = _read(_relative(root, APPLICATION_MANIFEST))
+    checked = validate_input_plan(value, original["predecessor"], application_raw, root=root)
+    baseline_refs = _baseline_refs(checked["baselines"])
+    expected = {"record_type": CONTEXT_TYPE_V2, "schema_version": 2, "root": str(root),
+        "study_sha256": _sha(_read(_relative(root, "study.json"))),
+        "original_context_sha256": original_sha, "input_plan_sha256": _sha(input_raw),
+        "application_manifest_sha256": _sha(application_raw),
+        "baseline_enrollments": baseline_refs, "scientific_credit": False}
+    _need(canonical_json(context) == canonical_json(expected),
+          "resource-version local context/root/input bytes differ")
+    baseline_values = {mode: _baseline_enrollment(_read(_relative(root, ref["path"]), ref["sha256"]),
+                                               checked["baselines"][mode])
+                       for mode, ref in baseline_refs.items()}
+    return {**checked, "context": context, "original_context": original,
+            "baseline_enrollments": baseline_values,
+            "application_manifest_raw": application_raw}, _sha(raw)
+
+def _v2_bind_preparation(store, enrollment, job_path):
+    from .resource_study_cohorts import INPUT_CONTEXT as ORIGINAL_CONTEXT
+    from .resource_study_selection import _relative
+    _need(AUTHORITY_KEY not in enrollment and "runtime_cohort_input_authority" not in enrollment
+          and "resource_selection" not in enrollment and "frozen_application_manifest" not in enrollment,
+          "new resource authority cannot alias an old preparation input contract")
+    context, sha = read_context(store.root, store.plan())
+    relative = Path(job_path).relative_to(store.root).as_posix()
+    job_sha = _sha(_read(_relative(store.root, relative)))
+    value = deepcopy(enrollment)
+    value[AUTHORITY_KEY] = {"record_type": BINDING_TYPE_V2, "context_path": INPUT_CONTEXT,
+        "context_sha256": sha, "job_path": relative, "job_sha256": job_sha}
+    for name, digest in {INPUT_CONTEXT: sha, INPUT_PLAN: context["context"]["input_plan_sha256"],
+            APPLICATION_MANIFEST: context["context"]["application_manifest_sha256"],
+            ORIGINAL_CONTEXT: context["context"]["original_context_sha256"], relative: job_sha,
+            **{ref["path"]: ref["sha256"] for ref in context["context"]["baseline_enrollments"].values()}}.items():
+        _need(value["files"].get(name, digest) == digest, "resource-version preparation file conflicts")
+        value["files"][name] = digest
+    validate_enrollment(store, value, plan=store.plan())
+    return value
+
+def _v2_validate_enrollment(store, enrollment, *, plan):
+    """Pure input/job/Native workload proof; original GET/raw validators follow."""
+    from .resource_study_cohorts import INPUT_CONTEXT as ORIGINAL_CONTEXT
+    from .resource_study_lineage import bind_enrollment
+    from .resource_study_selection import _relative, _json
+    _need(type(enrollment) is dict and type(enrollment.get("files")) is dict,
+          "resource-version enrollment inventory is absent")
+    binding = enrollment.get(AUTHORITY_KEY)
+    _need(type(binding) is dict and set(binding) == {
+        "record_type", "context_path", "context_sha256", "job_path", "job_sha256"}
+        and binding["record_type"] == BINDING_TYPE_V2 and binding["context_path"] == INPUT_CONTEXT,
+        "resource-version preparation binding is partial or unsupported")
+    _need(not ({"resource_selection", "runtime_cohort_input_authority", "frozen_application_manifest"}
+               & enrollment.keys()), "resource-version input cannot claim historical input authority")
+    context, sha = read_context(store.root, plan)
+    _need(binding["context_sha256"] == sha and enrollment.get("hostname") == context["input"]["hostname"],
+          "resource-version enrollment context or hostname differs")
+    proof = {INPUT_CONTEXT: sha, INPUT_PLAN: context["context"]["input_plan_sha256"],
+        APPLICATION_MANIFEST: context["context"]["application_manifest_sha256"],
+        ORIGINAL_CONTEXT: context["context"]["original_context_sha256"],
+        binding["job_path"]: binding["job_sha256"],
+        **{ref["path"]: ref["sha256"] for ref in context["context"]["baseline_enrollments"].values()}}
+    for name, digest in proof.items():
+        _need(enrollment["files"].get(name) == digest, "resource-version input missing from enrollment files")
+        _read(_relative(store.root, name), digest)
+    baseline_prefix = "inputs/resource-versions/baseline-enrollments/"
+    _need({name for name in enrollment["files"] if name.startswith(baseline_prefix)}
+          == {name for name in proof if name.startswith(baseline_prefix)},
+          "resource-version enrollment has unbound baseline inputs")
+    expected = bind_enrollment(store, {**enrollment, "files": {}}, plan=plan)
+    _need(enrollment.get("class_selection") == expected["class_selection"]
+          and all(enrollment["files"].get(name) == digest for name, digest in expected["files"].items()),
+          "resource-version enrollment lost original selected50/source/address context")
+    _need(enrollment.get("urls") == context["urls"]
+          and enrollment.get("source_occurrences") == candidate(context)["source_occurrences"]
+          and enrollment.get("workload_sha256") == context["context"]["application_manifest_sha256"],
+          "resource-version enrollment changed new ordered20/source occurrences/workload")
+    modes = _runtime(context, store.root, enrollment["runtime"])
+    for mode in modes:
+        old = context["baselines"][mode]["definition"]
+        _need(enrollment.get("mode_settings", {}).get(mode) == old["settings"]
+              and enrollment.get("mode_policies", {}).get(mode) == old["policies"]
+              and type(enrollment.get("mode_readiness", {}).get(mode)) is bool,
+              "resource-only preparation changed original mode settings or policies")
+    options = preparation_options(context, store.root)
+    _need("buflo_small_response_aggregate_selection" not in enrollment,
+          "resource-version v1 preparation cannot add aggregate treatment")
+    if "buflo_chaff_cap_bytes" in options:
+        _need(enrollment.get("buflo_chaff_selection") == context["baseline_enrollments"]["buflo"]["buflo_chaff_selection"],
+              "resource-version preparation dropped or changed its original BF cap treatment")
+        from .resource_study_native import validate_buflo_capped_enrollment
+        validate_buflo_capped_enrollment(store.root, enrollment)
+    else:
+        _need("buflo_chaff_selection" not in enrollment,
+              "resource-version preparation added an unrequested BF cap treatment")
+    job_path = _relative(store.root, binding["job_path"])
+    base = _relative(store.root, enrollment["preparation_dir"])
+    job = _json(_read(job_path, binding["job_sha256"]))
+    _need(job_path.name == "job.json" and job_path.parent / "prepared" == base
+          and set(job) == {"hostname", "urls", "output", "runtime"}
+          and job == {"hostname": enrollment["hostname"], "urls": context["urls"],
+                      "output": str(base), "runtime": enrollment["runtime"]},
+          "resource-version selection differs from the actual original preparation job")
+    def enrolled(relative):
+        raw = _read(_relative(store.root, relative), enrollment["files"].get(relative))
+        _need(relative in enrollment["files"], "resource-version Native input is unbound")
+        return raw, _json(raw)
+    actual = enrolled((base / "preparation-get/input.json").relative_to(store.root).as_posix())[1]
+    workload_raw, workload = enrolled(enrollment["workload_path"])
+    prepared = enrolled(enrollment["paths"]["prepared_workload"])[1]
+    for value in (actual, workload, prepared):
+        rows = value.get("resources")
+        _need(type(rows) is list and len(rows) == 20
+              and all(type(row) is dict and type(row.get("id")) is int for row in rows)
+              and [row["id"] for row in rows] == list(range(20))
+              and [row.get("url") for row in rows] == context["urls"],
+              "resource-version differs from actual Native input/workload")
+    _need(workload_raw == context["application_manifest_raw"]
+          and prepared["resources"] == workload["resources"]
+          and prepared.get("preparation", {}).get("runtime") == enrollment["runtime"],
+          "resource-version actual prepared manifest or runtime differs")
+    _validate_fonts_ordinary_capacity(context, enrollment, prepared, workload, enrolled)
+    return context
+
+def _v2_preparation_options(context, root):
+    from . import resource_study_resource_versions as versions
+    from .resource_study_native import buflo_aggregate_selection
+    versions.checked_fonts_preparation_policy(context["input"]["preparation_policy"],
+        prior=context["original_context"]["predecessor"])
+    modes = [row["mode"] for row in context["input"]["mode_roots"] if row["root"] == str(root)]
+    _need(modes, "Fonts v2 preparation root must be explicitly mapped")
+    if "buflo" in modes:
+        baseline = context["baseline_enrollments"]["buflo"]
+        _need(baseline.get("buflo_small_response_aggregate_selection") == buflo_aggregate_selection()
+              and "buflo_chaff_selection" not in baseline
+              and baseline["mode_policies"]["buflo"].get("buflo_duration_policy")
+                  == "rapid-v7-fixed-64ms-640s-duration-budget-v1",
+              "Fonts v2 must authenticate its actual old aggregate donor before ordinary preparation")
+    # Deliberately invoke the existing ordinary backend branch, never aggregate/cap.
+    # Native, BF duration/settings and the complete original qualifier stay unchanged.
+    return {}
+
+
+def _validate_fonts_ordinary_capacity(context, enrollment, prepared, workload, enrolled):
+    _need(context["input"]["record_type"] == INPUT_TYPE_V2
+          and not ({"buflo_small_response_aggregate_selection", "buflo_chaff_selection",
+                    "buflo_chaff_qualification_error"} & enrollment.keys()),
+          "Fonts v2 fresh enrollment must be genuinely ordinary, not aggregate or capped")
+    responses = prepared.get("preparation", {}).get("expected_responses")
+    rows = workload["resources"]
+    _need(type(responses) is list and len(responses) == 20
+          and all(type(row) is dict and type(row.get("resource_id")) is int for row in responses)
+          and [row["resource_id"] for row in responses] == list(range(20))
+          and all(type(row.get("status")) is int and 200 <= row["status"] < 300
+                  and type(row.get("bytes")) is int and row["bytes"] >= 8192
+                  and row["bytes"] == rows[row["resource_id"]]["data_length"]
+                  for row in responses),
+          "Fonts v2 needs all20 genuine complete large-body expected responses")
+    expected = enrolled(enrollment["paths"]["expected_responses"])[1]
+    _need(expected == {"responses": responses}, "Fonts v2 complete expected-response artifact differs")
+    if any(enrollment["mode_readiness"][mode] for mode in MODES if mode != "undefended"):
+        _need(enrollment.get("qualification_error") is None
+              and enrollment["paths"].get("chaff_core") and enrollment["paths"].get("chaff_manifest"),
+              "Fonts v2 defended readiness requires its original ordinary qualification artifacts")
+        core = enrolled(enrollment["paths"]["chaff_core"])[1]
+        manifest = enrolled(enrollment["paths"]["chaff_manifest"])[1]
+        _need(core.get("qualified_parallel_chaff_streams") == 5
+              and manifest.get("schema_version") == 3,
+              "Fonts v2 cannot substitute old eight-aggregate qualification for ordinary five")
+    # The original complete preparation verifier authenticates every response,
+    # all three actual Native qualifier runs, headers/sidecars/source and raw files.
+
+
+def validate_input_plan(value, prior, application_manifest_raw, *, root=None):
+    if type(value) is dict and value.get("record_type") == INPUT_TYPE_V2:
+        return _v2_validate_input_plan(value, prior, application_manifest_raw, root=root)
+    return _v1_validate_input_plan(value, prior, application_manifest_raw, root=root)
+
+
+def initialize_resource_cohort(parent, root, input_path, input_sha256):
+    value, _, _ = load_input_plan(input_path, input_sha256)
+    if type(value) is dict and value.get("record_type") == INPUT_TYPE_V2:
+        return _v2_initialize_resource_cohort(parent, root, input_path, input_sha256)
+    return _v1_initialize_resource_cohort(parent, root, input_path, input_sha256)
+
+
+def read_context(root, plan=None):
+    from .resource_study_selection import _relative, _json
+    value = _json(_read(_relative(Path(root).absolute(), INPUT_PLAN)))
+    if type(value) is dict and value.get("record_type") == INPUT_TYPE_V2:
+        return _v2_read_context(root, plan)
+    return _v1_read_context(root, plan)
+
+
+def preparation_options(context, root):
+    if context.get("input", {}).get("record_type") == INPUT_TYPE_V2:
+        return _v2_preparation_options(context, root)
+    return _v1_preparation_options(context, root)
+
+
+def bind_preparation(store, enrollment, job_path):
+    context, _ = read_context(store.root, store.plan())
+    if context["input"]["record_type"] == INPUT_TYPE_V2:
+        return _v2_bind_preparation(store, enrollment, job_path)
+    return _v1_bind_preparation(store, enrollment, job_path)
+
+
+def validate_enrollment(store, enrollment, *, plan):
+    # Select the version only from the authenticated immutable input context.
+    # An untrusted enrollment annotation cannot choose the older validator.
+    context, _ = read_context(store.root, plan)
+    if context["input"]["record_type"] == INPUT_TYPE_V2:
+        return _v2_validate_enrollment(store, enrollment, plan=plan)
+    return _v1_validate_enrollment(store, enrollment, plan=plan)
