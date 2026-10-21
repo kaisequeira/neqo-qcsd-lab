@@ -1,5 +1,18 @@
 # QCSD thesis project ledger
 
+## 22 October 2026: exact closed-H003 current publisher parent
+
+SDK114 adds only the exact Source109 snapshot82535/closed-H003 current004
+standard publisher to the semantic parent registry and records a distinct
+reader execution profile. It preserves the complete SDK113 profile and every
+older supported profile. Native139, runtime images, capture, scientific checks,
+SQL history, quotas and tuple exclusions are unchanged. This source projection
+claims no checkpoint, admission, public pilot or scientific credit.
+
+The focused metadata API checks use explicit synthetic standard, scope,
+preparation and scientific proof leaves. Their actual results and the future
+Git/source freeze must be recorded separately by the operator.
+
 ## 22 October 2026: exact known-stopped publisher parent
 
 SDK113 adds the exact Source109 known-stopped004 standard publisher to the R3
