@@ -1,5 +1,29 @@
 # QCSD thesis project ledger
 
+## 21 October 2026: exact scientific refusal accounting
+
+The prospective SDK records an append-only retirement of the exact three
+CS211 sessions rejected by both original clock-proof phases. It preserves
+their SQL rows, raw evidence and historical five-tuples, freezes only the
+affected members, and requires fresh same-Native131 members and their own
+pilots before replacement capture. Its distinct qualified/deferred/retired
+partition separates the active quota from historical records. Retirement
+adds no verified credit. Unaffected members remain writable.
+
+The package has 185 Python files and a 177-file reader contract. All original
+raw scientific predicates remain unchanged. The CS collector uses the
+existing BuFLO budget of three consecutive structured collector failures,
+reset by an accepted commit; each retry remains a separately budgeted
+attempt, and failed attempts receive no credit.
+
+Twenty-three focused API/SQLite regression cases passed in 132.84 seconds.
+The final exact Catalog025 parent registration and current source profile
+passed two additional cases in 0.35 seconds, while the previously tested
+semantic and reader functions remained byte-for-byte unchanged. The
+separately tested retry policy passed 22 focused cases. Live SDK adoption,
+the distinct Q/D/R publication workflow, new-member preparation and own
+pilots remain pending. This source has issued no admission or quota release.
+
 ## 21 October 2026: atomic immutable publication
 
 The three immutable publishers now use an exclusive atomic rename instead

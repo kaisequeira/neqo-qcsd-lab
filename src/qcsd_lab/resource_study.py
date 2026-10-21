@@ -944,6 +944,18 @@ def parser():
         elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit", "cohort-cs180-admit"}:
             child.add_argument("--declaration", type=Path, required=True)
             child.add_argument("--declaration-sha256", required=True)
+    for action in ("cohort-semantic-refusal-template", "cohort-semantic-refusal-admit"):
+        child = actions.add_parser(action, help="exact append-only CS211 three-refusal authority; no imported credit")
+        child.add_argument("--root", type=Path, required=True)
+        child.add_argument("--cohort-root", type=Path, required=True)
+        if action == "cohort-semantic-refusal-template":
+            for name in ("evidence", "parent-transfer"):
+                child.add_argument("--" + name, type=Path, required=True)
+                child.add_argument("--" + name + "-sha256", required=True)
+            child.add_argument("--rationale", required=True)
+        else:
+            child.add_argument("--declaration", type=Path, required=True)
+            child.add_argument("--declaration-sha256", required=True)
     for action in ("prepare", "capture", "status", "verify", "export"):
         child = actions.add_parser(action)
         child.add_argument("--root", type=Path, required=True)
@@ -1051,6 +1063,15 @@ def main(argv=None):
         elif args.action == "cohort-cs180-admit":
             from .resource_study_cohorts import create_cs180_condition
             output = create_cs180_condition(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-semantic-refusal-template":
+            from .resource_study_cohorts import semantic_refusal_template
+            output = semantic_refusal_template(root, args.cohort_root.absolute(),
+                evidence_path=args.evidence.absolute(), evidence_sha256=args.evidence_sha256,
+                parent_transfer_path=args.parent_transfer.absolute(), parent_transfer_sha256=args.parent_transfer_sha256,
+                rationale=args.rationale)
+        elif args.action == "cohort-semantic-refusal-admit":
+            from .resource_study_cohorts import create_semantic_refusal
+            output = create_semantic_refusal(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
             version_requested = args.resource_version_input is not None or args.resource_version_input_sha256 is not None
             if version_requested and (args.resource_version_input is None or args.resource_version_input_sha256 is None

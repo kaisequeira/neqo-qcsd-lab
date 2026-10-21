@@ -357,7 +357,7 @@ def _capture_catalog_owned(parent,catalog,*,workers,budget,stop,backend,
                     with measure_phase(attempt_timing,"commit"):
                         store.commit_verified(receipt_path, validator=checked_this_attempt)
                     credited += 1
-                    if mode == "buflo":
+                    if mode in ("buflo", "cs-buflo"):
                         buflo_failures[cell] = 0
             except DuplicateSession as error:
                 # The immutable recording is retained but cannot satisfy a
@@ -383,7 +383,7 @@ def _capture_catalog_owned(parent,catalog,*,workers,budget,stop,backend,
                 create_json(root / attempt["path"] / "failure.json", {
                     "attempt_id": attempt["attempt_id"], "mode": mode, "hostname": host,
                     "reason": str(error), "exception": type(error).__name__, "scientific_credit": False})
-                if mode == "buflo":
+                if mode in ("buflo", "cs-buflo"):
                     failure = result.get("failure")
                     if (not pilot and failure_origin == "collector"
                             and result.get("success") is False
@@ -394,8 +394,8 @@ def _capture_catalog_owned(parent,catalog,*,workers,budget,stop,backend,
                         buflo_failures[cell] = buflo_failures.get(cell, 0) + 1
                         if buflo_failures[cell] < BUFLO_MAX_CONSECUTIVE_COLLECTOR_FAILURES:
                             continue
-                    # BF never stacks its streak with the separate clock/T
-                    # retry policies; all failures above remain durable negatives.
+                    # BF/CS share the existing bounded collector-only streak;
+                    # neither stacks clock/T retries. All failures stay negative.
                     return {"cell": cell, "attempted": attempted, "accepted": credited, "paused": True}
                 if temporary_clock_failure(result):
                     clock_failures[cell] = clock_failures.get(cell, 0) + 1

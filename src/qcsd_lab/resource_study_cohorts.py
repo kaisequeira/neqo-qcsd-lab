@@ -46,7 +46,7 @@ ACTIVE = ("reserved", "captured", "unverified")
 
 # Conservative complete declared package-import closure, including dormant
 # branches. Hash these source bytes only; never import/execute that graph.
-RAW_DEPENDENCIES = ('__init__.py', 'acquisition_errors.py', 'acquisition_selection.py', 'acquisition_timing.py', 'application_response_policy.py', 'browser_egress.py', 'browser_egress_dns.py', 'browser_egress_dns_evidence.py', 'browser_egress_dns_packets.py', 'browser_egress_fixture.py', 'browser_egress_observer.py', 'browser_egress_qualification.py', 'buflo_duration_budget.py', 'buflo_evaluation.py', 'buflo_fin_permission.py', 'buflo_handoff.py', 'buflo_reference.py', 'buflo_study.py', 'build_storage.py', 'capture.py', 'capture_acceptance_policy.py', 'capture_session.py', 'cdp_targets.py', 'chaff_qualification.py', 'class_acquisition.py', 'class_attestation.py', 'class_campaigns.py', 'class_capture20.py', 'class_catalogue.py', 'class_cohort.py', 'class_cohort20.py', 'class_curated_source.py', 'class_evaluation.py', 'class_final_selection20.py', 'class_fitting.py', 'class_handoff.py', 'class_history20.py', 'class_layout.py', 'class_pair_screening20.py', 'class_pipeline.py', 'class_profile_result.py', 'class_public20.py', 'class_readiness20.py', 'class_run_binding.py', 'class_study.py', 'class_successor.py', 'class_validation20.py', 'cohort_allocation.py', 'defenses.py', 'discover.py', 'discovery_evidence.py', 'experiment.py', 'fidelity.py', 'fitting.py', 'fitting_morphing.py', 'fitting_trace.py', 'fitting_walkie_talkie.py', 'fitting_wtfpad.py', 'front_fixed_configuration.py', 'front_incoming_acceptance.py', 'front_preparation_evidence.py', 'h3_prebaseline.py', 'kernel_tx.py', 'kernel_tx_runtime.py', 'manifest.py', 'orchestrator.py', 'parameters.py', 'per_class_selected_capture_amendment.py', 'pinned_cdp.py', 'playwright_driver.py', 'prepare.py', 'process_scheduler.py', 'profiles.py', 'qualification_control_authority.py', 'qualification_delivery_compatibility.py', 'rapid_action_local_source_facts.py', 'rapid_additive_static_enrollment.py', 'rapid_ael_fifteen_qualification.py', 'rapid_attempt_failure_evidence.py', 'rapid_browser_policy_evidence.py', 'rapid_canary_control_bridge.py', 'rapid_capture_control_compatibility.py', 'rapid_capture_control_installation.py', 'rapid_capture_plan.py', 'rapid_capture_traffic.py', 'rapid_chunk_partial_lane.py', 'rapid_class_epochs.py', 'rapid_collector_failure_evidence.py', 'rapid_enrolled_subgroup.py', 'rapid_epoch_corpus.py', 'rapid_epoch_target_chunks.py', 'rapid_epoch_target_parallel_schedule.py', 'rapid_fixed_condition_target.py', 'rapid_formal_parallel.py', 'rapid_front_capture_amendment.py', 'rapid_front_quick_compatibility.py', 'rapid_front_quick_profile.py', 'rapid_lane_evidence.py', 'rapid_mixed_implementation_target.py', 'rapid_operation_facts.py', 'rapid_ordinary_canary_carry.py', 'rapid_ordinary_canary_retry.py', 'rapid_ordinary_group_canary.py', 'rapid_ordinary_parallel_schedule.py', 'rapid_ordinary_transport_control.py', 'rapid_original_static_parallel_schedule.py', 'rapid_page_evidence.py', 'rapid_parallel_capture.py', 'rapid_parallel_partial_lane.py', 'rapid_partial_lane.py', 'rapid_partial_progress.py', 'rapid_per_class_selected_enrollment.py', 'rapid_per_class_selected_input.py', 'rapid_per_mode_native_target.py', 'rapid_portable_runtime.py', 'rapid_quick_profile.py', 'rapid_rolling_capture.py', 'rapid_rolling_readiness.py', 'rapid_rolling_schedule.py', 'rapid_runtime_compatibility.py', 'rapid_runtime_epochs.py', 'rapid_runtime_inspector.py', 'rapid_selected_budget_input.py', 'rapid_selected_capture_input.py', 'rapid_selected_input_renewal.py', 'rapid_selected_parallel_schedule.py', 'rapid_selection_amendment.py', 'rapid_site_admission.py', 'rapid_slot_chunks.py', 'rapid_static_parallel_schedule.py', 'rapid_study_profile.py', 'rapid_supplemental_cohort.py', 'rapid_target_chunks.py', 'rapid_target_overlay_source.py', 'rapid_target_parallel_schedule.py', 'rapid_undefended_capture.py', 'resource_study.py', 'resource_study_audit.py', 'resource_study_cohorts.py', 'resource_study_catalog.py', 'resource_study_epochs.py', 'resource_study_inputs.py', 'resource_study_integrity.py', 'resource_study_lineage.py', 'resource_study_native.py', 'resource_study_network.py', 'resource_study_reader_compatibility.py', 'resource_study_resource_version_inputs.py', 'resource_study_resource_versions.py', 'resource_study_runtime.py', 'resource_study_selection.py', 'resource_study_storage.py', 'resource_study_store.py', 'resource_study_supplements.py', 'resource_study_verify.py', 'resource_study_verify_child.py', 'response_budget_qualification.py', 'runtime_provenance.py', 'selected_capture_amendment.py', 'static_budget_capture.py', 'static_budget_capture_amendment.py', 'static_evidence_transport.py', 'supplied_static_admission.py', 'supplied_static_bootstrap_get.py', 'supplied_static_budget_successor.py', 'supplied_static_capture_amendment.py', 'supplied_static_get.py', 'supplied_static_graph.py', 'supplied_static_preparation.py', 'tamaraw_fixed_configuration.py', 'util.py', 'verification.py', 'whole_graph_capture_amendment.py', 'whole_graph_input.py', 'whole_graph_supplement.py', 'resource_study_atomic_publish.py')
+RAW_DEPENDENCIES = ('__init__.py', 'acquisition_errors.py', 'acquisition_selection.py', 'acquisition_timing.py', 'application_response_policy.py', 'browser_egress.py', 'browser_egress_dns.py', 'browser_egress_dns_evidence.py', 'browser_egress_dns_packets.py', 'browser_egress_fixture.py', 'browser_egress_observer.py', 'browser_egress_qualification.py', 'buflo_duration_budget.py', 'buflo_evaluation.py', 'buflo_fin_permission.py', 'buflo_handoff.py', 'buflo_reference.py', 'buflo_study.py', 'build_storage.py', 'capture.py', 'capture_acceptance_policy.py', 'capture_session.py', 'cdp_targets.py', 'chaff_qualification.py', 'class_acquisition.py', 'class_attestation.py', 'class_campaigns.py', 'class_capture20.py', 'class_catalogue.py', 'class_cohort.py', 'class_cohort20.py', 'class_curated_source.py', 'class_evaluation.py', 'class_final_selection20.py', 'class_fitting.py', 'class_handoff.py', 'class_history20.py', 'class_layout.py', 'class_pair_screening20.py', 'class_pipeline.py', 'class_profile_result.py', 'class_public20.py', 'class_readiness20.py', 'class_run_binding.py', 'class_study.py', 'class_successor.py', 'class_validation20.py', 'cohort_allocation.py', 'defenses.py', 'discover.py', 'discovery_evidence.py', 'experiment.py', 'fidelity.py', 'fitting.py', 'fitting_morphing.py', 'fitting_trace.py', 'fitting_walkie_talkie.py', 'fitting_wtfpad.py', 'front_fixed_configuration.py', 'front_incoming_acceptance.py', 'front_preparation_evidence.py', 'h3_prebaseline.py', 'kernel_tx.py', 'kernel_tx_runtime.py', 'manifest.py', 'orchestrator.py', 'parameters.py', 'per_class_selected_capture_amendment.py', 'pinned_cdp.py', 'playwright_driver.py', 'prepare.py', 'process_scheduler.py', 'profiles.py', 'qualification_control_authority.py', 'qualification_delivery_compatibility.py', 'rapid_action_local_source_facts.py', 'rapid_additive_static_enrollment.py', 'rapid_ael_fifteen_qualification.py', 'rapid_attempt_failure_evidence.py', 'rapid_browser_policy_evidence.py', 'rapid_canary_control_bridge.py', 'rapid_capture_control_compatibility.py', 'rapid_capture_control_installation.py', 'rapid_capture_plan.py', 'rapid_capture_traffic.py', 'rapid_chunk_partial_lane.py', 'rapid_class_epochs.py', 'rapid_collector_failure_evidence.py', 'rapid_enrolled_subgroup.py', 'rapid_epoch_corpus.py', 'rapid_epoch_target_chunks.py', 'rapid_epoch_target_parallel_schedule.py', 'rapid_fixed_condition_target.py', 'rapid_formal_parallel.py', 'rapid_front_capture_amendment.py', 'rapid_front_quick_compatibility.py', 'rapid_front_quick_profile.py', 'rapid_lane_evidence.py', 'rapid_mixed_implementation_target.py', 'rapid_operation_facts.py', 'rapid_ordinary_canary_carry.py', 'rapid_ordinary_canary_retry.py', 'rapid_ordinary_group_canary.py', 'rapid_ordinary_parallel_schedule.py', 'rapid_ordinary_transport_control.py', 'rapid_original_static_parallel_schedule.py', 'rapid_page_evidence.py', 'rapid_parallel_capture.py', 'rapid_parallel_partial_lane.py', 'rapid_partial_lane.py', 'rapid_partial_progress.py', 'rapid_per_class_selected_enrollment.py', 'rapid_per_class_selected_input.py', 'rapid_per_mode_native_target.py', 'rapid_portable_runtime.py', 'rapid_quick_profile.py', 'rapid_rolling_capture.py', 'rapid_rolling_readiness.py', 'rapid_rolling_schedule.py', 'rapid_runtime_compatibility.py', 'rapid_runtime_epochs.py', 'rapid_runtime_inspector.py', 'rapid_selected_budget_input.py', 'rapid_selected_capture_input.py', 'rapid_selected_input_renewal.py', 'rapid_selected_parallel_schedule.py', 'rapid_selection_amendment.py', 'rapid_site_admission.py', 'rapid_slot_chunks.py', 'rapid_static_parallel_schedule.py', 'rapid_study_profile.py', 'rapid_supplemental_cohort.py', 'rapid_target_chunks.py', 'rapid_target_overlay_source.py', 'rapid_target_parallel_schedule.py', 'rapid_undefended_capture.py', 'resource_study.py', 'resource_study_audit.py', 'resource_study_cohorts.py', 'resource_study_catalog.py', 'resource_study_epochs.py', 'resource_study_inputs.py', 'resource_study_integrity.py', 'resource_study_lineage.py', 'resource_study_native.py', 'resource_study_network.py', 'resource_study_reader_compatibility.py', 'resource_study_resource_version_inputs.py', 'resource_study_resource_versions.py', 'resource_study_runtime.py', 'resource_study_selection.py', 'resource_study_storage.py', 'resource_study_store.py', 'resource_study_supplements.py', 'resource_study_verify.py', 'resource_study_verify_child.py', 'response_budget_qualification.py', 'runtime_provenance.py', 'selected_capture_amendment.py', 'static_budget_capture.py', 'static_budget_capture_amendment.py', 'static_evidence_transport.py', 'supplied_static_admission.py', 'supplied_static_bootstrap_get.py', 'supplied_static_budget_successor.py', 'supplied_static_capture_amendment.py', 'supplied_static_get.py', 'supplied_static_graph.py', 'supplied_static_preparation.py', 'tamaraw_fixed_configuration.py', 'util.py', 'verification.py', 'whole_graph_capture_amendment.py', 'whole_graph_input.py', 'whole_graph_supplement.py', 'resource_study_atomic_publish.py', 'resource_study_semantic_refusals.py')
 
 
 def _epochs():
@@ -945,6 +945,9 @@ def _accepted_attempts(store, key, rows, connection=None):
 
 
 def _accepted(entry, *, self_store=None, connection=None):
+    if "semantic_refusals" in entry:
+        from .resource_study_semantic_refusals import accepted
+        return accepted(entry, self_store=self_store, connection=connection)
     if "resource_versions" in entry:
         return _accepted_resource_version(entry, self_store=self_store, connection=connection)
     result, slots, tuples = [], set(), set()
@@ -1090,6 +1093,10 @@ def _uncached_frozen_value(parent, member):
 def _check_frozen(parent, registry):
     """Ancestry authenticates manifests; selected-cell guards join fresh SQL."""
     for entry in registry:
+        if "semantic_refusals" in entry:
+            from .resource_study_semantic_refusals import check_frozen
+            check_frozen(parent, entry)
+            continue
         if "resource_versions" in entry:
             _check_resource_frozen(parent, entry)
             continue
@@ -1581,6 +1588,9 @@ def _budget_strata(old, science, member_id):
 
 def _stratum_sciences(entry):
     """Validate the closed ledger, retaining every historical full science value."""
+    if "semantic_refusals" in entry:
+        from .resource_study_semantic_refusals import member_sciences
+        return member_sciences(entry)
     if "condition_strata" in entry:
         return _condition_sciences(entry)
     if "resource_versions" in entry:
@@ -2249,6 +2259,9 @@ def _validate_record(parent, records, value, *, contract=None):
     contract = verifier_contract() if contract is None else contract
     qualified = reader_compatibility.qualify_execution(verifier_contract())
     reader_compatibility.require_supported(contract, qualified)
+    if type(value) is dict and value.get("change") == "scientific-refusal-retirement-CS211-three-v1":
+        from .resource_study_semantic_refusals import validate_record
+        return validate_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == "resource-version-retirement":
         return _validate_resource_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == COVER_CHANGE:
@@ -2317,6 +2330,10 @@ def _validate_record(parent, records, value, *, contract=None):
                 raise ValueError("runtime cohort changed an unaffected cell")
             continue
         expected_fields = {"hostname", "mode", "science", "members", "writer"}
+        if "semantic_refusals" in old:
+            expected_fields.add("semantic_refusals")
+            if not _same(entry["semantic_refusals"], old["semantic_refusals"]):
+                raise ValueError("Native-only cohort rewrites immutable semantic-refusal history")
         if condition or "condition_strata" in old: expected_fields.add("condition_strata")
         if budget or "science_strata" in old: expected_fields.add("science_strata")
         if "resource_versions" in old:
@@ -2825,7 +2842,8 @@ def status(parent, *, deep=False, verification_workers=1):
 
         if not _same(contract, verifier_contract()):
             raise ValueError("raw verifier source changed before all cohort workers joined")
-        return result
+        from .resource_study_semantic_refusals import status_projection
+        return status_projection(current, result)
 
 
 RESOURCE_CHANGE = "resource-version-retirement"
@@ -3125,3 +3143,14 @@ def _validate_resource_record(parent, records, value, contract):
         if not _same(entry, expected) or not _same(cells[key], candidate_map[key]):
             raise ValueError("resource retirement rewrites old members or invents new source/science/credit carry")
     _validate_members(parent, value, cells, contract)
+
+
+def semantic_refusal_template(parent, cohort_root, *, evidence_path, evidence_sha256, parent_transfer_path, parent_transfer_sha256, rationale):
+    from .resource_study_semantic_refusals import template
+    return template(parent, cohort_root, evidence_path=evidence_path, evidence_sha256=evidence_sha256,
+        parent_transfer_path=parent_transfer_path, parent_transfer_sha256=parent_transfer_sha256, rationale=rationale)
+
+
+def create_semantic_refusal(parent, cohort_root, declaration_path, declaration_sha256):
+    from .resource_study_semantic_refusals import create
+    return create(parent, cohort_root, declaration_path, declaration_sha256)
