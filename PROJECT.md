@@ -3076,3 +3076,8 @@ Source-only successor of actual frozen SDK114. The exact stable006 issuer b9a904
 ## SDK116 repeatable007 current-D parent registry
 
 Source-only successor of actual frozen SDK115. The exact repeatable007 issuer aeeb7aa8241f39e397cf31b7034367886f38224eed7897508d7da520ab8c89f0 is the sole new parent row. The reader retains the exact115 profile and all older profiles. Native139, runtime images, scientific verification, thresholds and all183 other package files remain unchanged. New SDK116 HEAD/tree/freeze/stage and current007 checkpoint are recorded only after actual ROOT operations; no raw qualification or study credit is produced by this Source update.
+
+
+## SDK117 repeatable008 current-D parent registry
+
+Source-only successor of actual frozen SDK116. The exact repeatable008 issuer df4c05f919f3fa5c42072c512fffb83a8580e5ac34e9c8de64dae1ec552a8265 is the sole new parent row. The reader retains the exact116 profile and all older profiles. Native139, runtime images, scientific verification, thresholds and all183 other package files remain unchanged. New SDK117 HEAD/tree/freeze/stage and current008 checkpoint are recorded only after actual ROOT operations; no raw qualification or study credit is produced by this Source update.
