@@ -214,6 +214,7 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            buflo_small_response_aggregate: bool = False,
            buflo_duration_policy: str | None = None,
            cs_buflo_duration_policy: str | None = None,
+           tamaraw_configuration_policy: str | None = None,
            frozen_application_manifest: Path | None = None,
            frozen_application_manifest_sha256: str | None = None,
            resource_version_input: Path | None = None,
@@ -224,7 +225,7 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
                 or resource_selection is not None or resource_selection_sha256 is not None
                 or frozen_application_manifest is not None or frozen_application_manifest_sha256 is not None
                 or buflo_chaff_cap_bytes is not None or buflo_small_response_aggregate
-                or buflo_duration_policy is not None):
+                or buflo_duration_policy is not None or tamaraw_configuration_policy is not None):
             raise ValueError("resource-version preparation needs paired input flags and unchanged ordinary preparation")
         from .resource_study_resource_version_inputs import enroll as enroll_version
         return enroll_version(root, runtime, hostnames, resource_version_input,
@@ -252,10 +253,19 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
     if cs_buflo_duration_policy is not None and not selection_requested:
         raise ValueError("CS180 requires an explicit original20 resource selection")
     frozen_manifest_requested = frozen_application_manifest is not None or frozen_application_manifest_sha256 is not None
+    from . import tamaraw_fixed_configuration as tamaraw
+    selected_tamaraw = tamaraw.POLICY if tamaraw_configuration_policy is None else tamaraw.validate_policy(tamaraw_configuration_policy)
+    if selected_tamaraw == tamaraw.INITIAL16_POLICY and (len(hostnames) != 1 or not selection_requested
+            or not frozen_manifest_requested or aggregate or cs_buflo_duration_policy is not None
+            or runtime.get("native_commit") != tamaraw.INITIAL16_NATIVE
+            or runtime.get("source", {}).get("neqo_commit") != tamaraw.INITIAL16_NATIVE):
+        raise ValueError("initial16 needs one existing Native139 cell, explicit selection and exact frozen20")
     if frozen_manifest_requested and (frozen_application_manifest is None
             or frozen_application_manifest_sha256 is None or not selection_requested or len(hostnames) != 1):
         raise ValueError("frozen application manifest needs paired SHA/path and exact single-host selection")
     store = StudyStore(root)
+    from .resource_study_cohorts import require_tamaraw_preparation
+    for hostname in hostnames: require_tamaraw_preparation(store, hostname, selected_tamaraw)
     from .resource_study_epochs import check_enrollment_selection
     check_enrollment_selection(store, hostnames)
     selection = binding = None
@@ -269,6 +279,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         backend = PreparationRuntime(root, runtime)
     candidates = candidate_pool(root)
     completed = {r["hostname"] for r in store.enrolled()}
+    if tamaraw_configuration_policy is not None and completed.intersection(hostnames):
+        raise ValueError("an explicit Tamaraw condition requires fresh enrollment")
     if cs_buflo_duration_policy is not None and completed.intersection(hostnames):
         raise ValueError("CS180 requires fresh enrollment; existing inputs cannot change")
     if buflo_duration_policy is not None and completed.intersection(hostnames):
@@ -305,6 +317,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
                                if buflo_duration_policy is not None else {})
             if cs_buflo_duration_policy is not None:
                 duration_option["cs_buflo_duration_policy"] = cs_buflo_duration_policy
+            if tamaraw_configuration_policy is not None:
+                duration_option["tamaraw_configuration_policy"] = selected_tamaraw
             if aggregate:
                 duration_option["buflo_small_response_aggregate"] = True
             if frozen_manifest is not None:
@@ -932,16 +946,17 @@ def parser():
         else:
             child.add_argument("--resource-version-input", type=Path, required=True)
             child.add_argument("--resource-version-input-sha256", required=True)
-    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit", "cohort-cs180-template", "cohort-cs180-admit"):
+    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit", "cohort-cs180-template", "cohort-cs180-admit", "cohort-tamaraw16-template", "cohort-tamaraw16-admit"):
         child = actions.add_parser(action, help="explicit compatible-runtime cohort protocol; no imported credit")
         child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
         child.add_argument("--cohort-root", type=Path, required=True, help="fresh separate immutable cohort ledger")
         if action == "cohort-init":
             child.add_argument("--cs-buflo-duration-policy", help="explicit Ang CS180 prospective preparation intent")
-        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template", "cohort-buflo-cover-template", "cohort-cs180-template"}:
+            child.add_argument("--tamaraw-initial16-hostname", help="explicit one-host initial16 prospective preparation intent")
+        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template", "cohort-buflo-cover-template", "cohort-cs180-template", "cohort-tamaraw16-template"}:
             child.add_argument("--affected-hostname", action="append", required=True)
             child.add_argument("--affected-mode", choices=MODES, action="append", required=True)
-        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit", "cohort-cs180-admit"}:
+        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit", "cohort-cs180-admit", "cohort-tamaraw16-admit"}:
             child.add_argument("--declaration", type=Path, required=True)
             child.add_argument("--declaration-sha256", required=True)
     for action in ("cohort-semantic-refusal-template", "cohort-semantic-refusal-admit"):
@@ -949,6 +964,18 @@ def parser():
         child.add_argument("--root", type=Path, required=True)
         child.add_argument("--cohort-root", type=Path, required=True)
         if action == "cohort-semantic-refusal-template":
+            for name in ("evidence", "parent-transfer"):
+                child.add_argument("--" + name, type=Path, required=True)
+                child.add_argument("--" + name + "-sha256", required=True)
+            child.add_argument("--rationale", required=True)
+        else:
+            child.add_argument("--declaration", type=Path, required=True)
+            child.add_argument("--declaration-sha256", required=True)
+    for action in ("cohort-pending10-retirement-template", "cohort-pending10-retirement-admit"):
+        child = actions.add_parser(action, help="exact D-only unqualified historical target retirement; no trace invalidity or credit claim")
+        child.add_argument("--root", type=Path, required=True)
+        child.add_argument("--cohort-root", type=Path, required=True)
+        if action == "cohort-pending10-retirement-template":
             for name in ("evidence", "parent-transfer"):
                 child.add_argument("--" + name, type=Path, required=True)
                 child.add_argument("--" + name + "-sha256", required=True)
@@ -981,6 +1008,7 @@ def parser():
                                help="explicit same-host C019 donor Native application manifest; preserve exact bytes")
             child.add_argument("--frozen-application-manifest-sha256")
             child.add_argument("--cs-buflo-duration-policy", help="explicit Ang Native137 CS180/240 prospective condition")
+            child.add_argument("--tamaraw-configuration-policy", help="explicit ResourceStudy fixed Tamaraw condition; historical default8192")
             child.add_argument("--buflo-duration-policy",
                                help="explicit prospective BuFLO duration policy; default640 and existing enrollments remain unchanged")
             child.add_argument("--buflo-chaff-cap-bytes", type=int,
@@ -1012,6 +1040,11 @@ def main(argv=None):
     args = parser().parse_args(argv)
     root = args.root.absolute()
     try:
+        if getattr(args, "tamaraw_configuration_policy", None) is not None:
+            from .tamaraw_fixed_configuration import validate_policy
+            validate_policy(args.tamaraw_configuration_policy)
+            if args.action != "prepare" or not args.enroll:
+                raise ValueError("explicit Tamaraw condition requires fresh live preparation; capture uses frozen enrollment")
         if args.action == "cohort-resource-init":
             from .resource_study_resource_version_inputs import initialize_resource_cohort
             output = initialize_resource_cohort(root, args.cohort_root.absolute(),
@@ -1026,6 +1059,7 @@ def main(argv=None):
         elif args.action == "cohort-init":
             from .resource_study_cohorts import initialize_cohort
             output = initialize_cohort(root, args.cohort_root.absolute(),
+                tamaraw_initial16_hostname=args.tamaraw_initial16_hostname,
                 **({"cs_buflo_duration_policy":args.cs_buflo_duration_policy}
                    if args.cs_buflo_duration_policy is not None else {}))
         elif args.action == "cohort-template":
@@ -1063,6 +1097,13 @@ def main(argv=None):
         elif args.action == "cohort-cs180-admit":
             from .resource_study_cohorts import create_cs180_condition
             output = create_cs180_condition(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-tamaraw16-template":
+            from .resource_study_cohorts import tamaraw16_template
+            output = tamaraw16_template(root, args.cohort_root.absolute(),
+                affected_hostnames=args.affected_hostname, affected_modes=args.affected_mode)
+        elif args.action == "cohort-tamaraw16-admit":
+            from .resource_study_cohorts import create_tamaraw16_condition
+            output = create_tamaraw16_condition(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "cohort-semantic-refusal-template":
             from .resource_study_cohorts import semantic_refusal_template
             output = semantic_refusal_template(root, args.cohort_root.absolute(),
@@ -1072,6 +1113,15 @@ def main(argv=None):
         elif args.action == "cohort-semantic-refusal-admit":
             from .resource_study_cohorts import create_semantic_refusal
             output = create_semantic_refusal(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-pending10-retirement-template":
+            from .resource_study_cohorts import pending10_retirement_template
+            output = pending10_retirement_template(root, args.cohort_root.absolute(),
+                evidence_path=args.evidence.absolute(), evidence_sha256=args.evidence_sha256,
+                parent_transfer_path=args.parent_transfer.absolute(), parent_transfer_sha256=args.parent_transfer_sha256,
+                rationale=args.rationale)
+        elif args.action == "cohort-pending10-retirement-admit":
+            from .resource_study_cohorts import create_pending10_retirement
+            output = create_pending10_retirement(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
         elif args.action == "prepare":
             version_requested = args.resource_version_input is not None or args.resource_version_input_sha256 is not None
             if version_requested and (args.resource_version_input is None or args.resource_version_input_sha256 is None
@@ -1167,7 +1217,8 @@ def main(argv=None):
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
                     **({"buflo_small_response_aggregate": True} if aggregate_requested else {}),
                     **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}),
-                    **({"cs_buflo_duration_policy": args.cs_buflo_duration_policy} if args.cs_buflo_duration_policy is not None else {}))
+                    **({"cs_buflo_duration_policy": args.cs_buflo_duration_policy} if args.cs_buflo_duration_policy is not None else {}),
+                    **({"tamaraw_configuration_policy": args.tamaraw_configuration_policy} if args.tamaraw_configuration_policy is not None else {}))
                     if selection_requested else enroll(root, runtime, args.hostname,
                     **({"resource_version_input": args.resource_version_input,
                         "resource_version_input_sha256": args.resource_version_input_sha256}
@@ -1175,7 +1226,8 @@ def main(argv=None):
                     **({"buflo_chaff_cap_bytes": args.buflo_chaff_cap_bytes} if args.buflo_chaff_cap_bytes is not None else {}),
                     **({"buflo_small_response_aggregate": True} if aggregate_requested else {}),
                     **({"buflo_duration_policy": args.buflo_duration_policy} if args.buflo_duration_policy is not None else {}),
-                    **({"cs_buflo_duration_policy": args.cs_buflo_duration_policy} if args.cs_buflo_duration_policy is not None else {})))
+                    **({"cs_buflo_duration_policy": args.cs_buflo_duration_policy} if args.cs_buflo_duration_policy is not None else {}),
+                    **({"tamaraw_configuration_policy": args.tamaraw_configuration_policy} if args.tamaraw_configuration_policy is not None else {})))
             else:
                 output = StudyStore(root).status()
             if args.epoch_of is not None:

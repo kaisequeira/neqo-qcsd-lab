@@ -360,6 +360,7 @@ class PreparationRuntime:
                 buflo_small_response_aggregate: bool = False,
                 buflo_duration_policy: str | None = None,
                 cs_buflo_duration_policy: str | None = None,
+                tamaraw_configuration_policy: str | None = None,
                 frozen_application_manifest: dict | None = None) -> dict:
         from .resource_study_native import _buflo_aggregate_option, buflo_aggregate_native_supported
         aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
@@ -374,6 +375,12 @@ class PreparationRuntime:
             if candidate["hostname"] != CS180_HOST or self.runtime.get("native_commit") != CS180_NATIVE:
                 raise ValueError("CS180 requires exact Ang Native137 preparation")
         frozen_raw = None
+        from . import tamaraw_fixed_configuration as tamaraw
+        selected_tamaraw = tamaraw.POLICY if tamaraw_configuration_policy is None else tamaraw.validate_policy(tamaraw_configuration_policy)
+        if selected_tamaraw == tamaraw.INITIAL16_POLICY and (self.runtime.get("native_commit") != tamaraw.INITIAL16_NATIVE
+                or self.runtime.get("source", {}).get("neqo_commit") != tamaraw.INITIAL16_NATIVE
+                or frozen_application_manifest is None or aggregate or cs_buflo_duration_policy is not None):
+            raise ValueError("initial16 requires genuine Native139 and its exact frozen20 ordinary preparation")
         if frozen_application_manifest is not None:
             from .resource_study_selection import read_frozen_application_manifest
             frozen_raw, _ = read_frozen_application_manifest(self.root, candidate["hostname"],
@@ -396,6 +403,8 @@ class PreparationRuntime:
             native_prepare_options += ("--buflo-duration-policy", buflo_duration_policy)
         if cs_buflo_duration_policy is not None:
             native_prepare_options += ("--cs-buflo-duration-policy", cs_buflo_duration_policy)
+        if tamaraw_configuration_policy is not None:
+            native_prepare_options += ("--tamaraw-configuration-policy", selected_tamaraw)
         if frozen_application_manifest is not None:
             native_prepare_options += ("--frozen-application-manifest",
                 str(self.root / frozen_application_manifest["manifest_path"]),
@@ -412,6 +421,12 @@ class PreparationRuntime:
                 timeout=max(600, len(candidate["urls"]) * 125 + 600))
         _put(output / "result.json", json.loads(result.splitlines()[-1]))
         enrollment = load(output / "result.json")
+        if enrollment.get("mode_policies", {}).get("tamaraw", {}).get(tamaraw.FIELD) != selected_tamaraw:
+            raise ValueError("prepared Tamaraw condition differs from the explicit Native CLI option")
+        tamaraw_settings = enrollment.get("mode_settings", {}).get("tamaraw", {})
+        if (tamaraw_settings.get("configuration_sha256") != tamaraw.configuration_sha256(selected_policy=selected_tamaraw)
+                or tamaraw_settings.get("resolved_configuration") != tamaraw.resolved_configuration(selected_policy=selected_tamaraw)):
+            raise ValueError("prepared Tamaraw condition changed its complete fixed configuration")
         if aggregate:
             from .resource_study_native import buflo_aggregate_selection
             selection = enrollment.get("buflo_small_response_aggregate_selection")

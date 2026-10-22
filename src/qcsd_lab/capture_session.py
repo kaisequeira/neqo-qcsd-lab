@@ -2573,7 +2573,7 @@ def _client_command(
             raise ValueError("fixed Tamaraw launch lacks its exact frozen configuration")
         from .tamaraw_fixed_configuration import validate_prepared
         validate_prepared(load_json(application_workload_source))
-        command += ["--config", str(validate_configuration(configuration_path))]
+        command += ["--config", str(validate_configuration(configuration_path, selected_policy=fixed_tamaraw))]
     else:
         if configuration_path is not None:
             raise ValueError("Native configuration requires an explicit fixed Tamaraw policy")

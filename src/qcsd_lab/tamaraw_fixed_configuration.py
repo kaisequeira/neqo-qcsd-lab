@@ -9,12 +9,14 @@ from typing import Any, Mapping
 FIELD = "tamaraw_configuration_policy"
 POLICY = "rapid-tamaraw-initial8192-owned-bootstrap-v1"
 INPUT = "tamaraw-initial8192.toml"
+INITIAL16_POLICY = "resource-study-tamaraw-initial16-owned-bootstrap-v1"
+INITIAL16_NATIVE = "6e50096dbce397e3f4e7be88de17d75986da5dff"
 
 
 def validate_policy(value: Any) -> str | None:
     if value is None:
         return None
-    if type(value) is not str or value != POLICY:
+    if type(value) is not str or value not in (POLICY, INITIAL16_POLICY):
         raise ValueError("unknown fixed Tamaraw configuration policy")
     return value
 
@@ -27,10 +29,12 @@ def policy(value: Mapping[str, Any]) -> str | None:
     return validate_policy(value[FIELD])
 
 
-def resolved_configuration() -> dict[str, Any]:
+def resolved_configuration(*, selected_policy: str = POLICY) -> dict[str, Any]:
+    if validate_policy(selected_policy) is None:
+        raise ValueError("a complete fixed Tamaraw configuration needs an explicit policy")
     return {
         "schema_version": 2, "control_interval_us": 5000,
-        "initial_max_stream_data": 8192, "automatic_receive_window": 1048576,
+        "initial_max_stream_data": 16 if selected_policy == INITIAL16_POLICY else 8192, "automatic_receive_window": 1048576,
         "max_chaff_streams": 5, "low_watermark": 1000000,
         "use_empty_resources": False, "max_stream_data_excess": 1000,
         "max_udp_payload_size": 1200, "drop_unsatisfied_events": False,
@@ -40,21 +44,21 @@ def resolved_configuration() -> dict[str, Any]:
     }
 
 
-def configuration_bytes() -> bytes:
-    value = resolved_configuration()
+def configuration_bytes(*, selected_policy: str = POLICY) -> bytes:
+    value = resolved_configuration(selected_policy=selected_policy)
     lines = [f"{key} = {json.dumps(item)}" for key, item in value.items() if key != "defense"]
     lines += ["", "[defense]", *(f"{key} = {json.dumps(item)}" for key, item in value["defense"].items())]
     return ("\n".join(lines) + "\n").encode("ascii")
 
 
-def configuration_sha256() -> str:
-    return hashlib.sha256(configuration_bytes()).hexdigest()
+def configuration_sha256(*, selected_policy: str = POLICY) -> str:
+    return hashlib.sha256(configuration_bytes(selected_policy=selected_policy)).hexdigest()
 
 
-def validate_configuration(path: Path) -> Path:
+def validate_configuration(path: Path, *, selected_policy: str = POLICY) -> Path:
     path = Path(path)
     if (any(parent.is_symlink() for parent in (path, *path.parents))
-        or not path.is_file() or path.read_bytes() != configuration_bytes()):
+        or not path.is_file() or path.read_bytes() != configuration_bytes(selected_policy=selected_policy)):
         raise ValueError("fixed Tamaraw configuration file differs from its complete declared settings")
     return path
 
@@ -62,7 +66,7 @@ def validate_configuration(path: Path) -> Path:
 def validate_run(run: Mapping[str, Any], *, selected_policy: str | None) -> None:
     if validate_policy(selected_policy) is None:
         return
-    actual, expected = run.get("resolved_configuration"), resolved_configuration()
+    actual, expected = run.get("resolved_configuration"), resolved_configuration(selected_policy=selected_policy)
     if (not isinstance(actual, Mapping) or set(actual) != set(expected)
         or any(type(actual[key]) is not type(item) or actual[key] != item
                for key, item in expected.items())
@@ -76,6 +80,8 @@ def validate_campaign(*, selected_policy: str | None, profile: str, defenses,
                       body_policy: str | None, qualification_compatibility=None) -> None:
     if validate_policy(selected_policy) is None:
         return
+    if selected_policy == INITIAL16_POLICY:
+        raise ValueError("initial16 is an explicit ResourceStudy condition, not a general campaign policy")
     from .application_response_policy import COMPLETE_APPLICATION_DELIVERY_POLICY
     if (profile != "research-1200" or len(defenses) != 1
         or defenses[0].kind != "tamaraw" or defenses[0].baseline

@@ -945,6 +945,9 @@ def _accepted_attempts(store, key, rows, connection=None):
 
 
 def _accepted(entry, *, self_store=None, connection=None):
+    if "pending_retirements" in entry:
+        from .resource_study_semantic_refusals import pending10_accepted
+        return pending10_accepted(entry, self_store=self_store, connection=connection)
     if "semantic_refusals" in entry:
         from .resource_study_semantic_refusals import accepted
         return accepted(entry, self_store=self_store, connection=connection)
@@ -1093,6 +1096,10 @@ def _uncached_frozen_value(parent, member):
 def _check_frozen(parent, registry):
     """Ancestry authenticates manifests; selected-cell guards join fresh SQL."""
     for entry in registry:
+        if "pending_retirements" in entry:
+            from .resource_study_semantic_refusals import pending10_check_frozen
+            pending10_check_frozen(parent, entry)
+            continue
         if "semantic_refusals" in entry:
             from .resource_study_semantic_refusals import check_frozen
             check_frozen(parent, entry)
@@ -1429,6 +1436,116 @@ CS180_DECLARATION = "qcsd-resource-domain-Ang-CS180-condition-amendment-declarat
 CS180_STRATA = "qcsd-resource-domain-Ang-CS120-CS180-science-strata-v1"
 CS180_CHANGE = "Ang-CS120-to-CS180-current20-native137-condition-v1"
 CS180_AMENDMENT = "prospective Ang CS120-to-CS180/240 and exact current20 resource19 content version; genuine Native137; separately labelled full science; original shared400 and history unchanged"
+T16_DECLARATION = "qcsd-resource-domain-Tamaraw-initial16-condition-amendment-declaration-v1"
+T16_STRATA = "qcsd-resource-domain-Tamaraw-initial8192-initial16-science-strata-v1"
+T16_CHANGE = "Tamaraw-initial8192-to-initial16-Native139-condition-v1"
+T16_AMENDMENT = "prospective same-host frozen20 Tamaraw initial8192-to-initial16; genuine Native139; separately labelled full science; original shared400, members and qualifying history unchanged"
+
+
+def _t16_science(old):
+    """Only the explicit initial stream credit and its policy/hash may change."""
+    from . import tamaraw_fixed_configuration as t
+    try:
+        settings = old["settings"]
+        if (len(old["urls"]) != 20 or len(set(old["urls"])) != 20
+                or old["policies"].get(t.FIELD) != t.POLICY
+                or not _same(settings["policies"], old["policies"])
+                or settings["configuration_sha256"] != t.configuration_sha256()
+                or not _same(settings["resolved_configuration"], t.resolved_configuration())
+                or not _same([settings["timeout_seconds"], settings["capture_seconds"]], [120, 180])):
+            raise ValueError("initial16 requires exact original fixed8192 Tamaraw science")
+        result = deepcopy(old)
+        result["policies"][t.FIELD] = t.INITIAL16_POLICY
+        result["settings"].update(configuration_sha256=t.configuration_sha256(selected_policy=t.INITIAL16_POLICY),
+            resolved_configuration=t.resolved_configuration(selected_policy=t.INITIAL16_POLICY),
+            policies=deepcopy(result["policies"]))
+        return result
+    except (KeyError, TypeError) as error:
+        raise ValueError("initial16 original science is malformed") from error
+
+
+def _t16_pair(old_cell, new_cell, transition):
+    from .tamaraw_fixed_configuration import INITIAL16_NATIVE
+    if (old_cell["hostname"] != new_cell["hostname"] or old_cell["mode"] != "tamaraw"
+            or new_cell["mode"] != "tamaraw" or new_cell["definition"]["native"][2] != INITIAL16_NATIVE
+            or new_cell["definition"]["ready"] is not True
+            or not _same(_t16_science(_science(old_cell, transition)), _science(new_cell, transition))):
+        raise ValueError("initial16 changes another cell, Native, resources, settings or acceptance")
+
+
+def _t16_strata(old, science, member_id):
+    if (old["mode"] != "tamaraw" or "science_strata" in old or "condition_strata" in old
+            or "resource_versions" in old or "semantic_refusals" in old
+            or not _same(_t16_science(old["science"]), science)):
+        raise ValueError("initial16 requires one exact ordinary Tamaraw condition transition")
+    return {"record_type": T16_STRATA, "schema_version": 1, "shared_quota": 400,
+        "strata": [{"condition": "original-initial8192", "science": deepcopy(old["science"]),
+                    "members": [member["cohort_id"] for member in old["members"]]},
+                   {"condition": T16_CHANGE, "science": deepcopy(science), "members": [member_id]}]}
+
+
+def _t16_condition_sciences(entry):
+    value = entry["condition_strata"]
+    if (set(entry) != {"hostname", "mode", "science", "members", "writer", "condition_strata"}
+            or entry["mode"] != "tamaraw" or type(value) is not dict
+            or set(value) != {"record_type", "schema_version", "shared_quota", "strata"}
+            or value["record_type"] != T16_STRATA or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or type(value["shared_quota"]) is not int or value["shared_quota"] != 400
+            or type(value["strata"]) is not list or len(value["strata"]) != 2):
+        raise ValueError("initial16 requires the exact typed two-condition shared400 ledger")
+    assigned, sciences = [], {}
+    for stratum, label in zip(value["strata"], ("original-initial8192", T16_CHANGE)):
+        if (type(stratum) is not dict or set(stratum) != {"condition", "science", "members"}
+                or stratum["condition"] != label or type(stratum["members"]) is not list or not stratum["members"]
+                or any(type(identity) is not str for identity in stratum["members"])):
+            raise ValueError("initial16 condition member schema differs")
+        assigned.extend(stratum["members"])
+        sciences.update({identity: stratum["science"] for identity in stratum["members"]})
+    if (len(assigned) != len(set(assigned)) or assigned != [member["cohort_id"] for member in entry["members"]]
+            or entry["writer"] not in value["strata"][1]["members"]
+            or not _same(_t16_science(value["strata"][0]["science"]), value["strata"][1]["science"])
+            or not _same(entry["science"], value["strata"][1]["science"])):
+        raise ValueError("initial16 rewrites full science, member history or current writer")
+    return sciences
+
+
+def _t16_declaration_value(parent, prior, affected, retained_digest, contract):
+    value = _cs180_declaration_value(parent, prior, affected, retained_digest, contract)
+    value.update(record_type=T16_DECLARATION, methodology_amendment=T16_AMENDMENT)
+    return value
+
+
+def _validate_t16_declaration(value, expected):
+    # Exact fields, explicit approval and unchanged full ancestry, not Native-only compatibility.
+    _validate_cs180_declaration(value, expected)
+
+
+def _t16_declaration(parent, new, records, hosts, modes):
+    e = _epochs()
+    if (len(hosts) != 1 or modes != ["tamaraw"] or not records or records[-1].get("class_transition") is None
+            or hosts[0] not in records[-1]["class_transition"]["class_selection"]["selected_hostnames"]):
+        raise ValueError("initial16 requires exactly one existing selected50 Tamaraw cell")
+    cells = {e._key(cell): cell for cell in records[-1]["cells"]}; key = hosts[0], "tamaraw"
+    if key not in cells: raise ValueError("initial16 cannot introduce a first mode")
+    old, candidate = cells[key], e._cell(new, *key)
+    _t16_pair(old, candidate, records[-1]["class_transition"])
+    contract = verifier_contract()
+    registry = records[-1]["cohorts"] if records[-1]["record_type"] == ADMISSION else _initial_registry(records[-1], contract)
+    entry = _entry(registry, key)
+    _t16_strata(entry, _science(candidate, records[-1]["class_transition"]), "prospective-member")
+    affected = [{"hostname": key[0], "mode": key[1], "previous_definition_sha256": old["definition_sha256"],
+                 "new_definition_sha256": candidate["definition_sha256"]}]
+    return _t16_declaration_value(parent, records[-1], affected, e._sha(_manifest(registry)), contract)
+
+
+def tamaraw16_template(parent, cohort_root, *, affected_hostnames=(), affected_modes=()):
+    e = _epochs(); parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
+    with e._lock(parent.root):
+        return _t16_declaration(parent, new, e._records(parent), list(affected_hostnames), list(affected_modes))
+
+
+def create_tamaraw16_condition(parent, cohort_root, declaration_path, declaration_sha256):
+    return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=False, tamaraw16=True)
 
 
 def _cs180_science(old):
@@ -1479,6 +1596,8 @@ def _cs180_strata(old,science,member_id):
 
 def _condition_sciences(entry):
     value=entry["condition_strata"]
+    if type(value) is dict and value.get("record_type") == T16_STRATA:
+        return _t16_condition_sciences(entry)
     if (set(entry)!={"hostname","mode","science","members","writer","condition_strata"}
             or (entry["hostname"],entry["mode"])!=("angkanet26.com","cs-buflo")
             or type(value) is not dict or set(value)!={"record_type","schema_version","shared_quota","strata"}
@@ -1588,6 +1707,9 @@ def _budget_strata(old, science, member_id):
 
 def _stratum_sciences(entry):
     """Validate the closed ledger, retaining every historical full science value."""
+    if "pending_retirements" in entry:
+        from .resource_study_semantic_refusals import pending10_member_sciences
+        return pending10_member_sciences(entry)
     if "semantic_refusals" in entry:
         from .resource_study_semantic_refusals import member_sciences
         return member_sciences(entry)
@@ -1798,6 +1920,41 @@ def _cs180_input_declaration(prior):
         "scientific_credit":False}
 
 
+def _t16_input_declaration(prior, hostname):
+    from . import tamaraw_fixed_configuration as t
+    _hostname(hostname)
+    if (prior.get("class_transition") is None
+            or hostname not in prior["class_transition"]["class_selection"]["selected_hostnames"]):
+        raise ValueError("initial16 requires an existing selected50 host")
+    cells = [cell for cell in prior["cells"] if (cell["hostname"], cell["mode"]) == (hostname, "tamaraw")]
+    if len(cells) != 1: raise ValueError("initial16 preparation requires one existing Tamaraw writer")
+    cell = cells[0]; _t16_science(_science(cell, prior["class_transition"]))
+    if prior.get("record_type") == ADMISSION:
+        entry = _entry(prior["cohorts"], (hostname, "tamaraw"))
+        if set(entry) != {"hostname", "mode", "science", "members", "writer"}:
+            raise ValueError("initial16 cannot combine resource, budget, semantic or prior condition amendments")
+    return {"record_type": "qcsd-Tamaraw-initial16-prospective-preparation-intent-v1", "schema_version": 1,
+        "policy": t.INITIAL16_POLICY, "hostname": hostname, "mode": "tamaraw",
+        "previous_definition_sha256": cell["definition_sha256"], "workload_sha256": cell["definition"]["workload_sha256"],
+        "native_commit": t.INITIAL16_NATIVE, "shared_quota": 400, "scientific_credit": False}
+
+
+def require_tamaraw_preparation(store, hostname, selected_policy):
+    """Check actual old head and explicit condition intent before network preparation."""
+    from . import tamaraw_fixed_configuration as t
+    selected = t.POLICY if selected_policy is None else t.validate_policy(selected_policy)
+    path = store.root / INPUT_CONTEXT
+    if not path.exists() and not path.is_symlink():
+        if selected == t.INITIAL16_POLICY: raise ValueError("initial16 needs an initialized actual-parent condition context")
+        return
+    context, _ = _input_context(store.root, store.plan())
+    intent = context.get("tamaraw16_condition")
+    if intent is not None or selected == t.INITIAL16_POLICY:
+        _require_current_input_context(context)
+        if (selected != t.INITIAL16_POLICY or not _same(intent, _t16_input_declaration(context["predecessor"], hostname))):
+            raise ValueError("initial16 preparation differs from its exact old-parent one-cell intent")
+
+
 def _input_context(root, plan):
     """Local immutable input proof only; never construct a Store or query SQL."""
     from .resource_study_selection import _read
@@ -1811,6 +1968,9 @@ def _input_context(root, plan):
               "predecessor_sha256", "class_selection_sha256", "source_sha256", "scientific_credit"}
     if type(value) is dict and "cs180_condition" in value:
         fields.add("cs180_condition")
+    if type(value) is dict and "tamaraw16_condition" in value:
+        fields.add("tamaraw16_condition")
+        if "cs180_condition" in value: raise ValueError("distinct science amendments cannot share a preparation root")
     prior = value.get("predecessor", {}) if type(value) is dict else {}
     transition = prior.get("class_transition") if type(prior) is dict else None
     parent = value.get("parent", {}) if type(value) is dict else {}
@@ -1834,6 +1994,10 @@ def _input_context(root, plan):
         raise ValueError("runtime-cohort local input context root/source/map/predecessor differs")
     if "cs180_condition" in value and not _same(value["cs180_condition"],_cs180_input_declaration(prior)):
         raise ValueError("CS180 input intent changes original parent cell, policy or full scope")
+    if "tamaraw16_condition" in value:
+        intent = value["tamaraw16_condition"]
+        if type(intent) is not dict or not _same(intent, _t16_input_declaration(prior, intent.get("hostname"))):
+            raise ValueError("initial16 input intent changes actual parent cell or full science scope")
     return value, hashlib.sha256(raw).hexdigest()
 
 
@@ -1949,6 +2113,17 @@ def validate_input_authority(store, enrollment, *, plan):
         workload=CS180_WORKLOAD
     elif selected_cs is not None:
         raise ValueError("CS180 enrollment lacks explicit original-parent condition input intent")
+    from . import tamaraw_fixed_configuration as t
+    selected_tamaraw = enrollment.get("mode_policies", {}).get("tamaraw", {}).get(t.FIELD)
+    t16_intent = context.get("tamaraw16_condition")
+    if t16_intent is not None:
+        if (selected_tamaraw != t.INITIAL16_POLICY
+                or not _same(t16_intent, _t16_input_declaration(context["predecessor"], host))
+                or enrollment.get("runtime", {}).get("native_commit") != t.INITIAL16_NATIVE
+                or enrollment.get("runtime", {}).get("source", {}).get("neqo_commit") != t.INITIAL16_NATIVE):
+            raise ValueError("initial16 enrollment lacks its exact Native139 old-parent condition authority")
+    elif selected_tamaraw == t.INITIAL16_POLICY:
+        raise ValueError("initial16 enrollment lacks explicit actual-parent preparation intent")
     if (not _same(enrollment.get("urls"), definition["urls"])
             or enrollment.get("workload_sha256") != workload
             or not _same(definition["network"]["assignment"], plan["class_network"]["assignments"][host])):
@@ -1978,7 +2153,8 @@ def input_authority_artifact_paths(enrollment):
     return {"runtime_cohort_input_context": INPUT_CONTEXT}
 
 
-def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None):
+def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None,
+                      tamaraw_initial16_hostname=None):
     """Freeze current plan, catalogue and reserve inputs in a fresh empty ledger.
 
     Preparation/enrollment are separate original live operations. This copies
@@ -1999,6 +2175,9 @@ def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None):
             from .resource_study_native import cs_duration_policy
             cs_duration_policy(cs_buflo_duration_policy)
             _cs180_input_declaration(current[-1])
+        if tamaraw_initial16_hostname is not None:
+            if cs_buflo_duration_policy is not None: raise ValueError("initial16 cannot combine another science amendment")
+            _t16_input_declaration(current[-1], tamaraw_initial16_hostname)
         roots = ({m["cell"]["root"] for entry in current[-1]["cohorts"] for m in entry["members"]}
                  if current[-1]["record_type"] == ADMISSION else {c["root"] for c in current[-1]["cells"]})
         candidates = [StudyStore(path) for path in sorted(roots)]
@@ -2032,6 +2211,8 @@ def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None):
             "scientific_credit": False}
         if cs_buflo_duration_policy is not None:
             context["cs180_condition"]=_cs180_input_declaration(current[-1])
+        if tamaraw_initial16_hostname is not None:
+            context["tamaraw16_condition"] = _t16_input_declaration(current[-1], tamaraw_initial16_hostname)
         _create(root / INPUT_CONTEXT, canonical_json(context))
         _, context_sha = _input_context(root, plan)
         return {"record_type": "qcsd-resource-domain-runtime-cohort-initialization-v1",
@@ -2141,7 +2322,7 @@ def create_first_modes(parent, cohort_root, declaration_path, declaration_sha256
     return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=True)
 
 
-def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False, cover=False, condition=False):
+def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False, cover=False, condition=False, tamaraw16=False):
     e = _epochs()
     from .resource_study_lineage import prepare_fences, publication_scope, validate_cells, no_retired_history
     parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
@@ -2160,6 +2341,13 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
             raise ValueError("CS180 admission lacks its original actual-parent preparation intent")
         if not condition and "cs180_condition" in context:
             raise ValueError("CS180 initialized root requires explicit condition admission")
+        if tamaraw16:
+            intent = context.get("tamaraw16_condition")
+            if (type(intent) is not dict or not _same(intent, _t16_input_declaration(records[-1], intent.get("hostname")))
+                    or first or budget or cover or condition):
+                raise ValueError("initial16 needs its exact actual-parent intent and separate condition admission")
+        elif "tamaraw16_condition" in context:
+            raise ValueError("initial16 initialized root requires explicit condition admission")
         hosts = sorted({row["hostname"] for row in declaration["affected"]})
         modes = sorted({row["mode"] for row in declaration["affected"]})
         if condition and (first or budget or cover):
@@ -2167,8 +2355,8 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
         if cover and (first or budget):
             raise ValueError("cover replacement cannot combine first-mode or budget authority")
         if first and budget: raise ValueError("budget amendment cannot introduce a first mode")
-        expected = (_cs180_declaration if condition else _cover_declaration if cover else _budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
-        (_validate_cs180_declaration if condition else _validate_cover_declaration if cover else _validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
+        expected = (_t16_declaration if tamaraw16 else _cs180_declaration if condition else _cover_declaration if cover else _budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
+        (_validate_t16_declaration if tamaraw16 else _validate_cs180_declaration if condition else _validate_cover_declaration if cover else _validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
         current_plans = [StudyStore(root).plan() for root in
                          sorted({c["root"] for c in records[-1]["cells"]})]
         if not any("class_selection" in plan and _same(e._plan(new), plan) for plan in current_plans):
@@ -2204,9 +2392,9 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
             previous["frozen_accepted"] = {"path": relative, "sha256": e._sha(frozen)}
             candidate = e._cell(new, *key)
             member = _member(candidate, declaration["verifier"])
-            if condition:
+            if condition or tamaraw16:
                 science = _science(candidate, records[-1]["class_transition"])
-                entry["condition_strata"] = _cs180_strata(entry, science, member["cohort_id"])
+                entry["condition_strata"] = (_t16_strata if tamaraw16 else _cs180_strata)(entry, science, member["cohort_id"])
                 entry["science"] = science
             elif budget:
                 if "resource_versions" in entry:
@@ -2234,7 +2422,7 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
                 _create(store.root / MARKER, canonical_json(value))
             markers[root] = e._sha(value)
         value = {"record_type": ADMISSION, "sequence": len(records), "previous_sha256": e._sha(records[-1]),
-                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": CS180_CHANGE if condition else COVER_CHANGE if cover else "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
+                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": T16_CHANGE if tamaraw16 else CS180_CHANGE if condition else COVER_CHANGE if cover else "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
                  "affected": [[row["hostname"], row["mode"]] for row in declaration["affected"]],
                  "cells": [cells[key] for key in sorted(cells)], "exclusions": records[-1]["exclusions"],
                  "class_transition": records[-1]["class_transition"], "write_fences": fences,
@@ -2259,6 +2447,9 @@ def _validate_record(parent, records, value, *, contract=None):
     contract = verifier_contract() if contract is None else contract
     qualified = reader_compatibility.qualify_execution(verifier_contract())
     reader_compatibility.require_supported(contract, qualified)
+    if type(value) is dict and value.get("change") == "unqualified-historical-target-retirement-exact10-v1":
+        from .resource_study_semantic_refusals import pending10_validate_record
+        return pending10_validate_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == "scientific-refusal-retirement-CS211-three-v1":
         from .resource_study_semantic_refusals import validate_record
         return validate_record(parent, records, value, contract)
@@ -2271,13 +2462,14 @@ def _validate_record(parent, records, value, *, contract=None):
     if type(value) is dict and value.get("change") == "first-mode":
         return _validate_first_record(parent, records, value, contract)
     condition = type(value) is dict and value.get("change") == CS180_CHANGE
+    tamaraw16 = type(value) is dict and value.get("change") == T16_CHANGE
     budget = type(value) is dict and value.get("change") == "buflo-duration-budget"
     fields = {"record_type", "sequence", "previous_sha256", "parent_study_sha256", "change", "affected", "cells",
               "exclusions", "class_transition", "write_fences", "cohorts", "cohort_memberships", "compatibility_declaration"}
     prior = records[-1]
     if (type(value) is not dict or set(value) != fields or value["record_type"] != ADMISSION
             or type(value["sequence"]) is not int or value["sequence"] != len(records)
-            or value["previous_sha256"] != e._sha(prior) or value["change"] != (CS180_CHANGE if condition else "buflo-duration-budget" if budget else "runtime-cohort")
+            or value["previous_sha256"] != e._sha(prior) or value["change"] != (T16_CHANGE if tamaraw16 else CS180_CHANGE if condition else "buflo-duration-budget" if budget else "runtime-cohort")
             or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
             or not _same(value["class_transition"], prior.get("class_transition"))
             or value["class_transition"] is None or not _same(value["exclusions"], prior["exclusions"])):
@@ -2324,7 +2516,12 @@ def _validate_record(parent, records, value, *, contract=None):
             raise ValueError("budget amendment cannot change another mode")
         expected = _budget_declaration_value(parent, prior, declaration["affected"],
             declaration["retained_accepted_manifest_sha256"], contract)
-    (_validate_cs180_declaration if condition else _validate_budget_declaration if budget else _validate_declaration)(declaration, expected)
+    if tamaraw16:
+        if len(affected) != 1 or next(iter(affected))[1] != "tamaraw":
+            raise ValueError("initial16 cannot change another logical cell")
+        key = next(iter(affected)); _t16_pair(old_cells[key], new_cells[key], value["class_transition"])
+        expected = _t16_declaration_value(parent, prior, declaration["affected"], declaration["retained_accepted_manifest_sha256"], contract)
+    (_validate_t16_declaration if tamaraw16 else _validate_cs180_declaration if condition else _validate_budget_declaration if budget else _validate_declaration)(declaration, expected)
     for key, entry in new_entries.items():
         old = old_entries[key]
         if key not in affected:
@@ -2332,17 +2529,21 @@ def _validate_record(parent, records, value, *, contract=None):
                 raise ValueError("runtime cohort changed an unaffected cell")
             continue
         expected_fields = {"hostname", "mode", "science", "members", "writer"}
+        if "pending_retirements" in old:
+            expected_fields.add("pending_retirements")
+            if not _same(entry["pending_retirements"], old["pending_retirements"]):
+                raise ValueError("Native-only cohort rewrites immutable unqualified-history retirement")
         if "semantic_refusals" in old:
             expected_fields.add("semantic_refusals")
             if not _same(entry["semantic_refusals"], old["semantic_refusals"]):
                 raise ValueError("Native-only cohort rewrites immutable semantic-refusal history")
-        if condition or "condition_strata" in old: expected_fields.add("condition_strata")
+        if condition or tamaraw16 or "condition_strata" in old: expected_fields.add("condition_strata")
         if budget or "science_strata" in old: expected_fields.add("science_strata")
         if "resource_versions" in old:
             if budget: raise ValueError("resource-version and budget changes need separate explicit authority")
             expected_fields.add("resource_versions")
         if (set(entry) != expected_fields
-                or not (budget or condition) and not _same(entry["science"], old["science"])
+                or not (budget or condition or tamaraw16) and not _same(entry["science"], old["science"])
                 or len(entry["members"]) != len(old["members"])+1):
             raise ValueError("runtime cohort changes logical science or member ancestry")
         for before, after in zip(old["members"], entry["members"][:-1]):
@@ -2356,11 +2557,11 @@ def _validate_record(parent, records, value, *, contract=None):
         candidate = new_cells[key]
         if (not _same(member, _member(candidate, declaration["verifier"]))
                 or entry["members"][-1] is not member or not _same(entry["science"], _science(candidate, value["class_transition"]))
-                or not budget and _same(candidate["definition"]["native"], old_cells[key]["definition"]["native"])
+                or not (budget or tamaraw16) and _same(candidate["definition"]["native"], old_cells[key]["definition"]["native"])
                 or candidate["definition"]["ready"] is not True):
             raise ValueError("runtime cohort writer/Native/ready identity differs")
-        if condition:
-            expected_strata = _cs180_strata(old, entry["science"], member["cohort_id"])
+        if condition or tamaraw16:
+            expected_strata = (_t16_strata if tamaraw16 else _cs180_strata)(old, entry["science"], member["cohort_id"])
             if not _same(entry["condition_strata"], expected_strata):
                 raise ValueError("CS180 rewrites historical condition science strata")
         elif "condition_strata" in old:
@@ -2844,8 +3045,8 @@ def status(parent, *, deep=False, verification_workers=1):
 
         if not _same(contract, verifier_contract()):
             raise ValueError("raw verifier source changed before all cohort workers joined")
-        from .resource_study_semantic_refusals import status_projection
-        return status_projection(current, result)
+        from .resource_study_semantic_refusals import status_projection, pending10_status_projection
+        return pending10_status_projection(current, status_projection(current, result))
 
 
 RESOURCE_CHANGE = "resource-version-retirement"
@@ -3157,6 +3358,18 @@ def semantic_refusal_template(parent, cohort_root, *, evidence_path, evidence_sh
 def create_semantic_refusal(parent, cohort_root, declaration_path, declaration_sha256):
     from .resource_study_semantic_refusals import create
     return create(parent, cohort_root, declaration_path, declaration_sha256)
+
+
+def pending10_retirement_template(parent, cohort_root, *, evidence_path, evidence_sha256, parent_transfer_path, parent_transfer_sha256, rationale):
+    """Exact D-only methodological retirement; no trace-invalidity or credit claim."""
+    from .resource_study_semantic_refusals import pending10_template
+    return pending10_template(parent, cohort_root, evidence_path=evidence_path, evidence_sha256=evidence_sha256,
+        parent_transfer_path=parent_transfer_path, parent_transfer_sha256=parent_transfer_sha256, rationale=rationale)
+
+
+def create_pending10_retirement(parent, cohort_root, declaration_path, declaration_sha256):
+    from .resource_study_semantic_refusals import pending10_create
+    return pending10_create(parent, cohort_root, declaration_path, declaration_sha256)
 
 
 RESOURCE_CHANGE_V2 = "Fonts-all5-aggregate8-to-ordinary5-resource-version-retirement-v2"

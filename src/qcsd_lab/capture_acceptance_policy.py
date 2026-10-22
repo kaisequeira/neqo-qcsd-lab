@@ -161,7 +161,7 @@ def validate_terminal_primary_capture_marker(marker: Any, *, cell_size: int) -> 
 
 
 def terminal_primary_capture_cell_size(run: Mapping[str, Any], *, tamaraw_configuration_policy: str | None = None) -> int:
-    from .tamaraw_fixed_configuration import validate_policy, validate_run
+    from .tamaraw_fixed_configuration import validate_policy, validate_run, resolved_configuration
     fixed_tamaraw = validate_policy(tamaraw_configuration_policy)
     validate_run(run, selected_policy=fixed_tamaraw)
     resolved = run.get("resolved_configuration")
@@ -181,7 +181,7 @@ def terminal_primary_capture_cell_size(run: Mapping[str, Any], *, tamaraw_config
         or type(resolved.get("max_udp_payload_size")) is not int or cell > resolved["max_udp_payload_size"]
         or type(resolved.get("control_interval_us")) is not int or resolved["control_interval_us"] != 5000
         or resolved.get("drop_unsatisfied_events") is not False
-        or type(resolved.get("initial_max_stream_data")) is not int or resolved["initial_max_stream_data"] != (8192 if fixed_tamaraw is not None else 16)
+        or type(resolved.get("initial_max_stream_data")) is not int or resolved["initial_max_stream_data"] != (resolved_configuration(selected_policy=fixed_tamaraw)["initial_max_stream_data"] if fixed_tamaraw is not None else 16)
         or type(resolved.get("max_stream_data_excess")) is not int or resolved["max_stream_data_excess"] != 1000
         or run.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
         or run.get("application_response_policy") != "completed-terminal-http-errors-v1"):
