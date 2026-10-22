@@ -1138,6 +1138,8 @@ def _same_native_runtime(prepared: Any, actual: Mapping[str, Any]) -> bool:
 def _enrollment(directory: str | Path, hostname: str, runtime: Mapping[str, Any]) -> tuple[Path, dict[str, Any]]:
     root = Path(os.path.abspath(directory))
     enrollment = _object(root / "enrollment.json")
+    if RETAINED_MODE_KEY in enrollment:
+        return _retained_native_enrollment(root, hostname, runtime)
     canonical_host = urlsplit(native_manifest(hostname, [f"https://{hostname}/"], require_twenty=False)
                               ["resources"][0]["url"]).hostname
     from . import buflo_duration_budget as buflo
@@ -1286,7 +1288,8 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
 
 def capture_session(hostname: str, mode: str, enrollment_dir: str | Path,
                     attempt_dir: str | Path, *, seed: int,
-                    runtime: Mapping[str, Any], client: str | Path = DEFAULT_CLIENT) -> dict[str, Any]:
+                    runtime: Mapping[str, Any], client: str | Path = DEFAULT_CLIENT,
+                    retained_readiness_core_sha256: str | None = None) -> dict[str, Any]:
     """Collect one fresh connection; return actual artifacts, never a receipt.
 
     The observer and scheduler environment must already satisfy the unchanged
@@ -1296,12 +1299,18 @@ def capture_session(hostname: str, mode: str, enrollment_dir: str | Path,
     if mode not in MODES or type(seed) is not int or not 0 <= seed < 2**64:
         raise ValueError("capture mode or u64 seed is invalid")
     executable, bound = _runtime(runtime, client)
-    root, enrollment = _enrollment(enrollment_dir, hostname, bound)
+    if retained_readiness_core_sha256 is None:
+        root, enrollment = _enrollment(enrollment_dir, hostname, bound)
+    else:
+        root, enrollment = _retained_native_enrollment(enrollment_dir, hostname, bound,
+            readiness_core_sha256=retained_readiness_core_sha256)
     from . import capture_session as collector
     if _regular(collector.NEQO_CLIENT) != executable:
         raise ValueError("collector executable differs; set NEQO_QCSD_CLIENT before import")
     if enrollment["mode_readiness"].get(mode) is not True:
-        raise ValueError("mode has no actual preparation/response-chaff qualification")
+        if (retained_readiness_core_sha256 is None or mode != 'buflo'
+                or RETAINED_MODE_KEY not in enrollment):
+            raise ValueError("mode has no actual preparation/response-chaff qualification")
     attempt = Path(os.path.abspath(attempt_dir))
     if (attempt.exists() or any(parent.is_symlink() for parent in (attempt, *attempt.parents))
             or attempt == root or attempt.is_relative_to(root) or root.is_relative_to(attempt)):
@@ -1310,6 +1319,10 @@ def capture_session(hostname: str, mode: str, enrollment_dir: str | Path,
     prepared = root / enrollment["paths"]["prepared_workload"]
     chaff_key = "buflo_chaff_manifest" if mode == "buflo" and (
         "buflo_chaff_selection" in enrollment or "buflo_small_response_aggregate_selection" in enrollment) else "chaff_manifest"
+    if RETAINED_MODE_KEY in enrollment:
+        checked_retained = retained_mode_assets(root, enrollment,
+            provisional=retained_readiness_core_sha256 is not None)
+        chaff_key = checked_retained['chaff_key']
     chaff = root / enrollment["paths"][chaff_key] if mode != "undefended" else None
     defense, context = _capture_inputs(mode, root, enrollment)
     result = collector._collect_attempt(attempt, manifest, chaff, hostname, defense, seed, context,
@@ -1319,7 +1332,11 @@ def capture_session(hostname: str, mode: str, enrollment_dir: str | Path,
     try:
         if sha256_file(executable) != bound["client_sha256"]:
             raise ValueError("Native executable changed during capture")
-        _enrollment(root, hostname, bound)
+        if retained_readiness_core_sha256 is None:
+            _enrollment(root, hostname, bound)
+        else:
+            _retained_native_enrollment(root, hostname, bound,
+                readiness_core_sha256=retained_readiness_core_sha256)
         checked = inspect_completed_run(_object(attempt / "neqo/run.json"), _object(manifest),
             manifest_sha256=enrollment["workload_sha256"], max_response_bytes=MAX_RESPONSE_BYTES,
             native_commit=bound["native_commit"], seed=seed)
@@ -1411,6 +1428,351 @@ def main(argv: list[str] | None = None) -> int:
     result = function(**job)
     sys.stdout.buffer.write(canonical_json(result))
     return 0
+
+
+# Distinct prospective preparation protocol. Historical qualification is never
+# rebound to another runtime, and this record grants no formal session credit.
+RETAINED_MODE_INPUT = 'qcsd-resource-domain-retained-parameter-mode-input-v1'
+RETAINED_MODE_CORE = 'qcsd-resource-domain-retained-parameter-mode-core-v1'
+RETAINED_MODE_BINDING = 'qcsd-resource-domain-retained-parameter-mode-preparation-v1'
+RETAINED_MODE_RESULT = 'qcsd-resource-domain-retained-parameter-mode-readiness-result-v1'
+RETAINED_MODE_KEY = 'retained_parameter_preparation'
+
+
+def retained_mode_read(path: Path, digest: str | None = None, *, observations=None, canonical_runtime=False) -> bytes:
+    """Read one immutable local regular file through one FD and fence its name."""
+    import stat
+    path = Path(path)
+    if (not path.is_absolute() or str(path) != os.path.abspath(path)
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ValueError('retained parameter path is not canonical and nonsymlink')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(fd)
+        def stamp(s):
+            return (s.st_dev, s.st_ino, s.st_uid, s.st_gid, s.st_nlink,
+                    s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) not in ((0o444, 0o644) if canonical_runtime else (0o444,))
+                or not 0 < before.st_size <= 32 * 1024 ** 2):
+            raise ValueError('retained parameter file is not immutable, owned and bounded')
+        pieces = []
+        while True:
+            block = os.read(fd, 1024 * 1024)
+            if not block:
+                break
+            pieces.append(block)
+        raw = b''.join(pieces)
+        if (stamp(before) != stamp(os.fstat(fd)) or stamp(before) != stamp(path.lstat())
+                or any(p.is_symlink() for p in (path, *path.parents))
+                or len(raw) != before.st_size
+                or digest is not None and hashlib.sha256(raw).hexdigest() != digest):
+            raise ValueError('retained parameter file or path changed')
+        if observations is not None:
+            if type(observations) is not dict:
+                raise ValueError('foreign retained parameter observation ledger')
+            observations[str(path)] = (path, *stamp(before))
+        return raw
+    finally:
+        os.close(fd)
+
+
+def _retained_ref(value):
+    if (type(value) is not dict or set(value) != {'path', 'sha256'}
+            or type(value['path']) is not str or type(value['sha256']) is not str
+            or _SHA256.fullmatch(value['sha256']) is None):
+        raise ValueError('retained parameter reference must have exact path and SHA')
+    return Path(value['path']), value['sha256']
+
+
+def _retained_relative(value):
+    if (type(value) is not str or not value or Path(value).is_absolute()
+            or '..' in Path(value).parts or Path(value).as_posix() != value):
+        raise ValueError('retained parameter relative path differs')
+    return value
+
+
+def _retained_runtime(runtime):
+    fields = {'canonical_sha256', 'client_sha256', 'native_commit', 'platform',
+              'collection_image_digest', 'prepare_image_digest', 'source'}
+    if (type(runtime) is not dict or set(runtime) != fields
+            or type(runtime.get('native_commit')) is not str
+            or _COMMIT.fullmatch(runtime['native_commit']) is None
+            or runtime.get('platform') != 'linux/arm64'
+            or type(runtime.get('source')) is not dict
+            or runtime['source'].get('neqo_commit') != runtime['native_commit']
+            or runtime['source'].get('neqo_dirty') is not False
+            or runtime['source'].get('lab_dirty') is not False
+            or any(type(runtime.get(key)) is not str or _SHA256.fullmatch(runtime[key]) is None
+                   for key in ('canonical_sha256', 'client_sha256'))
+            or any(type(runtime.get(key)) is not str
+                   or re.fullmatch(r'sha256:[0-9a-f]{64}', runtime[key]) is None
+                   for key in ('collection_image_digest', 'prepare_image_digest'))):
+        raise ValueError('retained-mode readiness requires the exact complete input-bound runtime')
+    return runtime
+
+
+def _retained_old_assets(old_root, old, science):
+    """Validate historical launch bytes as historical, not new qualification."""
+    if (type(old) is not dict or old.get('role') != ROLE or old.get('schema_version') != 1
+            or old.get('hostname') != science['hostname'] or old.get('scientific_credit') is not False
+            or type(old.get('runtime')) is not dict or type(old.get('files')) is not dict
+            or type(old.get('paths')) is not dict
+            or old.get('urls') != science['urls'] or len(old['urls']) != 20
+            or len(set(old['urls'])) != 20 or old.get('workload_sha256') != science['workload_sha256']
+            or old.get('mode_settings', {}).get('buflo') != science['settings']
+            or old.get('mode_policies', {}).get('buflo') != science['policies']
+            or 'buflo_small_response_aggregate_selection' in old):
+        raise ValueError('retained historical enrollment changes its frozen mode science')
+    # None of the historical readiness flags are promoted or rewritten here.
+    native_manifest(old['hostname'], old['urls'])
+    paths = {}
+    observed = {}
+    def observe(path, digest):
+        return retained_mode_read(path, digest, observations=observed)
+    for key, relative in old['paths'].items():
+        if relative is None:
+            paths[key] = None
+            continue
+        _retained_relative(relative)
+        digest = old['files'].get(relative)
+        if type(digest) is not str or _SHA256.fullmatch(digest) is None:
+            raise ValueError('historical launch asset has no enrollment digest')
+        observe(old_root / relative, digest)
+        paths[key] = old_root / relative
+    for key in ('manifest', 'prepared_workload', 'buflo_parameters', 'front_config',
+                'tamaraw_config', 'cs_buflo_parameters'):
+        if paths.get(key) is None:
+            raise ValueError('historical fixed launch asset is absent')
+    if (hashlib.sha256(retained_mode_read(paths['manifest'])).hexdigest() != science['workload_sha256']
+            or _object(paths['manifest'])['resources'] != _object(paths['prepared_workload'])['resources']
+            or [r['url'] for r in _object(paths['manifest'])['resources']] != science['urls']):
+        raise ValueError('historical prepared workload differs from exact frozen twenty')
+    policies = science['policies']
+    from . import buflo_duration_budget as buflo
+    selected = buflo.preparation_policy(policies.get('buflo_duration_policy'))
+    if selected != buflo.CADENCE64_POLICY:
+        raise ValueError('retained-mode v1 preserves only original64ms640s BuFLO')
+    if _mode_settings(paths, buflo_duration_policy=selected)['buflo'] != science['settings']:
+        raise ValueError('retained BuFLO parameters/settings are not the exact fixed policy')
+    if 'buflo_chaff_selection' in old:
+        checked = validate_buflo_capped_enrollment(old_root, old)
+        if checked is None:
+            raise ValueError('historical capped launch asset is absent; no fallback to generic')
+        chaff_key = 'buflo_chaff_manifest'
+        historical_binding = checked
+    else:
+        if paths.get('chaff_core') is None or paths.get('chaff_manifest') is None:
+            raise ValueError('historical same-host generic chaff assets are absent')
+        manifest = _object(paths['chaff_manifest'])
+        core = _object(paths['chaff_core'])
+        from . import chaff_qualification as chaff
+        prepared = _object(paths['prepared_workload'])
+        base_sha = sha256_file(paths['prepared_workload'])
+        evidence_path = paths['prepared_workload'].parent / 'qualification/response-qualification.json'
+        evidence_relative = evidence_path.relative_to(old_root).as_posix()
+        if evidence_relative not in old['files']:
+            raise ValueError('historical generic qualification evidence lacks its enrollment digest')
+        raw = observe(evidence_path, old['files'][evidence_relative])
+        evidence = json.loads(raw)
+        selected_id = evidence.get('selected_chaff_resource_id')
+        if (type(selected_id) is not int or not 0 <= selected_id < 20
+                or evidence.get('scientific_credit') is not False
+                or evidence.get('application_workload_sha256') != base_sha
+                or type(evidence.get('response_runs')) is not list
+                or len(evidence['response_runs']) != chaff.QUALIFICATION_RUNS):
+            raise ValueError('historical generic qualification evidence is absent or changed')
+        resource = prepared['resources'][selected_id]
+        headers = chaff.project_compact_headers(resource)
+        runs = []
+        for index in range(chaff.QUALIFICATION_RUNS):
+            path = evidence_path.parent / ('resource-%02d' % selected_id) / ('response-%d' % index) / 'native/qualification.json'
+            relative = path.relative_to(old_root).as_posix()
+            if relative not in old['files']:
+                raise ValueError('historical response receipt lacks its enrollment digest')
+            receipt = json.loads(observe(path, old['files'][relative]))
+            if chaff._receipt_neqo_provenance(receipt)['migration_commit'] != old['runtime']['native_commit']:
+                raise ValueError('historical generic qualification has foreign Native provenance')
+            runs.append(receipt)
+        expected, request_size = chaff._stable_response_identity(runs,
+            application_manifest_sha256=base_sha, application_resource_id=0,
+            selected_chaff_resource_id=selected_id, qualified_parallel_chaff_streams=5,
+            url=resource['url'], headers=headers, resource_domain_max_response_bytes=MAX_RESPONSE_BYTES)
+        records = [chaff._response_run_record(index, run) for index, run in enumerate(runs)]
+        digest = chaff.qualification_digest('qcsd-chaff-response-qualification-v2', records)
+        if (evidence['response_runs'] != records or evidence.get('expected_response') != expected
+                or evidence.get('request_stream_bytes') != request_size
+                or evidence.get('response_qualification_sha256') != digest):
+            raise ValueError('historical generic qualification does not replay its original receipts')
+        expected_core = chaff.derive_chaff_core(application_manifest_sha256=base_sha,
+            base_resource=resource, headers=headers, request_stream_bytes=request_size,
+            expected_response=expected, response_qualification_sha256=digest,
+            application_resource_id=0, selected_chaff_resource_id=selected_id,
+            qualified_parallel_chaff_streams=5, walkie_talkie_required_chaff_streams=20)
+        sidecar = {'base_manifest': {'sha256': base_sha}, 'application_resource_id': 0,
+            'selected_chaff_resource_id': selected_id, 'resource': {'headers': headers,
+            'expected_response': expected, 'request_stream_bytes': request_size,
+            'response_qualification_sha256': digest}}
+        if (canonical_json(core) != canonical_json(expected_core)
+                or canonical_json(manifest) != canonical_json(chaff.derive_response_only_chaff_manifest(sidecar, resource))):
+            raise ValueError('historical generic launch bytes are not derived by the old evidence')
+        chaff_key = 'chaff_manifest'
+        historical_binding = {'profile': 'historical-generic-response-qualified-v1',
+            'application_workload_sha256': base_sha, 'selected_chaff_resource_id': selected_id,
+            'native_manifest_sha256': sha256_file(paths[chaff_key])}
+    for item in observed.values():
+        path = item[0]; info = path.lstat()
+        now = (path, info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_nlink,
+               info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if now != item or any(p.is_symlink() for p in (path, *path.parents)):
+            raise ValueError('historical launch file/path changed during validation')
+    return {'paths': paths, 'chaff_key': chaff_key, 'historical_binding': historical_binding}
+
+
+def validate_retained_mode_input(root, runtime, input_path, input_sha256):
+    """Complete fail-before-backend validation of one declared retained-mode input."""
+    from .resource_study_cohorts import verifier_contract
+    path = Path(input_path)
+    input_raw = retained_mode_read(path, input_sha256)
+    value = json.loads(input_raw)
+    fields = {'record_type', 'schema_version', 'root', 'parent', 'hostname', 'mode',
+              'historical_root', 'historical_enrollment', 'runtime', 'science', 'seed',
+              'source_contract', 'canonical_runtime', 'resource_selection', 'scientific_credit'}
+    if (type(value) is not dict or set(value) != fields or value['record_type'] != RETAINED_MODE_INPUT
+            or type(value['schema_version']) is not int or value['schema_version'] != 1
+            or value['root'] != str(Path(root).absolute()) or value['mode'] != 'buflo'
+            or value['runtime'] != _retained_runtime(runtime) or value['scientific_credit'] is not False
+            or type(value['seed']) is not int or not 0 <= value['seed'] < 2 ** 64
+            or value['source_contract'] != verifier_contract()
+            or type(value['science']) is not dict
+            or set(value['science']) != {'hostname', 'urls', 'workload_sha256', 'settings', 'policies'}
+            or value['hostname'] != value['science']['hostname']
+            or type(value['parent']) is not dict or set(value['parent']) != {'root', 'study_sha256', 'head_sha256'}):
+        raise ValueError('retained-mode input changes explicit scope/runtime/science/Source')
+    old_root = Path(value['historical_root'])
+    old_path, old_sha = _retained_ref(value['historical_enrollment'])
+    if (not old_root.is_absolute() or old_root == Path(root).absolute()
+            or old_path != old_root / 'classes' / value['hostname'] / 'enrollment.json'):
+        raise ValueError('historical enrollment is not its exact same-host immutable root')
+    old = json.loads(retained_mode_read(old_path, old_sha))
+    checked = _retained_old_assets(old_root, old, value['science'])
+    return {'input': value, 'input_raw': input_raw, 'input_sha256': input_sha256, 'historical': old, **checked}
+
+
+def retained_mode_assets(root, enrollment, *, provisional=False):
+    """Pure current launch binding; final raw readiness is replayed at admission."""
+    binding = enrollment.get(RETAINED_MODE_KEY)
+    if (type(binding) is not dict or set(binding) != {'record_type', 'study_root', 'preparation_dir', 'core_sha256', 'readiness_sha256'}
+            or binding['record_type'] != RETAINED_MODE_BINDING):
+        raise ValueError('retained-mode preparation binding is incomplete')
+    study = Path(binding['study_root']); relative = _retained_relative(binding['preparation_dir'])
+    base = study / relative; root = Path(root).absolute()
+    if root not in (study, base):
+        raise ValueError('retained-mode enrollment has a foreign root')
+    core = json.loads(retained_mode_read(base / 'core.json', binding['core_sha256']))
+    if (type(core) is not dict or set(core) != {'record_type', 'schema_version', 'input', 'input_sha256', 'historical_enrollment_path', 'assets', 'historical_binding'}
+            or core['record_type'] != RETAINED_MODE_CORE or type(core['schema_version']) is not int or core['schema_version'] != 1
+            or core['input']['root'] != str(study)
+            or core['input']['runtime'] != _retained_runtime(enrollment.get('runtime'))
+            or core['input']['mode'] != 'buflo' or core['input']['hostname'] != enrollment.get('hostname')
+            or hashlib.sha256(retained_mode_read(base / 'input.json')).hexdigest() != core['input_sha256']
+            or json.loads(retained_mode_read(base / 'input.json')) != core['input']):
+        raise ValueError('retained-mode core/input/current runtime changed')
+    _, canonical_sha = _retained_ref(core['input']['canonical_runtime'])
+    if canonical_sha != enrollment['runtime']['canonical_sha256']:
+        raise ValueError('retained canonical reference differs from exact current runtime SHA')
+    canonical = json.loads(retained_mode_read(base / 'canonical-runtime.json', canonical_sha))
+    if (type(canonical) is not dict
+            or canonical.get('installed_client_sha256') != enrollment['runtime']['client_sha256']
+            or canonical.get('platform') != enrollment['runtime']['platform']
+            or canonical.get('collection_image_digest') != enrollment['runtime']['collection_image_digest']
+            or canonical.get('prepare_image_digest') != enrollment['runtime']['prepare_image_digest']
+            or canonical.get('source') != enrollment['runtime']['source']):
+        raise ValueError('retained canonical bytes differ from exact current runtime fields')
+    from .resource_study_cohorts import verifier_contract
+    if core['input']['source_contract'] != verifier_contract():
+        raise ValueError('retained-mode current Source contract changed')
+    old_path = base / _retained_relative(core['historical_enrollment_path'])
+    old = json.loads(retained_mode_read(old_path, core['input']['historical_enrollment']['sha256']))
+    assets = core['assets']
+    if type(assets) is not dict or not assets:
+        raise ValueError('retained-mode core lacks its frozen historical assets')
+    for old_relative, row in assets.items():
+        _retained_relative(old_relative)
+        if type(row) is not dict or set(row) != {'path', 'sha256'} or old['files'].get(old_relative) != row['sha256']:
+            raise ValueError('retained historical asset has foreign provenance')
+        retained_mode_read(base / _retained_relative(row['path']), row['sha256'])
+    # Replay historical validators in their copied original relative namespace.
+    historical_root = base / 'historical'
+    history = _retained_old_assets(historical_root, old, core['input']['science'])
+    if history['historical_binding'] != core['historical_binding']:
+        raise ValueError('retained historical parameter profile changed')
+    prefix = '' if root == base else relative + '/'
+    expected_paths = {key: prefix + 'historical/' + value if value is not None else None
+                      for key, value in old['paths'].items()}
+    science = core['input']['science']
+    if (enrollment.get('paths') != expected_paths or enrollment.get('urls') != science['urls']
+            or enrollment.get('workload_sha256') != science['workload_sha256']
+            or enrollment.get('workload_path') != expected_paths['manifest']
+            or enrollment.get('mode_settings', {}).get('buflo') != science['settings']
+            or enrollment.get('mode_policies', {}).get('buflo') != science['policies']
+            or enrollment.get('mode_readiness') != {mode: mode == 'buflo' and not provisional for mode in MODES}
+            or 'buflo_chaff_selection' in enrollment or 'buflo_small_response_aggregate_selection' in enrollment
+            or enrollment.get('scientific_credit') is not False):
+        raise ValueError('retained current enrollment changes frozen selected-mode parameters')
+    expected_files = {prefix + row['path']: row['sha256'] for row in assets.values()}
+    expected_files.update({prefix + 'core.json': binding['core_sha256'],
+        prefix + 'input.json': core['input_sha256'],
+        prefix + 'canonical-runtime.json': canonical_sha,
+        prefix + core['historical_enrollment_path']: core['input']['historical_enrollment']['sha256']})
+    for name, digest in expected_files.items():
+        if enrollment.get('files', {}).get(name) != digest:
+            raise ValueError('retained current enrollment omits an exact asset/core digest')
+    if provisional:
+        if binding['readiness_sha256'] is not None:
+            raise ValueError('pre-readiness enrollment cannot claim a later readiness result')
+    else:
+        if type(binding['readiness_sha256']) is not str or _SHA256.fullmatch(binding['readiness_sha256']) is None:
+            raise ValueError('final retained enrollment lacks positive fresh readiness')
+        result = json.loads(retained_mode_read(base / 'readiness-result.json', binding['readiness_sha256']))
+        if (set(result) != {'record_type', 'schema_version', 'core_sha256', 'runtime', 'receipt', 'flight', 'scientific_credit'}
+                or result['record_type'] != RETAINED_MODE_RESULT or type(result['schema_version']) is not int or result['schema_version'] != 1
+                or result['core_sha256'] != binding['core_sha256'] or result['runtime'] != enrollment['runtime']
+                or result['scientific_credit'] is not False
+                or enrollment['files'].get(prefix + 'readiness-result.json') != binding['readiness_sha256']):
+            raise ValueError('final retained readiness result is foreign or mutable')
+        for item in [result['receipt'], *result['flight'].values()]:
+            path, digest = _retained_ref(item)
+            if not path.is_relative_to(study):
+                raise ValueError('readiness evidence escaped its owning study')
+            retained_mode_read(path, digest)
+    return {'binding': binding, 'base': base, 'study_root': study, 'core': core,
+            'historical': old, 'chaff_key': history['chaff_key'],
+            'historical_binding': history['historical_binding']}
+
+
+def retained_mode_receipt_binding(root, enrollment, *, provisional=False):
+    value = retained_mode_assets(root, enrollment, provisional=provisional)
+    return {'record_type': RETAINED_MODE_BINDING,
+        'core_sha256': value['binding']['core_sha256'],
+        'readiness_sha256': value['binding']['readiness_sha256'],
+        'runtime': enrollment['runtime'],
+        'historical_runtime': value['historical']['runtime'],
+        'historical_enrollment_sha256': value['core']['input']['historical_enrollment']['sha256'],
+        'historical_binding': value['historical_binding'],
+        'historical_qualification_reexecuted': False}
+
+
+def _retained_native_enrollment(directory, hostname, runtime, *, readiness_core_sha256=None):
+    root = Path(os.path.abspath(directory))
+    basename = 'readiness-enrollment.json' if readiness_core_sha256 is not None else 'enrollment.json'
+    enrollment = json.loads(retained_mode_read(root / basename))
+    provisional = readiness_core_sha256 is not None
+    checked = retained_mode_assets(root, enrollment, provisional=provisional)
+    if (enrollment['hostname'] != hostname or enrollment['runtime'] != _retained_runtime(runtime)
+            or provisional and checked['binding']['core_sha256'] != readiness_core_sha256):
+        raise ValueError('retained Native enrollment differs from exact readiness/current runtime')
+    return root, enrollment
 
 
 if __name__ == "__main__":

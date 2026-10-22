@@ -465,6 +465,23 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             or type(run.get("seed")) is not int
             or "attempt_id" in receipt and run["seed"] != int(receipt["attempt_id"].replace("-", "")[:16], 16)):
         raise ValueError("Native run source or attempt seed differs from its receipt")
+    if 'retained_parameter_preparation' in enrollment:
+        from .resource_study_native import retained_mode_receipt_binding, retained_mode_assets
+        provisional = receipt.get('purpose') == 'readiness'
+        retained = retained_mode_assets(root, enrollment, provisional=provisional)
+        expected_binding = retained_mode_receipt_binding(root, enrollment, provisional=provisional)
+        if (mode != 'buflo' or receipt.get('purpose') not in {'formal', 'pilot', 'readiness'}
+                or receipt.get('scientific_credit') is not (receipt.get('purpose') == 'formal')
+                or receipt.get('retained_parameter_preparation') != expected_binding
+                or receipt.get('runtime') != enrollment['runtime']
+                or paths.get('retained_chaff_manifest') != enrollment['paths'][retained['chaff_key']]
+                or run.get('chaff_manifest_hash_sha256') != expected_binding['historical_binding']['native_manifest_sha256']
+                or run.get('application_workload_source_hash_sha256') != expected_binding['historical_binding']['application_workload_sha256']):
+            raise ValueError('retained parameter receipt has foreign purpose/runtime/launch binding')
+        from .capture_session import _validate_chaff_response_receipts
+        _validate_chaff_response_receipts(run, artifact['retained_chaff_manifest'], 'buflo')
+    elif 'retained_parameter_preparation' in receipt:
+        raise ValueError('legacy enrollment cannot claim retained-parameter readiness')
     if mode == "buflo" and "buflo_chaff_selection" in enrollment:
         from .resource_study_native import validate_buflo_capped_enrollment
         capped = validate_buflo_capped_enrollment(root, enrollment)
@@ -533,7 +550,8 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
                     router_capture_receipt=evidence["post_veth_capture"], router_packets=router_packets):
                 raise ValueError("independent kernel TX and post-veth verification failed")
     overlap = application_stream_overlap(artifact["events"]) if "events" in artifact else {}
-    if receipt.get("purpose") == "pilot" and (overlap.get("application_streams_opened") != 20
+    if (receipt.get("purpose") == "pilot" or ('retained_parameter_preparation' in enrollment
+            and receipt.get('purpose') == 'readiness')) and (overlap.get("application_streams_opened") != 20
                                                or overlap.get("maximum_open_application_streams", 0) < 2):
         raise ValueError("pilot did not demonstrate twenty multiplexed application streams")
     return {"verified": True, "five_tuple": five_tuple, "responses": 20,
@@ -543,3 +561,90 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
                 if within(root, relative).parent == artifact["pcap"].parent
                 or artifact["pcap"].parent in within(root, relative).parents),
             "duration_seconds": (run["ended_unix_ns"] - run["started_unix_ns"]) / 1e9}
+
+
+def verify_retained_mode_readiness(root, enrollment):
+    """Replay the distinct full physical readiness and original owned closure."""
+    from . import resource_study_native as n
+    checked = n.retained_mode_assets(root, enrollment)
+    base, study = checked['base'], checked['study_root']
+    result = json.loads(n.retained_mode_read(base / 'readiness-result.json',
+        checked['binding']['readiness_sha256']))
+    expected_flight = {'launched', 'closed', 'affinity_started', 'affinity_closed'}
+    if type(result['flight']) is not dict or set(result['flight']) != expected_flight:
+        raise ValueError('readiness result lacks the complete original owned flight')
+    receipt_path, receipt_sha = n._retained_ref(result['receipt'])
+    receipt = json.loads(n.retained_mode_read(receipt_path, receipt_sha))
+    expected_id = '%016x' % checked['core']['input']['seed'] + checked['binding']['core_sha256'][:16]
+    expected_receipt = study / 'readiness-attempts' / enrollment['hostname'] / expected_id / 'verified-readiness/session.json'
+    provisional_path = base / 'readiness-coordinator-enrollment.json'
+    if (receipt_path != expected_receipt or receipt.get('purpose') != 'readiness'
+            or receipt.get('scientific_credit') is not False or receipt.get('mode') != 'buflo'
+            or receipt.get('hostname') != enrollment['hostname'] or receipt.get('attempt_id') != expected_id
+            or type(receipt.get('slot')) is not int or receipt['slot'] != 0
+            or receipt.get('runtime') != enrollment['runtime']
+            or receipt.get('artifact_paths', {}).get('enrollment') != provisional_path.relative_to(study).as_posix()):
+        raise ValueError('readiness receipt is not the actual distinct no-credit preparation case')
+    provisional_sha = receipt.get('files', {}).get(provisional_path.relative_to(study).as_posix())
+    if type(provisional_sha) is not str or SHA.fullmatch(provisional_sha) is None:
+        raise ValueError('readiness provisional enrollment lacks its actual receipt digest')
+    provisional = json.loads(n.retained_mode_read(provisional_path, provisional_sha))
+    old = n.retained_mode_assets(study, provisional, provisional=True)
+    if (old['binding']['core_sha256'] != checked['binding']['core_sha256']
+            or any(provisional.get(key) != enrollment.get(key) for key in
+                   ('hostname', 'urls', 'workload_sha256', 'paths', 'runtime', 'mode_settings', 'mode_policies',
+                    'resource_selection', 'class_selection', 'runtime_cohort_input_authority'))):
+        raise ValueError('readiness provenance differs from the final frozen enrollment')
+    # This calls the unchanged physical/clock/schedule/kernel predicates, with
+    # only the explicit retained-parameter current-runtime binding branch.
+    run = load(within(study, receipt['artifact_paths']['run']))
+    if (type(run.get('started_unix_ns')) is not int
+            or run['started_unix_ns'] < (base / 'core.json').stat().st_mtime_ns):
+        raise ValueError('readiness Native case predates its immutable input core')
+    facts = verify_receipt(study, receipt)
+    if facts.get('verified') is not True or facts.get('responses') != 20:
+        raise ValueError('fresh readiness failed independent full physical verification')
+    records = {}
+    parents = set()
+    for key, ref in result['flight'].items():
+        path, digest = n._retained_ref(ref)
+        if path.name != {'launched': 'launched.json', 'closed': 'closed.json',
+                         'affinity_started': 'coordinator-affinity-started.json',
+                         'affinity_closed': 'coordinator-affinity-closed.json'}[key]:
+            raise ValueError('readiness flight role/path changed')
+        if path.parent.parent != study / 'flights':
+            raise ValueError('readiness flight escaped its owning study')
+        parents.add(path.parent)
+        records[key] = json.loads(n.retained_mode_read(path, digest))
+    if len(parents) != 1:
+        raise ValueError('readiness flight roles come from different owned flights')
+    launched, closed = records['launched'], records['closed']
+    started, affinity = records['affinity_started'], records['affinity_closed']
+    attachment = load(within(study, receipt['artifact_paths']['class_network']))
+    observer = attachment['observer']
+    workers = launched.get('workers')
+    sidecars = launched.get('sidecars')
+    if (launched.get('runtime') != enrollment['runtime']
+            or launched.get('study_sha256') != sha256_file(study / 'study.json')
+            or type(workers) is not list or len(workers) != 2
+            or type(sidecars) is not dict or len(sidecars) != 1
+            or observer['observer']['container_id'] not in sidecars.values()
+            or attachment['worker_container_id'] not in [row.get('id') for row in workers]
+            or closed.get('cleanup_errors') != [] or closed.get('scientific_credit') is not False
+            or set(closed.get('containers_removed', [])) != set(sidecars.values()) | {row['id'] for row in workers}
+            or closed.get('networks_removed') != [observer['client_network']['id']]
+            or any(affinity.get(key) is not True for key in
+                   ('executor_registered', 'foreign_threads_confined_to_auxiliary',
+                    'main_thread_identity_and_affinity_valid', 'restored', 'pool_joined_before_restoration'))
+            or affinity.get('body_failed') is not False
+            or started.get('record_type') != 'qcsd-Source029-outer-coordinator-affinity-v2'
+            or affinity.get('python_pool_joined_before_kernel_wait') is not True
+            or affinity.get('owned_kernel_thread_teardown', {}).get('complete') is not True
+            or affinity.get('affinity_restored') != started.get('affinity_before')
+            or any(affinity.get(key) != started.get(key) for key in (
+                'record_type', 'schema_version', 'pid', 'available_cpus', 'worker_cpu_pairs',
+                'auxiliary_cpus', 'affinity_before', 'existing_thread_ids',
+                'new_pool_threads_inherit_auxiliary_mask', 'baseline_threads',
+                'pool_ownership_source', 'container_and_Native_affinity_changed', 'scientific_credit'))):
+        raise ValueError('readiness flight topology, join, custody or affinity closure failed')
+    return facts

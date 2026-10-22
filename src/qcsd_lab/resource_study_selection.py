@@ -423,6 +423,8 @@ def bind_preparation(root, enrollment, binding, job_path):
 
 def validate_selection_proof(root, enrollment, receipt=None):
     """Join frozen pool/selection/job/actual input/workload; no raw-run replay."""
+    if 'retained_parameter_preparation' in enrollment:
+        return validate_retained_mode_selection(root, enrollment, receipt)
     if "resource_selection" not in enrollment:
         if "frozen_application_manifest" in enrollment:
             raise ValueError("frozen application manifest needs original explicit selection proof")
@@ -486,3 +488,52 @@ def validate_selection_proof(root, enrollment, receipt=None):
             raise ValueError("receipt selection proof inventory differs")
     return {"manifest_sha256": binding["manifest_sha256"], "pool_sha256": manifest["pool_sha256"],
             "selected_urls": list(manifest["urls"]), "scientific_credit": False}
+
+
+def validate_retained_mode_selection(root, enrollment, receipt=None):
+    """Original pool/selection proof joined to the distinct readiness input core."""
+    from . import resource_study_native as n
+    root = _path(root)
+    binding = _binding(enrollment)
+    if binding['manifest_path'] != f"inputs/resource-selections/{binding['manifest_sha256']}.json":
+        raise ValueError('retained-mode selection manifest escaped its digest path')
+    manifest = _json(_read(_relative(root, binding['manifest_path']), binding['manifest_sha256']))
+    pool = _validate(root, manifest, enrollment['hostname'])
+    if binding['context_files'] != pool['files']:
+        raise ValueError('retained-mode original selection context differs')
+    proof = {**pool['files'], binding['manifest_path']: binding['manifest_sha256'],
+             binding['job_path']: binding['job_sha256']}
+    for relative, digest in proof.items():
+        if enrollment.get('files', {}).get(relative) != digest:
+            raise ValueError('retained-mode selected input is missing its actual digest')
+        _read(_relative(root, relative), digest)
+    provisional = enrollment[n.RETAINED_MODE_KEY]['readiness_sha256'] is None
+    checked = n.retained_mode_assets(root, enrollment, provisional=provisional)
+    base = checked['base']
+    _, declared_selection_sha = n._retained_ref(checked['core']['input']['resource_selection'])
+    if binding['manifest_sha256'] != declared_selection_sha:
+        raise ValueError('retained selection differs from exact immutable input selection bytes')
+    job_path = _relative(root, binding['job_path'])
+    job = _json(_read(job_path, binding['job_sha256']))
+    if (job_path != base / 'job.json' or type(job) is not dict
+            or set(job) != {'record_type', 'hostname', 'urls', 'output', 'runtime', 'core_sha256'}
+            or job['record_type'] != 'qcsd-resource-domain-retained-mode-readiness-job-v1'
+            or job['hostname'] != manifest['hostname'] or job['urls'] != manifest['urls']
+            or job['output'] != str(base) or job['runtime'] != enrollment['runtime']
+            or job['core_sha256'] != checked['binding']['core_sha256']
+            or manifest['urls'] != checked['core']['input']['science']['urls']):
+        raise ValueError('retained-mode selection differs from its actual distinct job/core')
+    for relative in (enrollment['workload_path'], enrollment['paths']['prepared_workload']):
+        data = _json(_read(_relative(root, relative), enrollment['files'][relative]))
+        resources = data.get('resources')
+        if (type(resources) is not list or len(resources) != 20
+                or [row.get('id') for row in resources] != list(range(20))
+                or [row.get('url') for row in resources] != manifest['urls']):
+            raise ValueError('retained-mode workload changed its exact original twenty')
+    if receipt is not None:
+        paths, inventory = receipt.get('artifact_paths', {}), receipt.get('files', {})
+        required = selection_artifact_paths(enrollment)
+        if (any(paths.get(key) != relative for key, relative in required.items())
+                or any(inventory.get(relative) != enrollment['files'].get(relative) for relative in required.values())):
+            raise ValueError('retained-mode receipt omits original selection artifacts')
+    return proof

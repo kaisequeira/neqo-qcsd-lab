@@ -366,6 +366,18 @@ def _idle(stores):
 
 def _verify_preparation(store, host, *, enrollment=None):
     """Replay full GET proof, including an optional not-yet-enrolled selection."""
+    from .resource_study_native import RETAINED_MODE_KEY
+    if enrollment is None:
+        candidate = _enrollments(store)[host][0]
+    else:
+        candidate = enrollment
+    if RETAINED_MODE_KEY in candidate:
+        from .resource_study_lineage import validate_enrollment
+        from .resource_study_verify import verify_retained_mode_readiness
+        if candidate.get('hostname') != host:
+            raise ValueError('retained preparation hostname differs')
+        validate_enrollment(store, candidate)
+        return verify_retained_mode_readiness(store.root, candidate)
     from .resource_study_native import inspect_completed_run, MAX_RESPONSE_BYTES, ROLE
     from .resource_study_verify import selection_proof_present
     if enrollment is None:

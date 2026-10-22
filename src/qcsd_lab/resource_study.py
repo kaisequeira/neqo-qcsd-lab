@@ -369,6 +369,9 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
 
 def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dict, *, pilot=False, catalog_binding=None, proof_verifier=None) -> Path:
     """Publish one receipt after independently checking the complete staged session."""
+    if 'retained_parameter_preparation' in enrollment:
+        return seal_retained_mode(root, attempt, enrollment, runtime, result,
+            pilot=pilot, catalog_binding=catalog_binding, proof_verifier=proof_verifier)
     sealing_started = time.monotonic()
     if catalog_binding is not None:
         from .resource_study_catalog import validate_receipt_binding
@@ -917,6 +920,11 @@ def verify(root: Path, *, recover=False, all_receipts=False) -> dict:
 def parser():
     result = argparse.ArgumentParser(prog="qcsd-lab resource-study", description=__doc__)
     actions = result.add_subparsers(dest="action", required=True)
+    retained = actions.add_parser('prepare-retained-mode', help='one explicit retained-parameter mode with fresh strict physical readiness')
+    retained.add_argument('--root', type=Path, required=True)
+    retained.add_argument('--runtime', type=Path, required=True)
+    retained.add_argument('--input', type=Path, required=True)
+    retained.add_argument('--input-sha256', required=True)
     shared = actions.add_parser("capture-roots", help="one protected flight for original Native93 CS roots or the finite Native122 BuFLO pool")
     shared.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
     shared.add_argument("--runtime", type=Path, required=True)
@@ -1045,7 +1053,10 @@ def main(argv=None):
             validate_policy(args.tamaraw_configuration_policy)
             if args.action != "prepare" or not args.enroll:
                 raise ValueError("explicit Tamaraw condition requires fresh live preparation; capture uses frozen enrollment")
-        if args.action == "cohort-resource-init":
+        if args.action == 'prepare-retained-mode':
+            output = enroll_retained_mode(root, runtime_identity(args.runtime.absolute()),
+                input_path=args.input.absolute(), input_sha256=args.input_sha256)
+        elif args.action == "cohort-resource-init":
             from .resource_study_resource_version_inputs import initialize_resource_cohort
             output = initialize_resource_cohort(root, args.cohort_root.absolute(),
                 args.resource_version_input.absolute(), args.resource_version_input_sha256)
@@ -1669,6 +1680,389 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
         "chunk_sessions": chunk_sessions, "pilot": pilot,
         "storage": storage, "wrapper_issues_credit": False,
         "receipt_raw_and_ledger_gates": "original owning-root seal/reserve/commit/pilot predicates"}
+
+
+@contextmanager
+def _retained_source_operation():
+    """Full immutable Source fence for a new root with no admission marker yet."""
+    from . import resource_study_cohorts as c
+    if c._SOURCE_OPERATION.get() is not None:
+        raise ValueError('retained preparation requires one explicit Source owner')
+    auth = c._SourceAuthorization()
+    body_error = None
+    try:
+        with c.bind_source(auth):
+            yield
+    except BaseException as error:
+        body_error = error
+        raise
+    finally:
+        try:
+            auth.check()
+            if c._load(auth.profile) != c._fresh_verifier_contract():
+                raise ValueError('retained preparation Source closure changed')
+        except BaseException as failure:
+            if body_error is None:
+                raise
+            body_error.add_note('Retained Source closure also refused: ' + str(failure))
+        finally:
+            auth.active = False
+
+
+def _retained_publish_raw(path, raw):
+    """Publish copied historical bytes without changing their contents."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name('.' + path.name + '.' + os.urandom(8).hex())
+    try:
+        with temporary.open('xb') as stream:
+            stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+        temporary.chmod(0o444)
+        publish_noreplace(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _retained_current_scope(store, checked):
+    """Original parent/head, unchanged class20 and fresh root before any backend."""
+    from . import resource_study_cohorts as c
+    from . import resource_study_epochs as e
+    value = checked['input']
+    context, _ = c._input_context(store.root, store.plan())
+    c._require_current_input_context(context)
+    if (value['parent'] != {**context['parent'], 'head_sha256': context['predecessor_sha256']}
+            or 'cs180_condition' in context or 'tamaraw16_condition' in context):
+        raise ValueError('retained mode preparation changes actual parent/condition authority')
+    cells = c._input_cells(context, value['hostname'])
+    definition = cells[0]['definition']
+    if (value['science']['urls'] != definition['urls']
+            or value['science']['workload_sha256'] != definition['workload_sha256']):
+        raise ValueError('retained mode preparation changes actual frozen class resources')
+    # Historical admission of this MODE is deliberately unnecessary. A genuine
+    # same-host original class may supply its frozen all-mode parameter assets.
+    source = StudyStore(value['historical_root'])
+    with source._transaction() as connection:
+        row = connection.execute('SELECT * FROM classes WHERE hostname=?', (value['hostname'],)).fetchone()
+    old_ref = value['historical_enrollment']
+    if (row is None or source.root / row['path'] != Path(old_ref['path']) or row['sha256'] != old_ref['sha256']
+            or source._file(row['path'], row['sha256'])[1]['mode'] != '0444'):
+        raise ValueError('historical retained assets are not a genuine immutable enrolled class')
+    old_roots = {cell['root'] for cell in context['predecessor']['cells']}
+    if context['predecessor']['record_type'] == c.ADMISSION:
+        old_roots.update(member['cell']['root'] for entry in context['predecessor']['cohorts'] for member in entry['members'])
+    if str(source.root) not in old_roots:
+        raise ValueError('historical retained class lacks the actual current parent lineage')
+    if str(store.root) in old_roots or (store.root / c.MARKER).exists() or (store.root / c.MARKER).is_symlink():
+        raise ValueError('retained preparation requires a fresh unadmitted root')
+    with store._transaction() as connection:
+        if (connection.execute('SELECT 1 FROM attempts').fetchone()
+                or connection.execute('SELECT 1 FROM accepted').fetchone()
+                or connection.execute('SELECT 1 FROM classes WHERE hostname=?', (value['hostname'],)).fetchone()):
+            raise ValueError('retained mode preparation cannot import attempts/credit or replace enrollment')
+    from .resource_study_lineage import no_retired_history
+    no_retired_history(store)
+    e._idle([StudyStore(path) for path in sorted(old_roots | {str(store.root)})])
+    return context
+
+
+def _retained_build_views(root, checked, selection, selection_binding):
+    """Freeze one input core and independent Native/coordinator provisional views."""
+    from . import resource_study_native as n
+    from .resource_study_lineage import bind_enrollment
+    from .resource_study_cohorts import bind_input_authority
+    value, old = checked['input'], checked['historical']
+    host = value['hostname']
+    relative = 'retained-mode-preparations/' + host + '/' + checked['input_sha256']
+    base = root / relative
+    base.mkdir(parents=True, exist_ok=False)
+    _retained_publish_raw(base / 'input.json', checked['input_raw'])
+    input_digest = sha256_file(base / 'input.json')
+    if input_digest != checked['input_sha256']:
+        raise ValueError('retained mode input changed while freezing exact bytes')
+    canonical_path, canonical_sha = n._retained_ref(value['canonical_runtime'])
+    _retained_publish_raw(base / 'canonical-runtime.json',
+        n.retained_mode_read(canonical_path, canonical_sha, canonical_runtime=True))
+    _retained_publish_raw(base / 'historical-enrollment.json',
+        n.retained_mode_read(Path(value['historical_enrollment']['path']), value['historical_enrollment']['sha256']))
+    required = {path for path in old['paths'].values() if path is not None}
+    if checked['chaff_key'] == 'chaff_manifest':
+        prepared = Path(old['paths']['prepared_workload'])
+        qualification = prepared.parent / 'qualification/response-qualification.json'
+        evidence = json.loads(n.retained_mode_read(Path(value['historical_root']) / qualification,
+            old['files'][qualification.as_posix()]))
+        identifier = evidence['selected_chaff_resource_id']
+        required.add(qualification.as_posix())
+        from . import chaff_qualification as chaff
+        required.update((qualification.parent / ('resource-%02d' % identifier) / ('response-%d' % index)
+                         / 'native/qualification.json').as_posix() for index in range(chaff.QUALIFICATION_RUNS))
+    assets = {}
+    for old_relative in sorted(required):
+        digest = old['files'][old_relative]
+        destination = 'historical/' + old_relative
+        _retained_publish_raw(base / destination,
+            n.retained_mode_read(Path(value['historical_root']) / old_relative, digest))
+        assets[old_relative] = {'path': destination, 'sha256': digest}
+    core = {'record_type': n.RETAINED_MODE_CORE, 'schema_version': 1,
+        'input': value, 'input_sha256': input_digest,
+        'historical_enrollment_path': 'historical-enrollment.json', 'assets': assets,
+        'historical_binding': checked['historical_binding']}
+    create_json(base / 'core.json', core)
+    core_sha = sha256_file(base / 'core.json')
+    binding = {'record_type': n.RETAINED_MODE_BINDING, 'study_root': str(root),
+        'preparation_dir': relative, 'core_sha256': core_sha, 'readiness_sha256': None}
+    local_files = {row['path']: row['sha256'] for row in assets.values()}
+    local_files.update({'core.json': core_sha, 'input.json': input_digest,
+        'historical-enrollment.json': value['historical_enrollment']['sha256'],
+        'canonical-runtime.json': value['runtime']['canonical_sha256']})
+    local = {'schema_version': 1, 'role': n.ROLE, 'hostname': host, 'urls': old['urls'],
+        'workload_path': 'historical/' + old['workload_path'], 'workload_sha256': old['workload_sha256'],
+        'paths': {key: 'historical/' + name if name is not None else None for key, name in old['paths'].items()},
+        'files': local_files, 'runtime': value['runtime'], 'mode_settings': old['mode_settings'],
+        'mode_policies': old['mode_policies'], 'mode_readiness': {mode: False for mode in MODES},
+        'scientific_credit': False, n.RETAINED_MODE_KEY: binding}
+    create_json(base / 'readiness-enrollment.json', local)
+    coordinator = deepcopy(local)
+    coordinator['preparation_dir'] = relative
+    coordinator['workload_path'] = relative + '/' + local['workload_path']
+    coordinator['paths'] = {key: relative + '/' + name if name is not None else None for key, name in local['paths'].items()}
+    coordinator['files'] = {relative + '/' + name: digest for name, digest in local['files'].items()}
+    coordinator['source_occurrences'] = candidate_pool(root)[host]['source_occurrences']
+    job = {'record_type': 'qcsd-resource-domain-retained-mode-readiness-job-v1',
+        'hostname': host, 'urls': old['urls'], 'output': str(base),
+        'runtime': value['runtime'], 'core_sha256': core_sha}
+    create_json(base / 'job.json', job)
+    from .resource_study_selection import bind_preparation
+    coordinator = bind_preparation(root, coordinator, selection_binding, base / 'job.json')
+    coordinator = bind_enrollment(StudyStore(root), coordinator)
+    coordinator = bind_input_authority(StudyStore(root), coordinator)
+    create_json(base / 'readiness-coordinator-enrollment.json', coordinator)
+    return base, local, coordinator
+
+
+def enroll_retained_mode(root: Path, runtime: dict, *, input_path: Path, input_sha256: str, backend=None):
+    """One declared retained-PARAMETER mode; new strict readiness, zero credit."""
+    from . import resource_study_native as n
+    from . import resource_study_epochs as e
+    from . import resource_study_cohorts as c
+    root = Path(root).absolute()
+    checked = n.validate_retained_mode_input(root, runtime, input_path, input_sha256)
+    value = checked['input']
+    # Authenticate the exact canonical, including installed images and Source,
+    # rather than accepting a shape-only or guessed future Native/runtime tuple.
+    canonical_path, canonical_sha = n._retained_ref(value['canonical_runtime'])
+    n.retained_mode_read(canonical_path, canonical_sha, canonical_runtime=True)
+    if runtime_identity(canonical_path) != runtime:
+        raise ValueError('retained mode input is not its actual verified canonical runtime')
+    store = StudyStore(root)
+    parent = StudyStore(value['parent']['root'])
+    with _retained_source_operation():
+        context = _retained_current_scope(store, checked)
+        from .resource_study_selection import load_selection, freeze_selection
+        selection_path, selection_sha = n._retained_ref(value['resource_selection'])
+        selected = load_selection(root, selection_path, selection_sha, value['hostname'])
+        c.require_input_selection(store, value['hostname'], selected)
+        if selected['manifest']['urls'] != value['science']['urls']:
+            raise ValueError('retained mode explicit selection differs from actual frozen twenty')
+        require_storage(root, reserve_bytes=store.plan().get('storage_reserve_bytes', 2 * 1024 ** 3))
+        binding = freeze_selection(root, selected)
+        base, native, provisional = _retained_build_views(root, checked, selected, binding)
+        if backend is None:
+            from .resource_study_runtime import RetainedModeReadinessRuntime
+            backend = RetainedModeReadinessRuntime(root, runtime, provisional)
+        try:
+            actual = backend.readiness(provisional, value['seed'])
+            if type(actual) is not dict or set(actual) != {'receipt', 'flight'}:
+                raise ValueError('readiness backend returned a foreign custody contract')
+            result = {'record_type': n.RETAINED_MODE_RESULT, 'schema_version': 1,
+                'core_sha256': provisional[n.RETAINED_MODE_KEY]['core_sha256'],
+                'runtime': runtime, **actual, 'scientific_credit': False}
+            create_json(base / 'readiness-result.json', result)
+            final_native, final = deepcopy(native), deepcopy(provisional)
+            for target in (final_native, final):
+                target[n.RETAINED_MODE_KEY]['readiness_sha256'] = sha256_file(base / 'readiness-result.json')
+                target['mode_readiness'] = {mode: mode == 'buflo' for mode in MODES}
+            final_native['files']['readiness-result.json'] = sha256_file(base / 'readiness-result.json')
+            final['files'][(base / 'readiness-result.json').relative_to(root).as_posix()] = sha256_file(base / 'readiness-result.json')
+            from .resource_study_verify import verify_retained_mode_readiness
+            verify_retained_mode_readiness(root, final)
+            # Whole original current-parent input, source and SQL guards repeat
+            # after the live case, before the sole classes INSERT.
+            if c._input_context(root, store.plan())[0] != context:
+                raise ValueError('retained preparation input context changed during readiness')
+            _retained_current_scope(store, checked)
+            e._verify_preparation(store, value['hostname'], enrollment=final)
+            create_json(base / 'enrollment.json', final_native)
+            final['files'][(base / 'enrollment.json').relative_to(root).as_posix()] = sha256_file(base / 'enrollment.json')
+            with e._lock(parent.root):
+                current = e._records(parent)
+                if (not current or current[-1] != context['predecessor']
+                        or e._sha(current[-1]) != context['predecessor_sha256']):
+                    raise ValueError('actual parent changed before retained enrollment publication')
+                store.enroll(final)
+            return {'record_type': 'qcsd-resource-domain-retained-mode-enrollment-result-v1',
+                'hostname': value['hostname'], 'mode': 'buflo', 'status': 'enrolled', 'resources': 20,
+                'readiness': {'path': str(base / 'readiness-result.json'), 'sha256': sha256_file(base / 'readiness-result.json')},
+                'historical_qualification_reexecuted': False, 'own_pilot_required': True,
+                'scientific_credit': False, 'progress': store.status()}
+        except (OSError, ValueError, RuntimeError) as error:
+            create_json(base / 'readiness-failed.json', {'record_type': 'qcsd-resource-domain-retained-mode-readiness-failure-v1',
+                'hostname': value['hostname'], 'mode': 'buflo', 'core_sha256': provisional[n.RETAINED_MODE_KEY]['core_sha256'],
+                'reason': str(error), 'scientific_credit': False})
+            raise
+
+
+def seal_retained_mode(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dict, *, pilot=False, catalog_binding=None, proof_verifier=None) -> Path:
+    """Publish one receipt after independently checking the complete staged session."""
+    from . import resource_study_native as n
+    readiness = attempt.get('purpose') == 'readiness'
+    retained = n.retained_mode_assets(root, enrollment, provisional=readiness)
+    if readiness and (pilot or catalog_binding is not None or proof_verifier is not None):
+        raise ValueError('distinct readiness cannot claim pilot/catalog/formal proof ownership')
+    sealing_started = time.monotonic()
+    if catalog_binding is not None:
+        from .resource_study_catalog import validate_receipt_binding
+        if pilot:
+            raise ValueError("catalog capture is formal-only; no implicit pilot")
+        validate_receipt_binding(catalog_binding, root, attempt, enrollment, runtime)
+    source = root / attempt["path"] / "capture"
+    destination = (root / attempt['path'] / 'verified-readiness' if readiness
+                   else root / StudyStore(root).publication_path(attempt))
+    if pilot:
+        destination = root / "pilots" / attempt["hostname"] / attempt["mode"] / attempt["attempt_id"]
+    if destination.exists():
+        raise ValueError("accepted session destination already exists; recover it first")
+    create_json(source / "attempt-owner.json", {"attempt_id": attempt["attempt_id"]})
+    primary = source / "captures/direct-quic.pcapng"
+    trace = source / "traces/direct-quic.csv"
+    primary.rename(source / "traffic.pcapng")
+    trace.rename(source / "trace.csv")
+    # The raw UDP scratch capture duplicates the filtered primary. Successful
+    # evidence retains only the primary and the separate kernel measurement.
+    raw = source / "diagnostics/direct-quic-raw.pcapng"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(destination)
+    relative = lambda path: path.relative_to(root).as_posix()
+    enrollment_path = (retained['base'] / 'readiness-coordinator-enrollment.json' if readiness
+                       else root / "classes" / attempt["hostname"] / "enrollment.json")
+    paths = {"run": relative(destination / "neqo/run.json"),
+             "packets": relative(destination / "neqo/packets.csv"),
+             "pcap": relative(destination / "traffic.pcapng"),
+             "trace": relative(destination / "trace.csv"),
+             "collector": relative(destination / "attempt.json"),
+             "workload": enrollment["workload_path"], "enrollment": relative(enrollment_path)}
+    optional = {"schedule": "neqo/schedule.csv", "events": "neqo/events.csv",
+                "kernel_tx": "diagnostics/kernel-tx-evidence.json", "post_veth": "diagnostics/kernel-tx-post-veth-raw.pcapng"}
+    for key, path in optional.items():
+        if (destination / path).is_file():
+            paths[key] = relative(destination / path)
+    capped_binding = None
+    aggregate_binding = None
+    retained_binding = n.retained_mode_receipt_binding(root, enrollment, provisional=readiness)
+    paths['retained_chaff_manifest'] = enrollment['paths'][retained['chaff_key']]
+    for index, input_relative in enumerate(sorted(enrollment['files'])):
+        paths['retained_input_%06d' % index] = input_relative
+    if attempt["mode"] == "buflo" and "buflo_small_response_aggregate_selection" in enrollment:
+        from .resource_study_native import validate_buflo_aggregate_enrollment
+        aggregate_binding = validate_buflo_aggregate_enrollment(root, enrollment)
+        if aggregate_binding is None:
+            raise ValueError("aggregate BuFLO receipt requires actual sustained qualification")
+        paths.update(buflo_chaff_sidecar=enrollment["paths"]["buflo_chaff_sidecar"],
+                     buflo_chaff_manifest=enrollment["paths"]["buflo_chaff_manifest"],
+                     buflo_chaff_prepared_workload=enrollment["paths"]["prepared_workload"])
+    if "resource_selection" in enrollment:
+        from .resource_study_selection import selection_artifact_paths, validate_selection_proof
+        validate_selection_proof(root, enrollment)
+        paths.update(selection_artifact_paths(enrollment))
+    if "class_selection" in enrollment:
+        from .resource_study_lineage import MANIFEST, INVENTORY, SOURCE, validate_enrollment
+        validate_enrollment(StudyStore(root), enrollment)
+        paths.update(class_selection=MANIFEST, class_selection_inventory=INVENTORY,
+                     class_selection_source=SOURCE)
+        from .resource_study_cohorts import input_authority_artifact_paths
+        paths.update(input_authority_artifact_paths(enrollment))
+        if "resource_version_input_authority" in enrollment:
+            from .resource_study_resource_version_inputs import artifact_paths
+            paths.update(artifact_paths(enrollment))
+    from .capture import split_endpoint
+    endpoint = load(destination / "neqo/run.json")["endpoints"][0]
+    local_ip, local_port = split_endpoint(endpoint["local_address"])
+    remote_ip, remote_port = split_endpoint(endpoint["remote_address"])
+    for path in destination.rglob("*"):
+        if path.is_file():
+            if path.is_symlink():
+                raise ValueError("collector created a linked artifact")
+            path.chmod(0o444)
+    files = {relative(p): sha256_file(p) for p in destination.rglob("*") if p.is_file()}
+    for path in paths.values():
+        files[path] = sha256_file(root / path)
+    receipt = {"schema_version": 1, "record_type": "qcsd-resource-domain-session-verification-v1",
+        "acceptance": ACCEPTANCE, "verified": True, "hostname": attempt["hostname"],
+        "purpose": "readiness" if readiness else "pilot" if pilot else "formal", "scientific_credit": not (pilot or readiness),
+        "mode": attempt["mode"], "slot": attempt["slot"], "attempt_id": attempt["attempt_id"],
+        "five_tuple": [local_ip, local_port, remote_ip, remote_port, 17],
+        "capture_position": "client-eth0-before-nat", "workload_sha256": enrollment["workload_sha256"],
+        "runtime": runtime, "collector_version": "qcsd-resource-study-coordinator-v1",
+        "coordinator_provenance": (coordinator_provenance(resource_selection=True)
+            if "resource_selection" in enrollment else coordinator_provenance()),
+        "mode_policies": result.get("mode_policies", {}),
+        "mode_settings": enrollment.get("mode_settings", {}).get(attempt["mode"], {}),
+        "artifact_paths": paths, "files": files,
+        "completed_at": datetime.now(timezone.utc).isoformat()}
+    receipt['retained_parameter_preparation'] = retained_binding
+    if capped_binding is not None:
+        receipt["buflo_chaff_selection"] = capped_binding
+    if aggregate_binding is not None:
+        receipt["buflo_small_response_aggregate_selection"] = aggregate_binding
+    plan = StudyStore(root).plan()
+    from .resource_study_epochs import stable_lineage_active
+    if "class_selection" in plan or stable_lineage_active(StudyStore(root)):
+        receipt["coordinator_provenance"] = coordinator_provenance(
+            resource_selection="resource_selection" in enrollment, class_selection=True,
+            resource_version="resource_version_input_authority" in enrollment)
+    if validate_network_plan(plan) is not None:
+        receipt["acceptance"] = NETWORK_ACCEPTANCE
+        receipt["study_sha256"] = sha256_file(root / "study.json")
+        receipt["tuple_uniqueness_scope"] = TUPLE_SCOPE
+        receipt["class_network"] = receipt_binding(plan, receipt["study_sha256"], attempt["hostname"])
+        paths["study"] = "study.json"
+        paths["class_network"] = relative(destination / "class-network.json")
+        paths["scheduler"] = relative(destination / "diagnostics/scheduler-runtime-evidence.json")
+        files["study.json"] = receipt["study_sha256"]
+        if paths["class_network"] not in files or paths["scheduler"] not in files:
+            raise ValueError("capture has no bound persistent class topology/scheduler observation")
+    if catalog_binding is not None:
+        # This is observational provenance, never permission to reserve or
+        # credit. The unchanged reader and Store gates still run below.
+        receipt["capture_catalog"] = deepcopy(catalog_binding)
+        receipt["coordinator_provenance"]["files"]["resource_study_catalog.py"] = sha256_file(
+            Path(__file__).parent / "resource_study_catalog.py")
+    if proof_verifier is None:
+        facts = verify_receipt(root, receipt)
+    else:
+        from .resource_study_verify_child import VerificationChildren
+        if type(proof_verifier) is not VerificationChildren or pilot:
+            raise ValueError("exact Source106 formal proof child owner required")
+        facts, timing = proof_verifier.verify(root, receipt)
+        receipt["raw_verification_timing"] = timing
+    # Scratch removal is allowed only after raw verification succeeds. Failed
+    # attempts retain it for diagnosis; successful receipts bind the retained
+    # inventory rather than two copies of the same primary observation.
+    moved_raw = destination / "diagnostics/direct-quic-raw.pcapng"
+    if moved_raw.exists():
+        receipt["files"].pop(relative(moved_raw), None)
+        moved_raw.unlink()
+    facts["retained_bytes"] = sum((root / name).stat().st_size for name in receipt["files"]
+        if destination in (root / name).parents)
+    facts["shared_input_bytes_excluded"] = True
+    receipt["facts"] = facts
+    if "attempt_elapsed_seconds" in result:
+        receipt["attempt_wall_seconds"] = result["attempt_elapsed_seconds"] + time.monotonic() - sealing_started
+    create_json(destination / "session.json", receipt)
+    return destination / "session.json"
 
 
 if __name__ == "__main__":

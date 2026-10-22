@@ -1,5 +1,26 @@
 # QCSD thesis project ledger
 
+## 23 October 2026: retained BuFLO parameters and fresh physical readiness
+
+The new `prepare-retained-mode` operation authenticates the original same-host
+parameter and chaff assets under their historical provenance, then requires one
+fresh, independently verified twenty-resource BuFLO readiness case. Its immutable
+input, readiness result and final enrollment have separate digests. Historical
+readiness flags are preserved, other modes remain unclaimed, and the original
+post-admission capture pilot is still required. No qualification GET chain is
+repeated and neither readiness nor pilot traffic earns recording credit.
+
+Native `3fc805284119a4c21af38b7410dd56ba0b20cc9d` preserves a fair primary
+receive turn before exact-first allocation can fragment its whole owned cell.
+The regression fails against the parent; all 551 defense-crate tests pass with
+the fix. Strict crate Clippy retains 111 findings confirmed in the unchanged
+parent. The portable `resource-domain-live-pilot-v1` build policy does not claim
+that strict formatting or Clippy gates passed. A new runtime, distinct Source
+profile, current physical readiness and matching capture pilot must be recorded
+before this source projection can support formal acquisition. The original
+fifty classes, ordered twenty resources, timing windows and acceptance predicates
+are preserved.
+
 ## 22 October 2026: exact closed-H003 current publisher parent
 
 SDK114 adds only the exact Source109 snapshot82535/closed-H003 current004

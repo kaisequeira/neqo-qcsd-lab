@@ -726,8 +726,15 @@ class CaptureRuntime:
             sidecar_cpuset = ",".join(map(str, sidecars))
             bridge = json.loads(_docker("network", "inspect", "bridge"))[0]
             from .resource_study_store import StudyStore
-            router_enrollments = {e["hostname"]: e for e in StudyStore(self.root).enrolled()
-                       if self.selected_hostnames is None or e["hostname"] in self.selected_hostnames}
+            if type(self) is RetainedModeReadinessRuntime:
+                from .resource_study_native import retained_mode_assets
+                retained_mode_assets(self.root, self.readiness_enrollment, provisional=True)
+                if hashlib.sha256(canonical_json(self.readiness_enrollment)).hexdigest() != self.readiness_enrollment_sha256:
+                    raise ValueError('provisional readiness topology enrollment changed')
+                router_enrollments = {self.readiness_enrollment['hostname']: self.readiness_enrollment}
+            else:
+                router_enrollments = {e["hostname"]: e for e in StudyStore(self.root).enrolled()
+                           if self.selected_hostnames is None or e["hostname"] in self.selected_hostnames}
             domains = list(router_enrollments)
             router_capture_limits = {h: _router_capture_seconds(e) for h, e in router_enrollments.items()}
             if not domains:
@@ -931,6 +938,11 @@ class CaptureRuntime:
                "enrollment_dir": str(self.root / enrollment["preparation_dir"]),
                "attempt_dir": str(directory / "capture"), "seed": int(attempt["attempt_id"][:16], 16),
                "runtime": self.runtime}
+        if type(self) is RetainedModeReadinessRuntime:
+            from .resource_study_native import RETAINED_MODE_KEY
+            if attempt.get('purpose') != 'readiness' or enrollment != self.readiness_enrollment:
+                raise ValueError('readiness runtime cannot collect another purpose/enrollment')
+            job['retained_readiness_core_sha256'] = enrollment[RETAINED_MODE_KEY]['core_sha256']
         _put(directory / "job.json", job)
         arguments = ["exec", "--env", "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256=" + worker["partition_sha256"]]
         for key, value in self.class_routes[attempt["hostname"]]["environment"].items():
@@ -1513,3 +1525,53 @@ class CatalogCaptureRuntime(MultiRootCaptureRuntime):
 
     def _closure_runtime_fields(self):
         return {"record_type": "qcsd-resource-domain-runtime-catalog-closed-v1", "schema_version": 1}
+
+
+class RetainedModeReadinessRuntime(CaptureRuntime):
+    """One physical no-SQL preparation case through the original lane topology."""
+    def __init__(self, root, runtime, enrollment):
+        from .resource_study_native import retained_mode_assets
+        retained_mode_assets(Path(root).absolute(), enrollment, provisional=True)
+        if enrollment['runtime'] != runtime:
+            raise ValueError('readiness topology runtime differs from its immutable core')
+        super().__init__(Path(root), runtime, 2, hostnames=[enrollment['hostname']])
+        self.readiness_enrollment = json.loads(canonical_json(enrollment))
+        self.readiness_enrollment_sha256 = hashlib.sha256(canonical_json(enrollment)).hexdigest()
+
+    def readiness(self, enrollment, seed):
+        from .resource_study import _capture_executor, seal_retained_mode
+        from .resource_study_native import RETAINED_MODE_KEY, retained_mode_assets
+        if (type(seed) is not int or not 0 <= seed < 2 ** 64
+                or enrollment != self.readiness_enrollment
+                or hashlib.sha256(canonical_json(enrollment)).hexdigest() != self.readiness_enrollment_sha256):
+            raise ValueError('readiness enrollment/seed changed before launch')
+        value = retained_mode_assets(self.root, enrollment, provisional=True)
+        if seed != value['core']['input']['seed']:
+            raise ValueError('readiness case changed its declared seed')
+        identifier = '%016x' % seed + value['binding']['core_sha256'][:16]
+        relative = 'readiness-attempts/' + enrollment['hostname'] + '/' + identifier
+        directory = self.root / relative
+        directory.mkdir(parents=True, exist_ok=False)
+        attempt = {'hostname': enrollment['hostname'], 'mode': 'buflo', 'slot': 0,
+            'attempt_id': identifier, 'path': relative, 'purpose': 'readiness'}
+        receipt = None
+        def one():
+            try:
+                result = self.capture(0, attempt, enrollment)
+                if result.get('success') is not True or result.get('resource_error') is not None:
+                    raise ValueError('fresh retained-mode physical readiness failed; retained=' + str(directory)
+                        + '; reason=' + str(result.get('resource_error') or result.get('failure') or 'collector refused')[:2048])
+                return seal_retained_mode(self.root, attempt, enrollment, self.runtime, result)
+            finally:
+                self.release(0)
+        with _capture_executor(self, 2) as executor:
+            receipt = executor.submit(one).result()
+        # The public evidence result is created only after all original owned
+        # topology teardown and coordinator/executor restoration have completed.
+        def ref(path):
+            return {'path': str(path), 'sha256': sha256_file(path)}
+        return {'receipt': ref(receipt), 'flight': {
+            'launched': ref(self.flight / 'launched.json'),
+            'closed': ref(self.flight / 'closed.json'),
+            'affinity_started': ref(self.flight / 'coordinator-affinity-started.json'),
+            'affinity_closed': ref(self.flight / 'coordinator-affinity-closed.json')}}
