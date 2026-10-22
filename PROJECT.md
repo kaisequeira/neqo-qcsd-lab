@@ -1,5 +1,37 @@
 # QCSD thesis project ledger
 
+## 23 October 2026: owned service for pristine initial HEADERS stalls
+
+The Native141 live engineering case completed eighteen of twenty exact
+resources. Streams 36 and 40 had complete request ACKs, an advertised
+1,000-byte initial frontier and real peer BLOCKED observations at that frontier,
+but no parsed response progress. The saved case remains negative with zero
+recording credit. Its separate fresh physical confirmation-clock failure also
+remains negative; no remote HEADERS size is inferred from the missing progress.
+
+Native `f64210a47fcd81b9ec75a076e892b4cf4d87e987` retains that genuine demand
+without inventing a decoded frame extent. After the complete request ACK, a
+later full scheduled cell can own one complete existing 1,000-byte reservation
+above the original slotless ceiling. The original slotless bytes remain outside
+scheduled cells. The shared 1,200-byte outstanding cap, whole-cell rollback,
+physical windows and genuine-FIN suffix replacement remain unchanged.
+BLOCKED-before-ACK retains intent only and waits for the ACK plus a new due cell.
+
+The connected regression fails against the unchanged Native141 production
+source. All three focused tests and all 555 defense-crate tests pass with
+Native142. Strict Clippy retains the same 111 baseline findings; this does not
+claim a clean strict-Clippy gate. A Cargo target-cache collision across mounted
+checkouts was preserved, and the positive tests passed with an isolated target.
+
+SDK121 adds only the actual Native142 layered schema-14 identity and a distinct
+execution reader, preserving the complete SDK120, SDK119, SDK118003 and all
+older supported profiles. Historical admissions retain their original reader
+identities. A new exact ARM runtime and the same twenty-resource live case
+remain necessary before claiming physical success. Fresh retained readiness
+and the matching post-admission capture pilot remain separate acquisition
+requirements. The fifty classes and their twenty frozen resources are
+preserved; this source checkpoint adds no verified sessions.
+
 ## 23 October 2026: retained BuFLO application cursor starvation
 
 The Native140 live engineering case completed fifteen of twenty resources and
