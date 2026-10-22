@@ -3071,3 +3071,8 @@ acquisition, fitting, qualification and all 900 certification cells verify.
 ## SDK115 stable006 current-D parent registry
 
 Source-only successor of actual frozen SDK114. The exact stable006 issuer b9a904b54c4e50551755aa3f636d0a17e2bb0abad5ba61f4ce76bf264a611c98 is the sole new parent row. The reader retains the exact114 profile and all older profiles. Native139, runtime images, scientific verification, thresholds and all183 other package files remain unchanged. New SDK115 HEAD/tree/freeze/stage and current006 checkpoint are recorded only after actual ROOT operations; no raw qualification or study credit is produced by this Source update.
+
+
+## SDK116 repeatable007 current-D parent registry
+
+Source-only successor of actual frozen SDK115. The exact repeatable007 issuer aeeb7aa8241f39e397cf31b7034367886f38224eed7897508d7da520ab8c89f0 is the sole new parent row. The reader retains the exact115 profile and all older profiles. Native139, runtime images, scientific verification, thresholds and all183 other package files remain unchanged. New SDK116 HEAD/tree/freeze/stage and current007 checkpoint are recorded only after actual ROOT operations; no raw qualification or study credit is produced by this Source update.
