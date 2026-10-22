@@ -39,6 +39,7 @@ LAYERED_TX_REQUIRED_NATIVE_COMMITS: frozenset[str] = frozenset({
     "01e226fb43000691acbda57feb338855b26e66ca",
     "d44de7cde8f6e2e72f337c00a01e9816c07753fa",
     "3fc805284119a4c21af38b7410dd56ba0b20cc9d",
+    "3f35aa4332ec4fe64254570c10ab6f865f45db40",
 })
 
 

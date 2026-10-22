@@ -1,5 +1,30 @@
 # QCSD thesis project ledger
 
+## 23 October 2026: retained BuFLO application cursor starvation
+
+The Native140 live engineering case completed fifteen of twenty resources and
+received no recording credit. Its primary response stopped after 3,675 body
+bytes while parser leases repeatedly consumed the start of each incoming cell.
+The complete saved grant inventory reconstructs an allocation order of stream
+16, primary stream 0, then stream 8; retaining the last successful stream 8
+repeated that order and prevented primary stream 0 from owning a whole cell.
+
+Native `3f35aa4332ec4fe64254570c10ab6f865f45db40` retains the first successful
+application turn under the existing retained-BuFLO policy guards. The next
+ordinary round can therefore give the primary stream its whole owned cell.
+The regression fails against Native140 with cursor 8 instead of 16; all 552
+defense-crate tests pass with the fix. Strict Clippy retains the same 111
+baseline findings. A compiler incremental-cache failure was preserved and the
+same focused test passed with incremental compilation disabled.
+
+SDK120 changes only the acceptance policy's actual Native commit set and its
+distinct reader profile, preserving the complete SDK119 and older profiles.
+The retained preparation API, frozen twenty-resource workloads, acceptance
+predicates and physical timing windows are unchanged. A new ARM runtime and
+the same live engineering workload remain necessary before claiming physical
+success; fresh retained readiness and the matching capture pilot are still
+required for acquisition. This source checkpoint adds no verified sessions.
+
 ## 23 October 2026: retained BuFLO parameters and fresh physical readiness
 
 The new `prepare-retained-mode` operation authenticates the original same-host
