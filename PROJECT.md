@@ -1,4 +1,62 @@
-# Source123 — CS physically observed packet-target reader
+# Source124 — focused fixed FRONT/Tamaraw preparation
+
+Root applied the reviewed preparation core and distinct current178-file
+reader in a separate checkout based on genuine Source123. The complete
+actual123/177-file profile and all49 earlier historical entries remain whole.
+There are 51 supported entries and 50 unique profiles: the two original
+Source094 names intentionally retain their pre-existing exact profile alias.
+The current124, actual123, actual122, actual121 and actual118003 profiles
+remain distinct. No historical identity is replaced by the current reader.
+
+The focused Source/input/runtime-tuple/FD and not-enrolled failure checks,
+together with the original incomplete-publication negative, passed all14
+cases in4.81 seconds (4.948952 seconds recorded outer command). Tests retain
+the actual closed SDK121/Native142 canonical bytes as fixture data. Only the
+runtime filesystem replay boundary is replaced in the input-guard fixtures;
+the synthetic resource graph is never qualification evidence. The initial
+new test incorrectly required unique historical names; Root corrected that
+test to preserve the exact inherited094 alias and reject any additional one.
+
+The original four reader/cache/selection/retained-runtime regression files
+returned97 passed,16 failed and1 skipped in9.22 seconds on Source124. The
+exact same command against unchanged Source123 returned97 passed,16 failed
+and1 skipped in9.17 seconds, with the same16 failing test identities. Those
+old tests assert earlier Source042 file counts, historical messages and
+coordinator inventories. They remain recorded failures; no assertion or
+implementation was weakened to make that broader run appear green.
+
+These are local engineering results. No Source124 runtime build, deployment,
+live preparation, admission, pilot or capture has run, and no recording
+credit is claimed. A clean Git commit, complete source census and truthful
+external-consumer authorization remain required before live execution.
+
+This Source candidate reuses the immutable SDK121/Native142 runtime as a
+separate runtime analysis stratum. The preparation consumer is external
+SDK124 Source mounted read-only; it does not claim the image contains SDK124.
+It preserves the original selected50, exact frozen20 resource manifest,
+fixed settings/policies, original shared400 allocator and ownpilot gates.
+
+The new preparation role runs one strict original20 HTTP2xx complete-body
+GET plus the existing three independent qualifications of the deterministic
+largest eligible chaff resource. It skips URL discovery and unrelated mode
+qualification. Ordinary preparation proof is replayed before the original
+class INSERT. Only the selected FRONT or Tamaraw readiness flag is set.
+The original generic FirstMode admission applies to the six absent F/T keys;
+the already-admitted Fonts F/T keys require an ordinary compatible runtime
+cohort. The original full mode ownpilot remains mandatory before formal
+reservation. Preparation makes no full F/T physics or recording-credit claim.
+
+Native142 Source supports the fixed F/T policies. Its schema-three chaff
+still requires a body of at least1200 bytes; schema-six small-response cover
+is BuFLO-only. Fonts may remain blocked by that Native constraint and cannot
+be made ready by lowering a consumer guard or substituting resources.
+
+The preparation core and reader graph have been reviewed and locally tested
+as described above. The original ownpilot and formal capture gates remain
+mandatory. All scientific credit from this Source change remains zero.
+
+
+# Retained Source123 — CS physically observed packet-target reader
 
 Prospective Source cut from genuine Source122 f9281cd73099b4c68f93950d3084bd230c844624
 (tree bf1e89744eb5cc1462c6f849812c28184cad1df2). Native142 f64210a47fcd81b9ec75a076e892b4cf4d87e987 remains unchanged.

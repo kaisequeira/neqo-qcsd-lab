@@ -1,0 +1,127 @@
+{
+  "actual_operation_completions": {
+    "actual-runtime-export": {
+      "elapsed_seconds": 0.1575442319999638,
+      "record_sha256": "3b10d848bf561f6d90b45525d5c5659564829633dc7f559e1db0b97b2c945c39",
+      "started_record_sha256": "4127d3c3bf50430e788ebd60d40bc862e72667e8a37f43e670a454b825b4d875"
+    },
+    "collection-image-build": {
+      "elapsed_seconds": 132.4343723109996,
+      "record_sha256": "67792d4b17e70afba6469b9e685b3b2fb7674398c8f9ea71bf82b5308ed26b5f",
+      "started_record_sha256": "7aa7e8271b58c0a6e30ecfc3b742685076d23d3703f24fab5634a1ce66757609"
+    },
+    "collection-image-inspect": {
+      "elapsed_seconds": 0.03964638300021761,
+      "record_sha256": "5ab6bdc227869569705a7af925bc12f485c5066611985d774051d08fce23ff2c",
+      "started_record_sha256": "3f80fc61623fe240d1278281e571c6f4b612eacdba031f6165fbf55c41daef33"
+    },
+    "collection-installed-verification": {
+      "elapsed_seconds": 1.402071679999608,
+      "record_sha256": "a6ba6ee4cb9fc519d2c55986d6dec7e827181554fc29081895e21622999ebf3b",
+      "started_record_sha256": "b875e9a21aa4ea344783239810c6ae2dbd8fde62cda050a425be1dad07dab56e"
+    },
+    "docker-info": {
+      "elapsed_seconds": 0.02900545099964802,
+      "record_sha256": "86c886e9d4966d18fd2913669ed4afc22661d0fae7a95264603cf2b6df48f832",
+      "started_record_sha256": "407050f2e9036c30e9b75e1aff219bcdf6c771f34e8d72d9113a52eba56b0d3a"
+    },
+    "prepare-image-build": {
+      "elapsed_seconds": 31.943506744999468,
+      "record_sha256": "15dae03faef0be451f8c819e65e6236864aa2b1a89519d5bd535cbbeb770099c",
+      "started_record_sha256": "59a0306e23c9e1ef91cd1aa2786954e49f2cb0e12ebc3171199c7bb37971dd2b"
+    },
+    "prepare-image-inspect": {
+      "elapsed_seconds": 0.13263380499938648,
+      "record_sha256": "f0cecb1bbb89ae23bd37c199842f8a15414ae47add27acfeeaf69ff194a032c7",
+      "started_record_sha256": "bebef70f78e642f68db18f4314d34f016585845ee0a25dac3a14f1e67649e4a1"
+    },
+    "prepare-installed-verification": {
+      "elapsed_seconds": 1.199279026000113,
+      "record_sha256": "e2f675b6b4f6dbde6105da4fbd0e08da3e6e68b45aa3714dd33611520c128495",
+      "started_record_sha256": "b71692420d759043bfad1da857e191d2007d2bbef614208b8cd39c923d2a0383"
+    }
+  },
+  "admitted_site_count": 0,
+  "artifact_type": "qcsd-public-portable-rapid-runtime-v1",
+  "build_inputs_sha256": "76985659f1b32021e0acf7522ba6e13a40d636ed412cbab5c66fc4007389167b",
+  "checks": {
+    "collection": {
+      "artifact_type": "qcsd-public-portable-rapid-installed-check-v1",
+      "client_sha256": "cfd4e12b5296836f502f3eb82f71eee501b714f27241685e12f5716314e61e41",
+      "formal_accepted_trace_count": 0,
+      "image_digest": "sha256:001007783e71635dd09619fe0b4d8b2b9500bb7d238e081fad376ea0ee3f86b3",
+      "platform": "linux/arm64",
+      "python_runtime_payload_sha256": "8feec507f4f206eaf46109a69ef42c868e7d78b4db2a1756e828de86040f4d87",
+      "qualification_implementation_sha256": "71bd1343125faf228ee8704eff9fcdf30c7fd078774a600ef1aefedfffacc179",
+      "role": "collection",
+      "schema_version": 1,
+      "scope": "installed-runtime-byte-and-source-verification-only",
+      "site_credit": 0,
+      "source": {
+        "image_digest": null,
+        "lab_commit": "06225fa5638dc879171b4c43da6eb05843aafca5",
+        "lab_dirty": false,
+        "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "neqo_commit": "f64210a47fcd81b9ec75a076e892b4cf4d87e987",
+        "neqo_dirty": false,
+        "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "neqo_pinned_commit": "f64210a47fcd81b9ec75a076e892b4cf4d87e987"
+      },
+      "source_inventory_sha256": "10383e4fc6eb6d79e43c9c5b042d1b484a21f6a215618bfb7b8ce9467e73428e",
+      "source_metadata_raw_sha256": "b96dbae27a888fb3c3444e5f6bfbdec05053b3bbaa7fb4e334023570395cdbbb"
+    },
+    "prepare": {
+      "artifact_type": "qcsd-public-portable-rapid-installed-check-v1",
+      "client_sha256": "cfd4e12b5296836f502f3eb82f71eee501b714f27241685e12f5716314e61e41",
+      "formal_accepted_trace_count": 0,
+      "image_digest": "sha256:28695d8d9ef92166ed3f2c1ca5365f9bb509d30cd50085968004974b6933b6a7",
+      "platform": "linux/arm64",
+      "python_runtime_payload_sha256": "8feec507f4f206eaf46109a69ef42c868e7d78b4db2a1756e828de86040f4d87",
+      "qualification_implementation_sha256": "71bd1343125faf228ee8704eff9fcdf30c7fd078774a600ef1aefedfffacc179",
+      "role": "prepare",
+      "schema_version": 1,
+      "scope": "installed-runtime-byte-and-source-verification-only",
+      "site_credit": 0,
+      "source": {
+        "image_digest": null,
+        "lab_commit": "06225fa5638dc879171b4c43da6eb05843aafca5",
+        "lab_dirty": false,
+        "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "neqo_commit": "f64210a47fcd81b9ec75a076e892b4cf4d87e987",
+        "neqo_dirty": false,
+        "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "neqo_pinned_commit": "f64210a47fcd81b9ec75a076e892b4cf4d87e987"
+      },
+      "source_inventory_sha256": "10383e4fc6eb6d79e43c9c5b042d1b484a21f6a215618bfb7b8ce9467e73428e",
+      "source_metadata_raw_sha256": "b96dbae27a888fb3c3444e5f6bfbdec05053b3bbaa7fb4e334023570395cdbbb"
+    }
+  },
+  "client_binary": "/home/joshkai/neqo-obfuscation/runtime/arm64-runtime-native142-sdk121-retained-parameters-engineering-001/runtime-export/neqo-qcsd-client",
+  "collection_image_digest": "sha256:001007783e71635dd09619fe0b4d8b2b9500bb7d238e081fad376ea0ee3f86b3",
+  "contract": "clean-source-native-platform-actual-installed-export-closure-v1",
+  "exported_source_manifest_sha256": "b96dbae27a888fb3c3444e5f6bfbdec05053b3bbaa7fb4e334023570395cdbbb",
+  "formal_accepted_trace_count": 0,
+  "installed_byte_verification_completed": true,
+  "installed_client_sha256": "cfd4e12b5296836f502f3eb82f71eee501b714f27241685e12f5716314e61e41",
+  "native_artifact_action": "portable-source-build",
+  "native_compilation_executed": true,
+  "original_canonical": null,
+  "platform": "linux/arm64",
+  "prepare_image_digest": "sha256:28695d8d9ef92166ed3f2c1ca5365f9bb509d30cd50085968004974b6933b6a7",
+  "schema_version": 1,
+  "scientific_credit": false,
+  "scope": "actual-installed-runtime-bytes-not-live-study-qualification",
+  "source": {
+    "image_digest": null,
+    "lab_commit": "06225fa5638dc879171b4c43da6eb05843aafca5",
+    "lab_dirty": false,
+    "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "neqo_commit": "f64210a47fcd81b9ec75a076e892b4cf4d87e987",
+    "neqo_dirty": false,
+    "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "neqo_pinned_commit": "f64210a47fcd81b9ec75a076e892b4cf4d87e987"
+  },
+  "source_inventory_sha256": "10383e4fc6eb6d79e43c9c5b042d1b484a21f6a215618bfb7b8ce9467e73428e",
+  "source_manifest": "/home/joshkai/neqo-obfuscation/runtime/arm64-runtime-native142-sdk121-retained-parameters-engineering-001/runtime-export/source.json",
+  "verified_at": "2026-10-22T23:33:33.638490+00:00"
+}

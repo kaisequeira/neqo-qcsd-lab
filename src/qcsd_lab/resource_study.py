@@ -919,6 +919,11 @@ def verify(root: Path, *, recover=False, all_receipts=False) -> dict:
 def parser():
     result = argparse.ArgumentParser(prog="qcsd-lab resource-study", description=__doc__)
     actions = result.add_subparsers(dest="action", required=True)
+    fixed = actions.add_parser('prepare-fixed-mode', help='exact frozen20 ordinary preparation for one fixed FRONT or Tamaraw mode')
+    fixed.add_argument('--root', type=Path, required=True)
+    fixed.add_argument('--runtime', type=Path, required=True)
+    fixed.add_argument('--input', type=Path, required=True)
+    fixed.add_argument('--input-sha256', required=True)
     retained = actions.add_parser('prepare-retained-mode', help='one explicit retained-parameter mode with fresh strict physical readiness')
     retained.add_argument('--root', type=Path, required=True)
     retained.add_argument('--runtime', type=Path, required=True)
@@ -1052,7 +1057,11 @@ def main(argv=None):
             validate_policy(args.tamaraw_configuration_policy)
             if args.action != "prepare" or not args.enroll:
                 raise ValueError("explicit Tamaraw condition requires fresh live preparation; capture uses frozen enrollment")
-        if args.action == 'prepare-retained-mode':
+        if args.action == 'prepare-fixed-mode':
+            from .resource_study_fixed_mode_preparation import enroll_fixed_mode
+            output = enroll_fixed_mode(root, runtime_identity(args.runtime.absolute()),
+                input_path=args.input.absolute(), input_sha256=args.input_sha256)
+        elif args.action == 'prepare-retained-mode':
             output = enroll_retained_mode(root, runtime_identity(args.runtime.absolute()),
                 input_path=args.input.absolute(), input_sha256=args.input_sha256)
         elif args.action == "cohort-resource-init":
