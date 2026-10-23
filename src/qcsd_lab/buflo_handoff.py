@@ -2039,7 +2039,12 @@ def _validate_cs_buflo_outgoing_packet_evidence(
     *,
     defense_start_monotonic_ns: int | None,
 ) -> None:
-    """Bind each realized CS opportunity to one packet-builder transcript."""
+    """Bind requested CS size and physically built packet size independently.
+
+    Native's packet-builder transcript serializes the built observed_size in
+    scheduled_target. desired_udp_bytes and the schedule retain the requested
+    opportunity; a congestion-limited partial must never claim that full size.
+    """
 
     scheduled = [
         row
@@ -2074,6 +2079,31 @@ def _validate_cs_buflo_outgoing_packet_evidence(
             label="schedule.csv CS-BuFLO observed UDP bytes",
             positive=True,
         )
+        reason = {
+            "congestion_limited": "CongestionLimited",
+            "pacing_limited": "PacingLimited",
+        }.get(row["congestion_reason"])
+        realized = (
+            row["satisfaction"] == "full"
+            and observed == target_size
+            and not row["miss_reason"]
+            and not row["congestion_reason"]
+        ) or (
+            row["satisfaction"] == "partial"
+            and 0 < observed < target_size
+            and reason is not None
+            and row["miss_reason"] == reason
+        )
+        if (
+            not realized
+            or _csv_unsigned(row["desired_udp_bytes"], label="CS schedule desired size", positive=True)
+            != target_size
+            or _csv_unsigned(row["observed_size"], label="CS schedule observed size", positive=True)
+            != observed
+            or sum(_csv_unsigned(packet[field], label=f"CS packet {field}")
+                   for field in _COMPOSITION_FIELDS) != observed
+        ):
+            raise ValueError("study handoff CS-BuFLO outgoing packet binding is invalid")
         if (
             len(matches) != 1
             or packet["connection"] != row["connection"]
@@ -2085,7 +2115,7 @@ def _validate_cs_buflo_outgoing_packet_evidence(
                 label="packets.csv CS-BuFLO scheduled target",
                 positive=True,
             )
-            != target_size
+            != observed
             or _csv_unsigned(
                 packet["desired_udp_bytes"],
                 label="packets.csv CS-BuFLO desired UDP bytes",

@@ -1,3 +1,34 @@
+# Source123 — CS physically observed packet-target reader
+
+Prospective Source cut from genuine Source122 f9281cd73099b4c68f93950d3084bd230c844624
+(tree bf1e89744eb5cc1462c6f849812c28184cad1df2). Native142 f64210a47fcd81b9ec75a076e892b4cf4d87e987 remains unchanged.
+
+This cut changes only buflo_handoff.py and the distinct Source123 reader profile,
+adds one grouped regression, and appends this ledger. Native's unchanged packet
+logger writes the built observed_size into packets.csv scheduled_target, while
+packet desired_udp_bytes and schedule.size preserve the requested opportunity.
+The reader now binds those independently and keeps the complete strict clock,
+controller, HTTP response/body, primary-capture and same-attempt guards. It also
+explicitly rejects oversized partials, wrong desired sizes and unfunded composition.
+The exact actual122 177-file profile and all 48 older historical maps remain
+retained without relabelling; Source123 has 49 historical profiles plus its own
+current177 profile. All other 183 package files are unchanged.
+
+Root executed the one grouped regression against actual immutable Native131
+slot74 (one 481-byte partial out of a requested600) and slot70 comparator CSVs:
+1 passed in 3.90s (4.026249s recorded outer command). It checks complete 20/20
+HTTP200 run guards, full outgoing CSV joins and ten contradictory mutations.
+The separate old122 exact-slot74 causal negative reproduced the original size
+binding rejection in 0.540773s. Current177, all49 historical profiles and distinct
+122/121/003 reader controls passed in 0.132794s. These are focused engineering
+controls, not a final Git/freeze or capture qualification claim.
+The original096 failed proof pool remains negative/unusable, and no captured row
+is credited by this edit. A distinct Source123 typed whole-proof consumer and two
+independent successful full proofs are required before affected-row promotion.
+No capture/runtime readiness, Native rebuild, pilot, admission or Q is claimed.
+
+--- Retained exact Source122 project ledger follows unchanged ---
+
 # QCSD thesis project ledger
 
 ## 23 October 2026: authenticated retained runtime dispatch in public acquisition
