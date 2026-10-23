@@ -1,5 +1,33 @@
 # QCSD thesis project ledger
 
+## 23 October 2026: authenticated retained runtime dispatch in public acquisition
+
+The AliT public pilot using the unchanged Native94 runtime stopped before any
+Native request. Its current study coordinator called the current portable
+verifier directly against the retained runtime producer. That strict verifier
+correctly refused the different declared producer source; the failed attempt
+remains preserved with zero scientific credit.
+
+Prospective SDK122 routes public `runtime_identity` through the existing
+authenticated producer dispatcher. An exact current producer still uses its
+current complete verifier. The one retained producer must match its existing
+55a3836e SHA-256 and 55,191-byte allowlist before its own unchanged complete
+verifier executes at its actual frozen source path. All source, archive,
+operation, installed-proof, client and runtime identity guards remain required.
+The returned seven runtime identity fields and every downstream preparation,
+own-pilot, capture, quota, tuple, Raw, timing, SQL and credit gate are unchanged.
+
+The distinct SDK122 execution reader retains the complete actual SDK121
+177-file profile and all 47 previously supported historical profiles, including
+SDK118003. Historical admissions keep their original identities. This source
+changes no installed runtime, image, Native commit, class or resource. Connected
+cheap regressions passed all six cases: complete current and retained runtime
+positives plus producer/client tamper negatives for each. The same retained
+positive fails on SDK121 at the original finite-consumer refusal. A separate
+reader smoke passed the current 177-file profile and all 48 historical profiles,
+including distinct actual121 and actual003 identities and tamper refusals.
+These local controls issue no pilot, admission, deployment or session credit.
+
 ## 23 October 2026: owned service for pristine initial HEADERS stalls
 
 The Native141 live engineering case completed eighteen of twenty exact

@@ -88,9 +88,8 @@ def create_json(path: Path, value: Any) -> None:
 
 
 def runtime_identity(canonical: Path) -> dict[str, Any]:
-    from .rapid_portable_runtime import _verify
-    value = load(canonical)
-    _verify(canonical.parent, value)
+    from .rapid_portable_runtime import _original, reference
+    value, _ = _original(reference(canonical))
     return {"collection_image_digest": value["collection_image_digest"],
             "prepare_image_digest": value["prepare_image_digest"],
             "client_sha256": value["installed_client_sha256"], "platform": value["platform"],
