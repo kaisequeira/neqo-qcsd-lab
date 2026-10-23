@@ -77,16 +77,31 @@ def require_shared_runtime(runtime):
         raise ValueError("two-root capture requires the exact Native93 runtime")
 
 
-def shared_roots(values, *, buflo122=False):
+# Prospective coordinator-only role for the actual existing SDK121/Native142
+# full runtime. No new image, mode readiness, admission, pilot or credit.
+FIXED142_SHARED_RUNTIME = {'canonical_sha256': '4fd41d2f41bc1f2359be4b1b17a7ef6b61620034aef12fbc570b48c3abdbe4e9', 'client_sha256': 'cfd4e12b5296836f502f3eb82f71eee501b714f27241685e12f5716314e61e41', 'platform': 'linux/arm64', 'native_commit': 'f64210a47fcd81b9ec75a076e892b4cf4d87e987', 'collection_image_digest': 'sha256:001007783e71635dd09619fe0b4d8b2b9500bb7d238e081fad376ea0ee3f86b3', 'prepare_image_digest': 'sha256:28695d8d9ef92166ed3f2c1ca5365f9bb509d30cd50085968004974b6933b6a7', 'source': {'image_digest': None, 'lab_commit': '06225fa5638dc879171b4c43da6eb05843aafca5', 'lab_dirty': False, 'lab_patch_sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'neqo_commit': 'f64210a47fcd81b9ec75a076e892b4cf4d87e987', 'neqo_dirty': False, 'neqo_patch_sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'neqo_pinned_commit': 'f64210a47fcd81b9ec75a076e892b4cf4d87e987'}}
+
+def require_fixed_mode_runtime(runtime):
+    if type(runtime) is not dict or canonical_json(runtime) != canonical_json(FIXED142_SHARED_RUNTIME):
+        raise ValueError("fixed F/T pooling requires the exact existing Native142 full seven-field runtime")
+
+
+def shared_roots(values, *, buflo122=False, fixed_modes=False):
     """Original two CS roots, or the explicit finite admitted BuFLO122 pool."""
-    native126 = (buflo122 and type(values) in (list, tuple) and 2 <= len(values) <= 3
-                 and all(str(value) in BF126_SHARED_ROOTS for value in values))
-    if buflo122 and not native126:
-        if (type(values) not in (list, tuple) or not 2 <= len(values) <= 5
-                or any(str(value) not in BF122_SHARED_ROOTS for value in values)):
-            raise ValueError("BuFLO122 pool requires two to five explicit cohort001 through005 roots")
-    elif not buflo122 and (type(values) not in (list, tuple) or len(values) != 2):
-        raise ValueError("two-root capture requires exactly two writer roots")
+    if type(fixed_modes) is not bool or fixed_modes and buflo122:
+        raise ValueError("shared runtime roles cannot be combined")
+    if fixed_modes:
+        if type(values) not in (list, tuple) or not 2 <= len(values) <= 50:
+            raise ValueError("fixed F/T pool requires two to fifty explicit admitted writer roots")
+    else:
+        native126 = (buflo122 and type(values) in (list, tuple) and 2 <= len(values) <= 3
+                     and all(str(value) in BF126_SHARED_ROOTS for value in values))
+        if buflo122 and not native126:
+            if (type(values) not in (list, tuple) or not 2 <= len(values) <= 5
+                    or any(str(value) not in BF122_SHARED_ROOTS for value in values)):
+                raise ValueError("BuFLO122 pool requires two to five explicit cohort001 through005 roots")
+        elif not buflo122 and (type(values) not in (list, tuple) or len(values) != 2):
+            raise ValueError("two-root capture requires exactly two writer roots")
     roots = [Path(value) for value in values]
     if (any(not root.is_absolute() or root.resolve(strict=True) != root
             or any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir() for root in roots)
@@ -993,14 +1008,21 @@ class MultiRootCaptureRuntime(CaptureRuntime):
     pilot authority; the public scheduler authenticates both writer contexts.
     """
 
-    def __init__(self, contexts, runtime, workers, *, cell_roots):
-        buflo122 = require_shared_runtime(runtime) is True
+    def __init__(self, contexts, runtime, workers, *, cell_roots, fixed_modes=False):
+        if type(fixed_modes) is not bool:
+            raise ValueError("explicit fixed F/T runtime role required")
+        if fixed_modes:
+            require_fixed_mode_runtime(runtime)
+            buflo122 = False
+        else:
+            buflo122 = require_shared_runtime(runtime) is True
+        self.fixed_modes = fixed_modes
         if type(workers) is not int or not 2 <= workers <= 11:
             raise ValueError("shared capture requires between two and eleven workers")
         if type(contexts) is not dict or any(not isinstance(root, Path) for root in contexts):
             raise ValueError("shared capture requires authenticated root contexts")
-        roots = shared_roots(list(contexts), buflo122=buflo122)
-        if (type(cell_roots) is not dict or not cell_roots or len(cell_roots) > 50
+        roots = shared_roots(list(contexts), buflo122=buflo122, fixed_modes=fixed_modes)
+        if (type(cell_roots) is not dict or not cell_roots or len(cell_roots) > (100 if fixed_modes else 50)
                 or set(cell_roots.values()) != set(roots)):
             raise ValueError("shared capture needs an explicit hostname-to-root map")
         self.contexts = {}
@@ -1017,6 +1039,17 @@ class MultiRootCaptureRuntime(CaptureRuntime):
                for root in roots for key in ("class_network", "class_selection", "source_sha256", "acceptance", "tuple_uniqueness_scope")):
             raise ValueError("shared capture roots have different frozen class plans")
         assignments = validate_network_plan(first, require=True)
+        self.mode_cell_roots = {}
+        if fixed_modes:
+            if any(type(key) is not tuple or len(key) != 2 or type(key[0]) is not str
+                    or key[1] not in ("front", "tamaraw") or key[0] not in assignments
+                    or not isinstance(root, Path) for key,root in cell_roots.items()):
+                raise ValueError("fixed F/T backend requires exact hostname/mode-to-root ownership")
+            self.mode_cell_roots = dict(cell_roots)
+            # One physical class router; each actual attempt still chooses its
+            # exact mode's owning root below. This anchor is not job ownership.
+            cell_roots = {host:min(root for (name,mode),root in self.mode_cell_roots.items()if name==host)
+                          for host in sorted({key[0]for key in self.mode_cell_roots})}
         if any(type(host) is not str or host not in assignments for host in cell_roots):
             raise ValueError("shared capture host has no frozen class assignment")
         self.cell_roots = dict(cell_roots)
@@ -1024,6 +1057,12 @@ class MultiRootCaptureRuntime(CaptureRuntime):
         super().__init__(roots[0], runtime, workers, hostnames=sorted(cell_roots))
 
     def flight_binding(self):
+        if self.fixed_modes:
+            return {"record_type":"qcsd-resource-domain-fixed142-F-T-shared-flight-v1",
+                "anchor_root":str(next(iter(self.contexts))),
+                "roots":[{"root":str(root),"study_sha256":context["study_sha256"]}for root,context in self.contexts.items()],
+                "cells":[{"hostname":host,"mode":mode,"root":str(root)}for(host,mode),root in sorted(self.mode_cell_roots.items())],
+                "workers":self.count,"one_active_worker_per_hostname":True,"scientific_credit":False}
         return {"record_type": "qcsd-resource-domain-shared-flight-v1",
             "anchor_root": str(next(iter(self.contexts))),
             "roots": [{"root": str(root), "study_sha256": context["study_sha256"]}
@@ -1097,8 +1136,11 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             bridge = json.loads(_docker("network", "inspect", "bridge"))[0]
             domains = sorted(self.cell_roots)
             from .resource_study_store import StudyStore
-            router_enrollments = {e["hostname"]: e for root in self.contexts for e in StudyStore(root).enrolled()
-                                  if self.cell_roots.get(e["hostname"]) == root}
+            if getattr(self,"fixed_modes",False):
+                router_enrollments = self._fixed_mode_router_enrollments()
+            else:
+                router_enrollments = {e["hostname"]: e for root in self.contexts for e in StudyStore(root).enrolled()
+                                      if self.cell_roots.get(e["hostname"]) == root}
             if set(router_enrollments) != set(domains):
                 raise ValueError("shared router capture lacks its exact current enrolled class")
             self._bind_enrollments(router_enrollments)
@@ -1232,10 +1274,33 @@ class MultiRootCaptureRuntime(CaptureRuntime):
             self.__exit__(None, None, None)
             raise
 
-    def _activate(self, index, hostname):
+    def _fixed_mode_router_enrollments(self):
+        """Bind every mode's real enrollment, retaining one shared class router."""
+        from .resource_study_store import StudyStore
+        enrolled = {root:{e["hostname"]:e for e in StudyStore(root).enrolled()}for root in self.contexts}
+        by_host = {};self.fixed_mode_enrollments = {}
+        for (host,mode),root in self.mode_cell_roots.items():
+            value = enrolled[root].get(host)
+            if (value is None or canonical_json(value["runtime"]) != canonical_json(self.runtime)
+                    or value.get("mode_readiness",{}).get(mode)is not True
+                    or len(value["urls"]) != len(set(value["urls"])) or len(value["urls"]) != 20):
+                raise ValueError("fixed F/T router lacks its exact ready full-runtime mode enrollment")
+            self.fixed_mode_enrollments[(host,mode)] = value
+            if host in by_host:
+                old = by_host[host]
+                if any(value[key] != old[key]for key in("urls","workload_sha256")):
+                    raise ValueError("same physical hostname changed its frozen twenty across F/T roots")
+                if _router_capture_seconds(value) > _router_capture_seconds(old):by_host[host] = value
+            else:by_host[host] = value
+        return by_host
+
+    def _activate(self, index, hostname, *, root=None):
         if hostname not in self.cell_roots:
             raise ValueError("hostname is outside this shared flight")
-        root = self.cell_roots[hostname]
+        if root is None:root = self.cell_roots[hostname]
+        elif (not self.fixed_modes or root not in self.contexts
+                or root not in {value for (host,mode),value in self.mode_cell_roots.items()if host==hostname}):
+            raise ValueError("shared activation has a foreign mode writer root")
         with self.switch_lock:
             original = self.root, self.plan, self.study_sha256
             context = self.contexts[root]
@@ -1248,8 +1313,15 @@ class MultiRootCaptureRuntime(CaptureRuntime):
     def capture(self, index: int, attempt: dict, enrollment: dict) -> dict:
         job_runtime = self._job_runtime(index, attempt, enrollment)
         worker = self.workers[index]
-        attachment = self._activate(index, attempt["hostname"])
-        root = self.cell_roots[attempt["hostname"]]
+        if getattr(self,"fixed_modes",False):
+            key = attempt["hostname"],attempt["mode"]
+            if key not in self.mode_cell_roots or enrollment != self.fixed_mode_enrollments[key]:
+                raise ValueError("fixed F/T attempt changed its mode writer or bound enrollment")
+            root = self.mode_cell_roots[key]
+            attachment = self._activate(index,attempt["hostname"],root=root)
+        else:
+            attachment = self._activate(index, attempt["hostname"])
+            root = self.cell_roots[attempt["hostname"]]
         directory = root / attempt["path"]
         job = {"hostname": attempt["hostname"], "mode": attempt["mode"],
                "enrollment_dir": str(root / enrollment["preparation_dir"]),

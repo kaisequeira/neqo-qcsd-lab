@@ -164,7 +164,7 @@ def test_current178_preserves_historical_entries_and_only_original094_alias():
     current = cohorts.verifier_contract()
     qualified = readers.qualify_execution(current)
     assert current["transitive_source_files"] == 178
-    assert len(qualified._supported_profiles) == 51
+    assert len(qualified._supported_profiles) == 52
     # These two historical names already described the same exact Source094
     # contract before this change. Preserve that alias, and refuse any new one.
     exact094 = readers._encoded(readers.prior_exact094_execution_contract())

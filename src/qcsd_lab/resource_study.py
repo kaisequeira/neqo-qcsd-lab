@@ -938,6 +938,14 @@ def parser():
     shared.add_argument("--attempts", type=int, required=True)
     shared.add_argument("--chunk", type=int, default=CHUNK)
     shared.add_argument("--pilot", action="store_true")
+    fixed_pool = actions.add_parser("capture-fixed-mode-roots", help="one protected formal flight for existing Native142 FRONT/Tamaraw writers")
+    fixed_pool.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
+    fixed_pool.add_argument("--runtime", type=Path, required=True)
+    fixed_pool.add_argument("--cells", type=Path, required=True, help="immutable exact admitted F/T root/hostname/mode plan")
+    fixed_pool.add_argument("--cells-sha256", required=True)
+    fixed_pool.add_argument("--workers", type=int, default=11)
+    fixed_pool.add_argument("--attempts", type=int, required=True)
+    fixed_pool.add_argument("--chunk", type=int, default=CHUNK)
     catalog = actions.add_parser("capture-catalog", help="one bounded existing-member flight across exact runtime lanes")
     catalog.add_argument("--proof-workers", type=int, choices=(1, 2), default=1,
                          help="bounded read-only formal verifier children on existing auxiliary CPUs")
@@ -1271,6 +1279,15 @@ def main(argv=None):
             finally:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)
+        elif args.action == "capture-fixed-mode-roots":
+            cells = load_fixed_mode_capture_plan(args.cells.absolute(), args.cells_sha256, root)
+            stop = threading.Event()
+            previous = {sig:signal.signal(sig,lambda *_:stop.set())for sig in(signal.SIGINT,signal.SIGTERM)}
+            try:
+                output = capture_fixed_mode_roots(root,runtime_identity(args.runtime.absolute()),cells,
+                    workers=args.workers,budget=args.attempts,stop=stop,chunk_sessions=args.chunk)
+            finally:
+                for sig,handler in previous.items():signal.signal(sig,handler)
         elif args.action == "capture-roots":
             cells = load_shared_capture_plan(args.cells.absolute(), args.cells_sha256, root)
             stop = threading.Event()
@@ -1330,32 +1347,39 @@ SHARED_CAPTURE_PLAN = "qcsd-resource-domain-two-root-CS-capture-plan-v1"
 BF122_SHARED_CAPTURE_PLAN = "qcsd-resource-domain-native122-buflo-pool-capture-plan-v1"
 
 
-def _shared_cells(cells, *, buflo122=False):
+FIXED142_SHARED_CAPTURE_PLAN = "qcsd-resource-domain-fixed142-F-T-shared-capture-plan-v1"
+
+def _shared_cells(cells, *, buflo122=False, fixed_modes=False):
     from .resource_study_epochs import _hostname
     from .resource_study_runtime import shared_roots
-    if type(cells) is not list or not 2 <= len(cells) <= 50:
+    if type(fixed_modes)is not bool or fixed_modes and buflo122:
+        raise ValueError("shared runtime roles cannot be combined")
+    if type(cells) is not list or not 2 <= len(cells) <= (100 if fixed_modes else 50):
         raise ValueError("shared capture needs between two and fifty explicit cells")
     normalized = []
     for row in cells:
         if (type(row) is not dict or set(row) != {"root", "hostname", "mode"}
-                or type(row["root"]) is not str or row["mode"] != ("buflo" if buflo122 else "cs-buflo")
+                or type(row["root"]) is not str or row["mode"] not in (("front","tamaraw")if fixed_modes else ("buflo",)if buflo122 else ("cs-buflo",))
                 or _hostname(row["hostname"]) != row["hostname"]):
             raise ValueError("shared capture cells must be exact root/hostname/BuFLO122 bindings"
                              if buflo122 else "shared capture cells must be exact root/hostname/CS bindings")
         normalized.append((Path(row["root"]), row["hostname"], row["mode"]))
-    roots = shared_roots(list(dict.fromkeys(root for root, _, _ in normalized)), buflo122=buflo122)
+    roots = shared_roots(list(dict.fromkeys(root for root, _, _ in normalized)), buflo122=buflo122, fixed_modes=fixed_modes)
     if len({(host, mode) for _, host, mode in normalized}) != len(normalized):
         raise ValueError("shared capture repeats a logical hostname/mode cell")
     return roots, normalized
 
 
-def _multiroot_context(parent, runtime, cells):
+def _multiroot_context(parent, runtime, cells, *, fixed_modes=False):
     """Authenticate both current writers; reservation/credit repeat live guards."""
     from . import resource_study_epochs as epochs
     from . import resource_study_cohorts as cohorts
     from .resource_study_runtime import require_shared_runtime
-    buflo122 = require_shared_runtime(runtime) is True
-    roots, normalized = _shared_cells(cells, buflo122=buflo122)
+    if fixed_modes:
+        from .resource_study_runtime import require_fixed_mode_runtime
+        require_fixed_mode_runtime(runtime);buflo122 = False
+    else:buflo122 = require_shared_runtime(runtime) is True
+    roots, normalized = _shared_cells(cells, buflo122=buflo122, fixed_modes=fixed_modes)
     parent = epochs._regular(parent, directory=True)
     if parent in roots or any(parent in root.parents or root in parent.parents for root in roots):
         raise ValueError("shared capture parent and writer roots must be separate")
@@ -1392,6 +1416,8 @@ def _multiroot_context(parent, runtime, cells):
                     or cell["definition"]["ready"] is not True
                     or cell["definition"]["native"] != [runtime["client_sha256"], runtime["platform"], runtime["native_commit"]]):
                 raise ValueError("shared capture enrollment/runtime/readiness differs")
+            if fixed_modes:
+                require_fixed_mode_runtime(enrollment["runtime"])
             if buflo122 and (cell["definition"]["policies"].get("buflo_duration_policy")
                              != "rapid-v7-fixed-64ms-640s-duration-budget-v1"
                     or enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy")
@@ -1447,6 +1473,40 @@ def capture_roots(parent: Path, runtime: dict, cells: list, *, workers=11, budge
             _source_auth=source_auth)
 
 
+def capture_fixed_mode_roots(parent: Path, runtime: dict, cells: list, *, workers=11,
+                             budget=None, stop=None, backend=None, chunk_sessions=CHUNK):
+    """Formal-only F/T pool; existing admission and ownpilot remain authority.
+
+    One active worker per hostname, including two modes under distinct roots.
+    The same original chunk/reservation/seal/commit and closure mechanics run.
+    """
+    from .resource_study_runtime import require_fixed_mode_runtime
+    require_fixed_mode_runtime(runtime)
+    if type(workers)is not int or not 2 <= workers <= 11:
+        raise ValueError("fixed F/T pool requires two to eleven declared workers")
+    roots,_ = _shared_cells(cells,fixed_modes=True)
+    if type(budget)is not int or not 1 <= budget <= 400 * len(cells):
+        raise ValueError("fixed F/T attempt budget must be finite and bounded by400 per selected logical cell")
+    if type(chunk_sessions)is not int or not 1 <= chunk_sessions <= CHUNK:
+        raise ValueError("fixed F/T chunk size must be between one and twenty")
+    from .resource_study_cohorts import source_operation
+    with source_operation(roots[0])as source_auth:
+        if source_auth is None:raise ValueError("fixed F/T pool requires committed owning-root Source authority")
+        return _capture_roots(parent,runtime,cells,workers=workers,budget=budget,stop=stop,
+            backend=backend,chunk_sessions=chunk_sessions,pilot=False,_source_auth=source_auth,fixed_modes=True)
+
+def load_fixed_mode_capture_plan(path,digest,parent):
+    from .resource_study_selection import _read,_json
+    value = _json(_read(path,digest))
+    if (type(value)is not dict or set(value)!={"record_type","schema_version","parent","cells"}
+            or value["record_type"] != FIXED142_SHARED_CAPTURE_PLAN
+            or type(value["schema_version"])is not int or value["schema_version"] != 1
+            or value["parent"] != str(parent)):
+        raise ValueError("fixed F/T plan changes its exact parent/schema")
+    _shared_cells(value["cells"],fixed_modes=True)
+    return value["cells"]
+
+
 def load_shared_capture_plan(path, digest, parent):
     from .resource_study_selection import _read, _json
     from .resource_study_runtime import BF122_SHARED_ROOTS, BF126_SHARED_ROOTS
@@ -1465,7 +1525,7 @@ def load_shared_capture_plan(path, digest, parent):
 
 
 def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
-                   chunk_sessions, pilot, _source_auth):
+                   chunk_sessions, pilot, _source_auth, fixed_modes=False):
     """Balanced chunks with at most three consecutive BF collector failures.
 
     Only a genuine verified BF commit resets that invocation-local streak.
@@ -1474,7 +1534,7 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
     never capture the same hostname concurrently. Every attempted reservation
     is durable before any packet is sent.
     """
-    contexts, jobs, authority = _multiroot_context(parent, runtime, cells)
+    contexts, jobs, authority = _multiroot_context(parent, runtime, cells, fixed_modes=fixed_modes)
     roots = list(contexts)
     storage = {str(root): require_storage(root,
         reserve_bytes=context["plan"].get("storage_reserve_bytes", 2 * 1024 ** 3))
@@ -1489,8 +1549,12 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
             raise ValueError("requested cells need their own matching focused pilots")
     if backend is None:
         from .resource_study_runtime import MultiRootCaptureRuntime
-        backend = MultiRootCaptureRuntime(contexts, runtime, workers,
-            cell_roots={host: job["root"] for (host, mode), job in jobs.items()})
+        if fixed_modes:
+            backend = MultiRootCaptureRuntime(contexts,runtime,workers,
+                cell_roots={cell:job["root"]for cell,job in jobs.items()},fixed_modes=True)
+        else:
+            backend = MultiRootCaptureRuntime(contexts, runtime, workers,
+                cell_roots={host: job["root"] for (host, mode), job in jobs.items()})
     stop = stop or threading.Event()
     paused, busy, completed_pilots, attempts = set(pilot_blocked), set(), set(), 0
     allocation_errors = []
@@ -1500,6 +1564,7 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
     if pilot:
         chunk_sessions = 1
     cell_order = list(jobs)
+    dispatched_cells = set()
     def scheduling_counts(cells):
         from .resource_study_cohorts import counts_snapshot
         snapshot = {}
@@ -1642,7 +1707,8 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
         futures = {}
         available = list(range(workers))
         while futures or (available and not stop.is_set()):
-            eligible = [c for c in cell_order if c not in paused and c not in completed_pilots and c[0] not in busy]
+            eligible = [c for c in cell_order if c not in paused and c not in completed_pilots
+                        and (fixed_modes or c[0] not in busy)]
             counts = (scheduling_counts(eligible) if available and not stop.is_set()
                       and (budget is None or attempts < budget) and eligible else {})
             while available and not stop.is_set() and (budget is None or attempts < budget):
@@ -1650,8 +1716,24 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                            and c[0] not in busy and counts.get(c, 400) < 400]
                 if not choices:
                     break
+                if fixed_modes:
+                    # A faster hostname must not consume the finite budget
+                    # reserved for a selected, not-yet-dispatched sibling mode.
+                    # Other healthy chunks may use every unreserved attempt.
+                    unserved = {c for c in eligible if c not in dispatched_cells
+                                and counts.get(c, 400) < 400}
+                    first_choices = [c for c in choices if c in unserved]
+                    if first_choices:
+                        choices = first_choices
+                    elif budget is not None and budget - attempts <= len(unserved):
+                        break
                 cell = min(choices, key=lambda c: (counts[c], cell_order.index(c)))
                 allowance = min(chunk_sessions, 400 - counts[cell], (budget - attempts) if budget else chunk_sessions)
+                if fixed_modes:
+                    if budget is not None:
+                        reserve = len(unserved - {cell})
+                        allowance = min(allowance, max(1, budget - attempts - reserve))
+                    dispatched_cells.add(cell)
                 worker = available.pop(0)
                 attempts += allowance
                 busy.add(cell[0])
@@ -1672,7 +1754,8 @@ def _capture_roots(parent, runtime, cells, *, workers, budget, stop, backend,
                                               "reason": result["allocation_error"]})
                 if result.get("pilot_passed"):
                     completed_pilots.add(result["cell"])
-    return {"record_type": ("qcsd-resource-domain-native122-buflo-pool-capture-result-v1"
+    return {"record_type": ("qcsd-resource-domain-fixed142-F-T-pool-capture-result-v1"if fixed_modes else
+                            "qcsd-resource-domain-native122-buflo-pool-capture-result-v1"
                             if all(mode == "buflo" for _, mode in jobs)
                             else "qcsd-resource-domain-two-root-CS-capture-result-v1"),
         "schema_version": 1, "parent": str(parent), "admission_at_start": authority,

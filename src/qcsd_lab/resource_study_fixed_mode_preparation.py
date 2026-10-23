@@ -145,6 +145,7 @@ def enroll_fixed_mode(root, runtime, *, input_path, input_sha256, backend=None):
     from . import resource_study as study, resource_study_cohorts as c
     from . import resource_study_native as n
     root = Path(root).absolute()
+    from .resource_study_lineage import INCLUDED
     checked = checked_input(root, runtime, input_path, input_sha256)
     value = checked['input']
     with study._retained_source_operation():
@@ -153,10 +154,12 @@ def enroll_fixed_mode(root, runtime, *, input_path, input_sha256, backend=None):
             backend = FocusedFixedModePreparationRuntime(root, runtime, checked)
         selection_path, selection_sha = n._retained_ref(value['resource_selection'])
         try:
+            frozen_options = ({} if value['hostname'] == INCLUDED else {
+                'frozen_application_manifest': Path(checked['manifest']['path']),
+                'frozen_application_manifest_sha256': checked['manifest']['sha256']})
             result = study.enroll(root, runtime, [value['hostname']], backend=backend,
                 resource_selection=selection_path, resource_selection_sha256=selection_sha,
-                frozen_application_manifest=Path(checked['manifest']['path']),
-                frozen_application_manifest_sha256=checked['manifest']['sha256'])
+                **frozen_options)
             rows = result.get('enrollment')
             if (type(rows) is not list or len(rows) != 1
                     or rows[0].get('hostname') != value['hostname']
@@ -180,7 +183,7 @@ class FocusedFixedModePreparationRuntime:
     def __init__(self, root, runtime, checked):
         self.root, self.runtime, self.checked = Path(root).absolute(), runtime, checked
 
-    def prepare(self, candidate, output, *, frozen_application_manifest):
+    def prepare(self, candidate, output, *, frozen_application_manifest=None):
         from . import resource_study_runtime as r
         from .resource_study_selection import read_frozen_application_manifest
         from .resource_study_cohorts import INPUT_CONTEXT, verifier_contract
@@ -189,22 +192,39 @@ class FocusedFixedModePreparationRuntime:
         if (candidate['hostname'] != value['hostname'] or candidate['urls'] != value['science']['urls']
                 or not _same(self.runtime, value['runtime']) or not _same(verifier_contract(), value['source_contract'])):
             raise ValueError('focused runtime/backend changed its immutable declared case')
-        frozen_raw, _ = read_frozen_application_manifest(self.root, candidate['hostname'],
-            candidate['urls'], frozen_application_manifest)
+        from .resource_study_lineage import INCLUDED
+        literal_reserve = value['hostname'] == INCLUDED
+        if literal_reserve:
+            if frozen_application_manifest is not None:
+                raise ValueError('literal reserve keeps its original selection reader')
+            from .resource_study_selection import validate_frozen_application_manifest_bytes
+            frozen_raw = _read(self.checked['manifest']['path'], self.checked['manifest']['sha256'])
+            validate_frozen_application_manifest_bytes(frozen_raw, candidate['hostname'], candidate['urls'])
+        else:
+            frozen_raw, _ = read_frozen_application_manifest(self.root, candidate['hostname'],
+                candidate['urls'], frozen_application_manifest)
         if hashlib.sha256(frozen_raw).hexdigest() != value['science']['workload_sha256']:
             raise ValueError('focused preparation manifest is not the original frozen class')
         output.mkdir(parents=True, exist_ok=False)
+        if literal_reserve:
+            from .resource_study_store import _create
+            frozen_path = output / 'literal-reserve-application-manifest.json'
+            _create(frozen_path, frozen_raw)
+        else:
+            frozen_path = self.root / frozen_application_manifest['manifest_path']
         dns = r.public_ipv4(candidate['hostname'])
         r._put(output / 'dns.json', dns)
         consumer = Path(__file__).resolve(strict=True).parents[2]
         job = {'record_type': INPUT, 'hostname': value['hostname'], 'mode': mode,
             'urls': value['science']['urls'], 'output': str(output / 'prepared'),
             'runtime': self.runtime, 'science': value['science'],
-            'frozen_manifest': str(self.root / frozen_application_manifest['manifest_path']),
-            'frozen_manifest_sha256': frozen_application_manifest['manifest_sha256'],
+            'frozen_manifest': str(frozen_path),
+            'frozen_manifest_sha256': hashlib.sha256(frozen_raw).hexdigest(),
             'historical_prepared': self.checked['historical_prepared'],
             'consumer_checkout': str(consumer), 'source_contract': value['source_contract'],
             'scientific_credit': False}
+        if literal_reserve:
+            job['literal_reserve'] = True
         # Preserve the exact original four-field preparation-job schema used
         # by validate_selection_proof. The distinct external-consumer job is
         # also retained and hash-bound in the enrollment, never aliased to it.
@@ -237,7 +257,8 @@ class FocusedFixedModePreparationRuntime:
                 path.chmod(0o444)
         native = load_json(base / 'enrollment.json')
         _replay_qualified_assets(base, native)
-        enrollment['frozen_application_manifest'] = dict(frozen_application_manifest)
+        if not literal_reserve:
+            enrollment['frozen_application_manifest'] = dict(frozen_application_manifest)
         enrollment['workload_path'] = Path(enrollment['workload_path']).relative_to(self.root).as_posix()
         enrollment['paths'] = {key: Path(path).relative_to(self.root).as_posix() if path else None
             for key,path in enrollment['paths'].items()}
@@ -246,8 +267,11 @@ class FocusedFixedModePreparationRuntime:
             for relative,digest in enrollment['files'].items()}
         enrollment['files'][(output / 'dns.json').relative_to(self.root).as_posix()] = sha256_file(output / 'dns.json')
         enrollment['files'][(output / 'focused-job.json').relative_to(self.root).as_posix()] = sha256_file(output / 'focused-job.json')
-        enrollment['files'][frozen_application_manifest['manifest_path']] = frozen_application_manifest['manifest_sha256']
-        enrollment['files'][INPUT_CONTEXT] = frozen_application_manifest['context_sha256']
+        if literal_reserve:
+            enrollment['files'][frozen_path.relative_to(self.root).as_posix()] = hashlib.sha256(frozen_raw).hexdigest()
+        else:
+            enrollment['files'][frozen_application_manifest['manifest_path']] = frozen_application_manifest['manifest_sha256']
+            enrollment['files'][INPUT_CONTEXT] = frozen_application_manifest['context_sha256']
         enrollment['source_occurrences'] = candidate.get('source_occurrences', [])
         for relative in enrollment['files']:
             (self.root / relative).chmod(0o444)
@@ -260,14 +284,20 @@ def native_main(job_path):
     from .resource_study_cohorts import verifier_contract
     from .resource_study_selection import (validate_frozen_application_manifest_bytes,
         frozen_application_manifest_declaration)
-    job = load_json(job_path)
+    job = load_json(Path(job_path))
     fields = {'record_type','hostname','mode','urls','output','runtime','science','frozen_manifest',
         'frozen_manifest_sha256','historical_prepared','consumer_checkout','source_contract','scientific_credit'}
+    if type(job) is dict and job.get('literal_reserve') is True:
+        fields.add('literal_reserve')
     if (type(job) is not dict or set(job) != fields or job['record_type'] != INPUT
             or job['scientific_credit'] is not False
             or job['consumer_checkout'] != str(Path(__file__).resolve(strict=True).parents[2])
             or not _same(job['source_contract'], verifier_contract())):
         raise ValueError('focused Native adapter has a foreign consumer or job')
+    from .resource_study_lineage import INCLUDED
+    literal_reserve = job.get('literal_reserve') is True
+    if literal_reserve != (job['hostname'] == INCLUDED):
+        raise ValueError('focused literal-reserve job differs from its original hostname')
     mode = _selected_mode(job['mode'])
     runtime = n._retained_runtime(job['runtime'])
     if runtime['native_commit'] != NATIVE142 or runtime['canonical_sha256'] != CANONICAL142_SHA256:
@@ -290,7 +320,11 @@ def native_main(job_path):
         expected_responses=[{k:r[k] for k in ('resource_id','status','bytes','body_sha256')} for r in responses],
         actual_preparation_run='preparation-get/native/run.json',
         actual_preparation_run_sha256=sha256_file(actual_dir / 'native/run.json'))
-    preparation['frozen_application_manifest'] = frozen_application_manifest_declaration(job['frozen_manifest_sha256'])
+    if literal_reserve:
+        if 'frozen_application_manifest' in preparation:
+            raise ValueError('literal reserve cannot inherit retained49 manifest authority')
+    else:
+        preparation['frozen_application_manifest'] = frozen_application_manifest_declaration(job['frozen_manifest_sha256'])
     _fixed_science_preflight(job['science'], prepared, mode)
     paths = {'manifest': n._write(root / 'resources.json', frozen_raw, raw=True),
         'prepared_workload': n._write(root / 'prepared-workload.json', prepared),

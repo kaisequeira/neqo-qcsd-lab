@@ -1,3 +1,94 @@
+# Source125 — Native143 diagnostics and fixed FRONT/Tamaraw acquisition
+
+This prospective Lab125 cut starts from the genuine SDK124 commit and keeps its
+full preparation, admission, runtime dispatch, scientific and credit contracts.
+It adds only genuine Native143 commit403378b1a9d13dab069ed605ef0e094beab6bc73
+to the existing set that requires complete schema14 layered TX inventory.
+All five prior required Native identities and the complete predicate bodies
+remain unchanged. No deadline, permission, mode setting or acceptance bound is
+relaxed by that Source identity addition.
+
+Root actually committed Native143 with tree de79de346b2ea99d0185e9552386f38e5b8faaa3
+after the five new connected failure-diagnostic tests passed (119.296174s outer
+command), five original strict release/selection/attribution regressions passed
+(1.542704s), and the same compiled runner library passed all480 tests (2.294454s;
+1.84s internal test wall time). These are Native143 engineering results, not
+Lab125 test results or physical capture qualification. The bounded diagnostics
+do not establish an operating-system cause for the earlier clock misses.
+
+The distinct public capture_fixed_mode_roots F/T role keeps the original
+shared400 counts, current writer, matching ownpilot, global tuple,
+Source/capture authority, seal/commit and topology cleanup paths. Its finite
+batch dispatcher reserves one first attempt for each selected cell that has
+not yet been dispatched, including a second mode waiting on its hostname.
+Healthy cells can continue using every unreserved attempt. This new-role-only
+reservation corrects the actual initial candidate race in which a faster
+hostname consumed the final batch attempt before that sibling mode ran.
+It routes each hostname/mode to its actual admitted owning root while sharing
+one physical router and at most one active worker per hostname. The existing
+CS/BuFLO shared roles retain their original runtime and budget contracts.
+
+F/T pooling accepts exclusively the existing immutable SDK121/Native142 full7
+canonical4fd41d2f, including its original source identity. Native143 does not
+gain F/T pool eligibility through this policy update. The six originally absent
+F/T cells span three hostnames, so they permit at most three active hostname
+workers until more genuine ready cells join the selected pool. Initial focused
+preparation should use budget0 or1; six serial400-cell flights are unnecessary.
+
+The focused preparation API now handles the literal MyAnimeList reserve through
+its original selection and lineage readers. It carries the exact historical
+application bytes into one strict20-resource GET and three original selected
+chaff qualifications, and retains the original fixed settings. It does not add
+the retained49 frozen-manifest or supplemental-input authority to that class.
+Those readers' original MyAnimeList exclusions remain unchanged. Native job
+entry normalizes the actual string CLI argument to Path; a test now exercises
+that same container bootstrap boundary instead of hiding it with a Path object.
+
+The current reader retains the exact actual124178-file profile and all50 older
+historical entries, including the original094 alias. The current178 graph is
+a5c67f3080bbca7dd597290496913556a1fee9746d3c297e9f9b446a6257a77b;
+its profile SHA256 is
+d7a8ffa649490628c003d842f062f0bb65a862d53a2c5b6dc7048f71b57c6ff8.
+No uncommitted intermediate profile becomes history. Five package files change,
+with all181 other package files preserved. Two new regression files and one
+bounded portable fixture retain the actual original MyAnimeList metadata bytes.
+The Native143 Gitlink is the genuine committed403378b1; Root will next freeze
+the clean Lab commit and run the original public cold runtime producer. No new
+Lab125 runtime, live readiness, admission, pilot or recording credit is claimed.
+
+Root's initial candidate test run closed with 59 passes and four failures
+in 110.75s internal test time. Two failures exposed the finite-budget race and
+a nondeterministic synthetic tuple fixture; the other two were stale expected
+reader diagnostics/counts after the additive current125 profile. This fresh
+candidate corrects those causes and keeps all history and old role predicates.
+Repeated-tuple fixtures now repeat the same cell tuple independently of thread
+arrival order. Root's later run passed40 of64 cases before stopping at one
+additional stale historical assertion; its test-only correction preserves the
+full legacy169 identity and compares primary validators against genuine124.
+That single test passed in0.741420 seconds; the remaining23 passed in0.858927
+seconds. The separately targeted scheduling/tuple tests passed in47.495289
+seconds. Already passing cases were not rerun without a relevant change.
+
+After the actual124 MyAnimeList API refusal, Root added the literal-reserve
+preparation fix. Its connected two-mode tests first exposed a stale synthetic
+ancestor profile in1.469129 seconds; correcting only the fixture made both pass
+in3.116901 seconds. The typed negatives then caught the real string/Path launch
+bug in1.418520 seconds. After the production path normalization and matching
+bootstrap test correction, all8 connected positive/negative cases passed in
+3.951984 seconds. The13 original preparation/input/FD/runtime/history cases
+passed in0.601935 seconds; the final complete178/all51-history/schema14 controls
+passed in0.050903 seconds. These are engineering controls using synthetic
+network boundaries; they are not live qualification or recording credit.
+
+At this Source cut, the published study total remains87,229/100,000, local87,253
+and deferred24. Fourteen new Fonts undefended sessions passed both independent
+whole Raw phases (67.190030 and69.478591 seconds) with14 positives and zero
+refusals per phase, but await genuine current-state publication. The other10
+deferred true negatives remain excluded. The same50 classes, ordered20 URLs,
+complete working responses, original timing bounds and400-per-cell quota apply.
+
+The following SDK124 ledger is retained bytewhole.
+
 # Source124 — focused fixed FRONT/Tamaraw preparation
 
 Root applied the reviewed preparation core and distinct current178-file

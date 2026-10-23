@@ -423,6 +423,9 @@ def test_changed_owner_study_refuses_before_native_job_and_restores_anchor(share
 
 def test_017_018_019_reader_profiles_remain_distinct_and_exact():
     old = compatibility.legacy_contract()
+    assert old["transitive_source_files"] == 169
+    assert old["transitive_source_sha256"] == "4d05b6d198ff06c0d5f9926ba29c63e01a1632df1d266c8b1a1785aeecea757d"
+    assert hashlib.sha256(canonical_json(old)).hexdigest() == "ff2326d2594ee63eae6c815815e0c4330f86f793e7e4df4d6e69ab30f3852aa5"
     prior = compatibility.prior_execution_contract()
     assert prior["transitive_source_sha256"] == "c709e8fd516a2d54778aeb053230987c742bd7cb13e086629ff42a2bf4b9d0cc"
     assert hashlib.sha256(canonical_json(prior)).hexdigest() == "1fb5169a34545c61cad3bfd493a1ea3365c8e8f1678b0678619cf0901607bbde"
@@ -435,9 +438,15 @@ def test_017_018_019_reader_profiles_remain_distinct_and_exact():
         assert binding["historical_receipts_requalified_by_compatibility"] is False
         assert binding["authority_issued"] is False and binding["scientific_credit_added"] == 0
     for profile in (old, prior):
-        with pytest.raises(ValueError, match="Source020 execution"):
+        with pytest.raises(ValueError, match="unsupported or changed initial16 execution reader"):
             compatibility.qualify_execution(profile)
     changed = deepcopy(prior); changed["files"]["fidelity.py"] = "0" * 64
     with pytest.raises(ValueError, match="admission reader"):
         compatibility.require_supported(changed, qualified)
-    assert all(actual["files"][name] == old["files"][name] for name in compatibility.PRIMARY_FILES)
+    # Primary validators already changed before actual SDK124. Keep the
+    # whole legacy169 identity above; compare this cut with its genuine base.
+    previous = compatibility.prior_exact124_execution_contract()
+    assert previous["transitive_source_files"] == 178
+    assert previous["transitive_source_sha256"] == "f20ab3b2c72d5293258234805a377d6b678f9b8e79cb851086c19b636ea76c00"
+    assert hashlib.sha256(canonical_json(previous)).hexdigest() == "a354acaead8636b62b986846ffa1b3cdd2eddf5efc164949b68852548732606a"
+    assert all(actual["files"][name] == previous["files"][name] for name in compatibility.PRIMARY_FILES)
