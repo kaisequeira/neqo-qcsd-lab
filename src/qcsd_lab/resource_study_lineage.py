@@ -377,18 +377,29 @@ def validate_member_proof(proof):
 def validate_cells(cells, transition):
     """Each cell retains its own map, and agrees with the selected leaf address."""
     from .resource_study_network import mapping_sha256
-    from .resource_study_store import StudyStore
+    from .resource_study_store import StudyStore, _PLAN_READ_SCOPE
+    scope = _PLAN_READ_SCOPE.get()
+    if scope is not None:
+        from .resource_study_cohorts import _RecordsRead
+        if type(scope) is not _RecordsRead:
+            raise ValueError("foreign records lineage-plan scope")
+        scope.check()
     leaf, selection = transition["class_network"], transition["class_selection"]
     allowed = {digest(leaf), leaf["predecessor_sha256"]}
-    plans = {}
+    plans, mappings = {}, {}
     for cell in cells:
         if cell["root"] not in plans:
-            plans[cell["root"]] = StudyStore(cell["root"]).plan()
+            store = StudyStore(cell["root"])
+            if scope is None:
+                plans[cell["root"]] = store.plan()
+            else:
+                plans[cell["root"]], mappings[cell["root"]] = scope.lineage_plan(store)
         plan = plans[cell["root"]]
         host, binding = cell["hostname"], cell["definition"].get("network", {})
-        if (host not in leaf["assignments"] or mapping_sha256(plan) not in allowed
+        mapping = mappings.get(cell["root"])
+        if (host not in leaf["assignments"] or (mapping_sha256(plan) if mapping is None else mapping) not in allowed
                 or plan["source_sha256"] != selection["source_sha256"]
-                or binding.get("mapping_sha256") != mapping_sha256(plan)
+                or binding.get("mapping_sha256") != (mapping_sha256(plan) if mapping is None else mapping)
                 or binding.get("assignment") != leaf["assignments"][host]
                 or plan["class_network"]["assignments"].get(host) != leaf["assignments"][host]):
             raise ValueError("cell mapping lacks exact committed stable lineage/address authority")

@@ -1,3 +1,94 @@
+# Source126 — bounded validation and Native144 pre-selection diagnostics
+
+This cut starts from genuine Source125 and preserves its preparation, admission,
+working-response, Raw verification and credit rules. It binds genuine Native144
+commit42118eabf7b4a78328b655d9bccbae286c481a7c, whose tree is
+a814d414f9f8d80b49edcaa77ec59f39d64be5c6. Cohorts, lineage, the separately
+identified current reader and one Native identity literal in capture policy
+change; all182 other package files remain whole. No traffic setting, five-millisecond
+physical window, four-millisecond selection cutoff, one-millisecond reserve or
+primary ten-millisecond clock bound changes. Existing Native142 F/T and historical
+Native143 BF runtime identities remain separate from any new Native144 runtime.
+
+Native144 adds a fixed ten-sample pre-selection CPU/wall-clock context ring and
+emits only bounded failure diagnostics. The original post-confirmation diagnostic
+and all selection, dispatch, packet, deadline and credit predicates remain whole.
+Four new and ten original focused tests passed in124.709202 seconds recorded
+outer time. All484 runner-library tests then passed on the same compiled target
+in1.908514 seconds. The exact tested source was committed and all1787 files were
+double-hashed against their Git blobs. No live Native144 success follows from
+these tests. Its actual commit joins the six historical identities requiring the
+same complete schema14 layered TX contract; every policy function stays whole.
+
+Within one original records() call, lineage validation reuses a small copied
+projection of the fully parsed plan and its pure mapping digest. Every access
+retains the original fresh SQL metadata joins and immutable input FD9 checks.
+Public Store.plan() returns its independent complete copy. Closure compares the
+complete original study bytes and private memory; PID/thread, validator and
+closed-scope guards remain. No SQL rows, head, accepted count, tuple or
+scientific decision becomes a retained cache.
+
+During the capture-authority constructor's read-only input collection, callbacks
+compare the exact Source handle, same PID/thread and collector, profile bytes,
+complete immutable census and validator identities. Both window boundaries
+reopen and hash the full178 Source graph before authority returns. Every
+noncollecting ownership check retains its original complete Source metadata
+scan. All original ancestry, root/file/SQL/fence, reservation, quota, tuple,
+capture and final closure predicates remain in place.
+
+Before the final additive Native144 policy literal, all20 Linux constructor
+controls passed in2.72 seconds internal and3.686035
+seconds recorded outer time. An earlier invocation stopped before collection
+because the096 interpreter lacked pytest; its failure and Source closure remain
+recorded. Root used the existing095 test venv without modifying096 or125.
+Selected126 imports, full178 Source and five-file FD9/Git closure were explicit.
+On unchanged125, the same connected original-API test then failed exactly its
+intended assertion:120 nested Source censuses instead of126's zero. That expected
+negative took3.12 seconds internal and3.352335 seconds recorded outer time.
+These counts prove the scoped mechanical change, not production startup speed
+or traffic qualification.
+
+The subsequent11 new lineage controls plus original Linux capture-authority
+selection closed with50 passes, one failure and one deselection in38.35 seconds
+internal,39.291281 seconds recorded. The failure is the inherited test requiring
+every bound data file to be fully read twice at each callback. The same test
+fails at the identical assertion on unchanged125 in1.47 seconds internal,
+1.686556 seconds recorded. capture_records_scope, _CaptureAuthority.check and
+finish are bytewhole125→126: interior callbacks reopen/fence FD9 and fresh SQL,
+while complete data hashes run at flight entry/closure. The old test is
+preserved; neither implementation nor assertion was weakened.
+
+The earlier lineage/scope/network run passed58 cases and refused two because
+the prospective reader had not yet been forwarded. Only those two were retested
+after the proper178 reader, and both passed in4.08 seconds. Original lineage,
+selection and fence coverage passed110 cases with one skip; its sole failure
+is the inherited15/16 coordinator-count assertion. Separate complete Source
+conservation verified the unchanged actual17/18 coordinator and all its hashes.
+No already passing cases need another broad rerun. The dated Source055 current
+identity assertion is deselected; actual current/historical reader APIs are
+checked directly instead of relabelling that old test.
+
+The current reader retains all52 exact historical entries, including actual125,
+and adds a distinct current126 identity. There are53 supported entries and52
+unique profiles because the original094 alias remains unchanged. Complete
+current178/all52-history conservation passed in0.145013 seconds recorded before
+the Native144 addition. Final Native144/current178/all52-history controls passed
+in0.149115 seconds, including positive and typed negative schema14 checks for
+all seven actual Native identities. No unpublished intermediate126 candidate
+becomes history. Current178 graph is
+481948769f83a7e2f5a4eead30269f8970d608c33b25664df2fa05b37ca996cf;
+its profile SHA256 is
+02f4b7d7ac1d511d463ef46abe2b7f607315359bdb1d5ce6c2eb7558617f1e4f.
+
+These tests precede the clean Source126 commit and full source freeze. No
+new runtime, deployment, live readiness, ownpilot or capture is claimed here.
+These engineering controls
+issue zero scientific credit. Only complete working requests and their original
+independent whole-Raw qualification can advance the study total; published Q
+and physical acceptance bounds retain their original meaning.
+
+The following Source125 ledger is retained bytewhole as a historical record.
+
 # Source125 — Native143 diagnostics and fixed FRONT/Tamaraw acquisition
 
 This prospective Lab125 cut starts from the genuine SDK124 commit and keeps its

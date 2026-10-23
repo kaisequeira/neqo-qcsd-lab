@@ -271,6 +271,7 @@ class _CaptureAuthority:
         self.writers = frozenset(str(Path(path).absolute()) for path in roots)
         self.records, self.parent, self.meta, self.fences = None, None, {}, {}
         self._validation_digest = None
+        self._collecting_source_snapshot = None
         self.epoch_lock = None
         self.source_auth = _SOURCE_OPERATION.get()
         self.owns_source = self.source_auth is None
@@ -281,7 +282,7 @@ class _CaptureAuthority:
         self.implementations = self._implementations()
         token = _AUTHORITY_INPUT_COLLECTOR.set(self)
         try:
-            with bind_source(self.source_auth):
+            with bind_source(self.source_auth), self._collecting_source_window():
                 # Fresh Stores prevent warmed membership/prefix caches from
                 # omitting dependencies during unchanged full validation.
                 parents = [_epochs()._membership(StudyStore(path)) for path in self.writers]
@@ -355,7 +356,83 @@ class _CaptureAuthority:
             network._uncached_validate_network_plan, canonical_json, deepcopy,
             lineage.check_fence_connection, runtime._DockerLockOwner.check,
             selection._read, resource_inputs._read, resource_inputs.read_context,
-            _CaptureAuthority._validated_digest)
+            _CaptureAuthority._validated_digest, _SourceAuthorization,
+            _SourceAuthorization.check, _SourceAuthorization.check.__code__,
+            _source_stamps, _source_stamps.__code__,
+            _fresh_verifier_contract, _fresh_verifier_contract.__code__,
+            sha256_file, sha256_file.__code__,
+            _CaptureAuthority._check_collecting_source,
+            _CaptureAuthority._check_collecting_source.__code__,
+            _CaptureAuthority._collecting_source_window,
+            _CaptureAuthority._collecting_source_window.__wrapped__,
+            _CaptureAuthority._collecting_source_window.__wrapped__.__code__)
+
+    def _check_collecting_source(self):
+        """Only the constructor's same-thread read-only collection window.
+
+        This compares the complete entry census, not any SQL, input file,
+        lineage, count or receipt. Both window boundaries reopen and hash
+        every qualifying Source byte before any authority can be returned.
+        """
+        old = self._collecting_source_snapshot
+        auth = self.source_auth
+        if (type(old) is not tuple or len(old) != 6
+                or not self.active or self.pid != os.getpid() or self.pid != old[1]
+                or threading.get_ident() != self.owner_thread or self.owner_thread != old[2]
+                or _AUTHORITY_INPUT_COLLECTOR.get() is not self
+                or type(auth) is not _SourceAuthorization or auth is not old[0]
+                or _SOURCE_OPERATION.get() is not auth
+                or auth.active is not True or auth.pid != self.pid
+                or type(auth.profile) is not bytes or auth.profile != old[3]
+                or type(auth.stamps) is not dict or auth.stamps is not old[4]
+                or auth.stamps != old[5]):
+            raise ValueError("capture authority collecting Source window is closed, foreign, or changed")
+
+    @contextmanager
+    def _collecting_source_window(self):
+        """Amortize Source-only scans during constructor input collection.
+
+        No authority is yielded to a caller inside this private window. The
+        original validator still rereads all input/SQL/fence state, and every
+        noncollecting check keeps its original complete Source metadata scan.
+        """
+        if (self.collecting is not True or self._collecting_source_snapshot is not None
+                or not self.active or self.pid != os.getpid()
+                or self.owner_thread != threading.get_ident()
+                or _AUTHORITY_INPUT_COLLECTOR.get() is not self
+                or type(self.source_auth) is not _SourceAuthorization
+                or _SOURCE_OPERATION.get() is not self.source_auth
+                or self._implementations() != self.implementations):
+            raise ValueError("capture authority collecting Source entry is foreign or changed")
+        self.docker_owner.check()
+        self.source_auth.check()
+        if self.source_auth.profile != canonical_json(_fresh_verifier_contract()):
+            raise ValueError("capture authority qualifying Source bytes changed before collection")
+        self.source_auth.check()
+        self._collecting_source_snapshot = (self.source_auth, self.pid, self.owner_thread,
+            self.source_auth.profile, self.source_auth.stamps, deepcopy(self.source_auth.stamps))
+        body_error = None
+        try:
+            yield
+        except BaseException as error:
+            body_error = error
+            raise
+        finally:
+            try:
+                if self._implementations() != self.implementations:
+                    raise ValueError("capture authority reader implementation changed during collection")
+                self.docker_owner.check()
+                self._check_collecting_source()
+                self.source_auth.check()
+                if self.source_auth.profile != canonical_json(_fresh_verifier_contract()):
+                    raise ValueError("capture authority qualifying Source bytes changed during collection")
+                self.source_auth.check()
+            except BaseException as failure:
+                if body_error is None:
+                    raise
+                body_error.add_note("Collecting Source closure also refused: " + str(failure))
+            finally:
+                self._collecting_source_snapshot = None
 
     def _owner(self):
         if not self.active or self.pid != os.getpid():
@@ -363,7 +440,10 @@ class _CaptureAuthority:
         if self._implementations() != self.implementations:
             raise ValueError("capture authority reader implementation changed")
         self.docker_owner.check()
-        self.source_auth.check()
+        if self.collecting is True:
+            self._check_collecting_source()
+        else:
+            self.source_auth.check()
 
     def _collector(self):
         self._owner()
@@ -717,6 +797,11 @@ class _RecordsRead:
         self.roots, self.frozen_values = {}, {}
         self.network_plans = {}
         self.network_validator = network._uncached_validate_network_plan
+        self.lineage_plans = {}
+        self.lineage_mapping = network.mapping_sha256
+        self.lineage_mapping_code = getattr(self.lineage_mapping, "__code__", None)
+        self.store_plan = StudyStore.plan
+        self.store_plan_code = getattr(self.store_plan, "__code__", None)
 
     def check(self):
         if not self.active or self.pid != os.getpid() or self.thread != threading.get_ident():
@@ -734,7 +819,7 @@ class _RecordsRead:
             raise ValueError("immutable records input SHA differs")
         return raw
 
-    def plan_data(self, store):
+    def _cached_plan_data(self, store):
         self.check(); root = str(store.root); old = self.plans.get(root)
         if old is None:
             raw = self.file(store.root / "study.json")
@@ -756,7 +841,69 @@ class _RecordsRead:
         if type(store)._plan_data is not old[0]:
             raise ValueError("records plan parser changed within its call")
         for name in old[1]: self.file(store.root / name)
-        return deepcopy(old[2])
+        return old[2]
+
+    def plan_data(self, store):
+        # The public Store.plan path still receives its independent full copy.
+        return deepcopy(self._cached_plan_data(store))
+
+    def _lineage_check(self):
+        self.check()
+        from . import resource_study_network as network
+        if (network._uncached_validate_network_plan is not self.network_validator
+                or network.mapping_sha256 is not self.lineage_mapping
+                or getattr(network.mapping_sha256, "__code__", None) is not self.lineage_mapping_code
+                or StudyStore.plan is not self.store_plan
+                or getattr(StudyStore.plan, "__code__", None) is not self.store_plan_code):
+            raise ValueError("records lineage mapping validator or Store.plan changed within its call")
+
+    def lineage_plan(self, store):
+        """Fresh original SQL/FD joins, with a small independently copied view.
+
+        The full cached plan never escapes this method. Cached lineage values
+        are immutable bytes and one validated digest, not SQL rows or authority.
+        The original complete plan is parsed/validated once, every input is FD9
+        fenced on every hit, and finish compares memory and derived values to
+        the freshly rehashed original study bytes before records() can return.
+        """
+        self._lineage_check()
+        if type(store) is not StudyStore:
+            return store.plan(), None
+        from . import resource_study_network as network
+        value, observation, assignments = self._cached_plan_data(store)
+        root = str(store.root)
+        row = self.lineage_plans.get(root)
+        if row is None:
+            raw = network._network_plan_cache_bytes(value)
+            if raw is None:
+                return store.plan(), None  # Preserve unsupported original semantics.
+            mapping = self.lineage_mapping(value)
+            self._lineage_check()
+            if network._network_plan_cache_bytes(value) != raw:
+                raise ValueError("records lineage plan changed during initial validation")
+            row = self.lineage_plans[root] = (raw, mapping)
+        mapping = row[1]
+        # Exactly the live Store.plan suffix: no connection, row or SQL decision
+        # is retained. Only the pure mapping digest comes from the sealed plan.
+        with store._transaction() as connection:
+            bound = connection.execute("SELECT value FROM meta WHERE key='study_sha256'").fetchone()
+            if bound is None or bound[0] != observation["sha256"] or observation["mode"] != "0444":
+                raise ValueError("immutable study/ledger binding changed")
+            if assignments is not None:
+                for key, expected in (("tuple_uniqueness_scope", value["tuple_uniqueness_scope"]),
+                                      ("class_network_sha256", mapping)):
+                    bound = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+                    if bound is None or bound[0] != expected:
+                        raise ValueError("ledger persistent network/tuple scope binding changed")
+        projection = {"source_sha256": value["source_sha256"],
+                      "class_network": {"assignments": deepcopy(value["class_network"]["assignments"])}}
+        if "record_type" in value["class_network"]:
+            projection["class_network"]["record_type"] = deepcopy(value["class_network"]["record_type"])
+        if "class_selection" in value:
+            projection["class_selection"] = deepcopy(value["class_selection"])
+        self._lineage_check()
+        return projection, mapping
+
 
     def network_plan(self, plan, *, require=False):
         """Memoize successful pure decisions, never assignments or SQL state."""
@@ -814,19 +961,37 @@ class _RecordsRead:
 
     def finish(self):
         self.check()
+        if self.lineage_plans:
+            self._lineage_check()
+        checked_lineage = set()
         for root, old in self.roots.items():
             if _records_root(root) != old:
                 raise ValueError("records root identity changed before call closure")
         for path, old in self.files.items():
-            stamp, digest, _ = _records_file(Path(path), content=True)
+            stamp, digest, raw = _records_file(Path(path), content=True)
             if (stamp, digest) != old:
                 raise ValueError("records input bytes changed before call closure")
+            root = str(Path(path).parent)
+            if Path(path).name == "study.json" and root in self.lineage_plans:
+                from . import resource_study_network as network
+                expected = self.lineage_plans[root]
+                original = _load(raw)
+                memory = self.plans[root][2][0]
+                if (type(expected) is not tuple or len(expected) != 2
+                        or network._network_plan_cache_bytes(original) != expected[0]
+                        or network._network_plan_cache_bytes(memory) != expected[0]
+                        or self.lineage_mapping(original) != expected[1]):
+                    raise ValueError("records lineage memory or projection differs from complete original study bytes")
+                self._lineage_check()
+                checked_lineage.add(root)
+        if checked_lineage != set(self.lineage_plans):
+            raise ValueError("records lineage cache lacks a complete study closure")
 
     def discard(self):
         self.active = False
         self.files.clear(); self.plans.clear(); self.stores.clear(); self.sciences.clear()
         self.roots.clear(); self.frozen_values.clear()
-        self.network_plans.clear()
+        self.network_plans.clear(); self.lineage_plans.clear()
 
 
 @contextmanager
