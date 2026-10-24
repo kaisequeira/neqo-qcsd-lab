@@ -385,9 +385,12 @@ class PreparationRuntime:
             from .buflo_duration_budget import preparation_policy
             preparation_policy(buflo_duration_policy)
         if cs_buflo_duration_policy is not None:
-            from .resource_study_native import cs_duration_policy, CS180_HOST, CS180_NATIVE
+            from .resource_study_native import cs_duration_policy, CS180_HOST, CS180_NATIVE, CS160_POLICY, _cs160_scope
             cs_duration_policy(cs_buflo_duration_policy)
-            if candidate["hostname"] != CS180_HOST or self.runtime.get("native_commit") != CS180_NATIVE:
+            if cs_buflo_duration_policy == CS160_POLICY:
+                _cs160_scope(candidate["hostname"],self.runtime,"0"*64)
+                if frozen_application_manifest is None: raise ValueError("CS160 requires exact frozen20")
+            elif candidate["hostname"] != CS180_HOST or self.runtime.get("native_commit") != CS180_NATIVE:
                 raise ValueError("CS180 requires exact Ang Native137 preparation")
         frozen_raw = None
         from . import tamaraw_fixed_configuration as tamaraw
@@ -453,10 +456,16 @@ class PreparationRuntime:
         if (buflo_duration_policy is not None
                 and enrollment.get("mode_policies", {}).get("buflo", {}).get("buflo_duration_policy") != buflo_duration_policy):
             raise ValueError("prepared BuFLO duration differs from the explicit Native CLI option")
-        from .resource_study_native import CS180_POLICY
+        from .resource_study_native import CS180_POLICY, CS160_POLICY
         actual_cs = enrollment.get("mode_policies", {}).get("cs-buflo", {}).get("cs_buflo_duration_policy")
         if actual_cs != cs_buflo_duration_policy:
             raise ValueError("prepared CS duration differs from explicit Native CLI option")
+        if actual_cs == CS160_POLICY:
+            from .resource_study_native import _cs160_scope
+            _cs160_scope(candidate["hostname"],self.runtime,enrollment["workload_sha256"])
+            if (enrollment["mode_settings"]["cs-buflo"]["timeout_seconds"],
+                    enrollment["mode_settings"]["cs-buflo"]["capture_seconds"]) != (160,180):
+                raise ValueError("returned CS160 preparation limits differ")
         if actual_cs == CS180_POLICY:
             from .resource_study_native import _cs180_scope
             _cs180_scope(candidate["hostname"], self.runtime, enrollment["workload_sha256"])

@@ -244,9 +244,12 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
         from .buflo_duration_budget import preparation_policy
         preparation_policy(buflo_duration_policy)
     if cs_buflo_duration_policy is not None:
-        from .resource_study_native import cs_duration_policy, CS180_HOST, CS180_NATIVE
+        from .resource_study_native import cs_duration_policy, CS180_POLICY, CS180_HOST, CS180_NATIVE, CS160_POLICY, _cs160_scope
         cs_duration_policy(cs_buflo_duration_policy)
-        if hostnames != [CS180_HOST] or runtime.get("native_commit") != CS180_NATIVE:
+        if cs_buflo_duration_policy == CS160_POLICY:
+            if len(hostnames) != 1: raise ValueError("CS160 preparation binds one exact existing class at a time")
+            _cs160_scope(hostnames[0],runtime,"0"*64)
+        elif hostnames != [CS180_HOST] or runtime.get("native_commit") != CS180_NATIVE:
             raise ValueError("CS180 enrollment requires exact single Ang Native137 scope")
     selection_requested = _selection_request(resource_selection, resource_selection_sha256, hostnames)
     if cs_buflo_duration_policy is not None and not selection_requested:
@@ -975,17 +978,17 @@ def parser():
         else:
             child.add_argument("--resource-version-input", type=Path, required=True)
             child.add_argument("--resource-version-input-sha256", required=True)
-    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit", "cohort-cs180-template", "cohort-cs180-admit", "cohort-tamaraw16-template", "cohort-tamaraw16-admit"):
+    for action in ("cohort-init", "cohort-template", "cohort-admit", "cohort-first-template", "cohort-first-admit", "cohort-buflo-budget-template", "cohort-buflo-budget-admit", "cohort-buflo-cover-template", "cohort-buflo-cover-admit", "cohort-cs180-template", "cohort-cs180-admit", "cohort-cs160-template", "cohort-cs160-admit", "cohort-tamaraw16-template", "cohort-tamaraw16-admit"):
         child = actions.add_parser(action, help="explicit compatible-runtime cohort protocol; no imported credit")
         child.add_argument("--root", type=Path, required=True, help="existing selected50 parent")
         child.add_argument("--cohort-root", type=Path, required=True, help="fresh separate immutable cohort ledger")
         if action == "cohort-init":
             child.add_argument("--cs-buflo-duration-policy", help="explicit Ang CS180 prospective preparation intent")
             child.add_argument("--tamaraw-initial16-hostname", help="explicit one-host initial16 prospective preparation intent")
-        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template", "cohort-buflo-cover-template", "cohort-cs180-template", "cohort-tamaraw16-template"}:
+        if action in {"cohort-template", "cohort-first-template", "cohort-buflo-budget-template", "cohort-buflo-cover-template", "cohort-cs180-template", "cohort-cs160-template", "cohort-tamaraw16-template"}:
             child.add_argument("--affected-hostname", action="append", required=True)
             child.add_argument("--affected-mode", choices=MODES, action="append", required=True)
-        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit", "cohort-cs180-admit", "cohort-tamaraw16-admit"}:
+        elif action in {"cohort-admit", "cohort-first-admit", "cohort-buflo-budget-admit", "cohort-buflo-cover-admit", "cohort-cs180-admit", "cohort-cs160-admit", "cohort-tamaraw16-admit"}:
             child.add_argument("--declaration", type=Path, required=True)
             child.add_argument("--declaration-sha256", required=True)
     for action in ("cohort-semantic-refusal-template", "cohort-semantic-refusal-admit"):
@@ -1126,6 +1129,13 @@ def main(argv=None):
         elif args.action == "cohort-buflo-cover-admit":
             from .resource_study_cohorts import create_cover_replacement
             output = create_cover_replacement(root, args.cohort_root.absolute(), args.declaration.absolute(), args.declaration_sha256)
+        elif args.action == "cohort-cs160-template":
+            from .resource_study_cohorts import cs160_template
+            output = cs160_template(root,args.cohort_root.absolute(),
+                affected_hostnames=args.affected_hostname,affected_modes=args.affected_mode)
+        elif args.action == "cohort-cs160-admit":
+            from .resource_study_cohorts import create_cs160_condition
+            output = create_cs160_condition(root,args.cohort_root.absolute(),args.declaration.absolute(),args.declaration_sha256)
         elif args.action == "cohort-cs180-template":
             from .resource_study_cohorts import cs180_template
             output = cs180_template(root, args.cohort_root.absolute(),
@@ -1178,8 +1188,10 @@ def main(argv=None):
             if args.cs_buflo_duration_policy is not None:
                 from .resource_study_native import cs_duration_policy
                 cs_duration_policy(args.cs_buflo_duration_policy)
-                if not args.enroll or args.runtime is None or args.hostname != ["angkanet26.com"]:
-                    raise ValueError("CS180 needs live exact Ang enrollment and runtime")
+                from .resource_study_native import CS160_POLICY
+                if (not args.enroll or args.runtime is None or not args.hostname
+                        or (args.cs_buflo_duration_policy != CS160_POLICY and args.hostname != ["angkanet26.com"])):
+                    raise ValueError("explicit CS duration needs live exact declared enrollment and runtime")
             if args.buflo_duration_policy is not None:
                 from .buflo_duration_budget import preparation_policy
                 preparation_policy(args.buflo_duration_policy)
@@ -1835,7 +1847,7 @@ def _retained_current_scope(store, checked):
     context, _ = c._input_context(store.root, store.plan())
     c._require_current_input_context(context)
     if (value['parent'] != {**context['parent'], 'head_sha256': context['predecessor_sha256']}
-            or 'cs180_condition' in context or 'tamaraw16_condition' in context):
+            or 'cs180_condition' in context or 'cs160_condition' in context or 'tamaraw16_condition' in context):
         raise ValueError('retained mode preparation changes actual parent/condition authority')
     cells = c._input_cells(context, value['hostname'])
     definition = cells[0]['definition']

@@ -46,7 +46,185 @@ ACTIVE = ("reserved", "captured", "unverified")
 
 # Conservative complete declared package-import closure, including dormant
 # branches. Hash these source bytes only; never import/execute that graph.
-RAW_DEPENDENCIES = ('__init__.py', 'acquisition_errors.py', 'acquisition_selection.py', 'acquisition_timing.py', 'application_response_policy.py', 'browser_egress.py', 'browser_egress_dns.py', 'browser_egress_dns_evidence.py', 'browser_egress_dns_packets.py', 'browser_egress_fixture.py', 'browser_egress_observer.py', 'browser_egress_qualification.py', 'buflo_duration_budget.py', 'buflo_evaluation.py', 'buflo_fin_permission.py', 'buflo_handoff.py', 'buflo_reference.py', 'buflo_study.py', 'build_storage.py', 'capture.py', 'capture_acceptance_policy.py', 'capture_session.py', 'cdp_targets.py', 'chaff_qualification.py', 'class_acquisition.py', 'class_attestation.py', 'class_campaigns.py', 'class_capture20.py', 'class_catalogue.py', 'class_cohort.py', 'class_cohort20.py', 'class_curated_source.py', 'class_evaluation.py', 'class_final_selection20.py', 'class_fitting.py', 'class_handoff.py', 'class_history20.py', 'class_layout.py', 'class_pair_screening20.py', 'class_pipeline.py', 'class_profile_result.py', 'class_public20.py', 'class_readiness20.py', 'class_run_binding.py', 'class_study.py', 'class_successor.py', 'class_validation20.py', 'cohort_allocation.py', 'defenses.py', 'discover.py', 'discovery_evidence.py', 'experiment.py', 'fidelity.py', 'fitting.py', 'fitting_morphing.py', 'fitting_trace.py', 'fitting_walkie_talkie.py', 'fitting_wtfpad.py', 'front_fixed_configuration.py', 'front_incoming_acceptance.py', 'front_preparation_evidence.py', 'h3_prebaseline.py', 'kernel_tx.py', 'kernel_tx_runtime.py', 'manifest.py', 'orchestrator.py', 'parameters.py', 'per_class_selected_capture_amendment.py', 'pinned_cdp.py', 'playwright_driver.py', 'prepare.py', 'process_scheduler.py', 'profiles.py', 'qualification_control_authority.py', 'qualification_delivery_compatibility.py', 'rapid_action_local_source_facts.py', 'rapid_additive_static_enrollment.py', 'rapid_ael_fifteen_qualification.py', 'rapid_attempt_failure_evidence.py', 'rapid_browser_policy_evidence.py', 'rapid_canary_control_bridge.py', 'rapid_capture_control_compatibility.py', 'rapid_capture_control_installation.py', 'rapid_capture_plan.py', 'rapid_capture_traffic.py', 'rapid_chunk_partial_lane.py', 'rapid_class_epochs.py', 'rapid_collector_failure_evidence.py', 'rapid_enrolled_subgroup.py', 'rapid_epoch_corpus.py', 'rapid_epoch_target_chunks.py', 'rapid_epoch_target_parallel_schedule.py', 'rapid_fixed_condition_target.py', 'rapid_formal_parallel.py', 'rapid_front_capture_amendment.py', 'rapid_front_quick_compatibility.py', 'rapid_front_quick_profile.py', 'rapid_lane_evidence.py', 'rapid_mixed_implementation_target.py', 'rapid_operation_facts.py', 'rapid_ordinary_canary_carry.py', 'rapid_ordinary_canary_retry.py', 'rapid_ordinary_group_canary.py', 'rapid_ordinary_parallel_schedule.py', 'rapid_ordinary_transport_control.py', 'rapid_original_static_parallel_schedule.py', 'rapid_page_evidence.py', 'rapid_parallel_capture.py', 'rapid_parallel_partial_lane.py', 'rapid_partial_lane.py', 'rapid_partial_progress.py', 'rapid_per_class_selected_enrollment.py', 'rapid_per_class_selected_input.py', 'rapid_per_mode_native_target.py', 'rapid_portable_runtime.py', 'rapid_quick_profile.py', 'rapid_rolling_capture.py', 'rapid_rolling_readiness.py', 'rapid_rolling_schedule.py', 'rapid_runtime_compatibility.py', 'rapid_runtime_epochs.py', 'rapid_runtime_inspector.py', 'rapid_selected_budget_input.py', 'rapid_selected_capture_input.py', 'rapid_selected_input_renewal.py', 'rapid_selected_parallel_schedule.py', 'rapid_selection_amendment.py', 'rapid_site_admission.py', 'rapid_slot_chunks.py', 'rapid_static_parallel_schedule.py', 'rapid_study_profile.py', 'rapid_supplemental_cohort.py', 'rapid_target_chunks.py', 'rapid_target_overlay_source.py', 'rapid_target_parallel_schedule.py', 'rapid_undefended_capture.py', 'resource_study.py', 'resource_study_audit.py', 'resource_study_cohorts.py', 'resource_study_catalog.py', 'resource_study_epochs.py', 'resource_study_inputs.py', 'resource_study_integrity.py', 'resource_study_lineage.py', 'resource_study_native.py', 'resource_study_network.py', 'resource_study_reader_compatibility.py', 'resource_study_resource_version_inputs.py', 'resource_study_resource_versions.py', 'resource_study_runtime.py', 'resource_study_selection.py', 'resource_study_storage.py', 'resource_study_store.py', 'resource_study_supplements.py', 'resource_study_verify.py', 'resource_study_verify_child.py', 'response_budget_qualification.py', 'runtime_provenance.py', 'selected_capture_amendment.py', 'static_budget_capture.py', 'static_budget_capture_amendment.py', 'static_evidence_transport.py', 'supplied_static_admission.py', 'supplied_static_bootstrap_get.py', 'supplied_static_budget_successor.py', 'supplied_static_capture_amendment.py', 'supplied_static_get.py', 'supplied_static_graph.py', 'supplied_static_preparation.py', 'tamaraw_fixed_configuration.py', 'util.py', 'verification.py', 'whole_graph_capture_amendment.py', 'whole_graph_input.py', 'whole_graph_supplement.py', 'resource_study_atomic_publish.py', 'resource_study_semantic_refusals.py', 'resource_study_fixed_mode_preparation.py')
+RAW_DEPENDENCIES = ('__init__.py',
+ 'acquisition_errors.py',
+ 'acquisition_selection.py',
+ 'acquisition_timing.py',
+ 'application_response_policy.py',
+ 'browser_egress.py',
+ 'browser_egress_dns.py',
+ 'browser_egress_dns_evidence.py',
+ 'browser_egress_dns_packets.py',
+ 'browser_egress_fixture.py',
+ 'browser_egress_observer.py',
+ 'browser_egress_qualification.py',
+ 'buflo_duration_budget.py',
+ 'buflo_evaluation.py',
+ 'buflo_fin_permission.py',
+ 'buflo_handoff.py',
+ 'buflo_reference.py',
+ 'buflo_study.py',
+ 'build_storage.py',
+ 'capture.py',
+ 'capture_acceptance_policy.py',
+ 'capture_session.py',
+ 'cdp_targets.py',
+ 'chaff_qualification.py',
+ 'class_acquisition.py',
+ 'class_attestation.py',
+ 'class_campaigns.py',
+ 'class_capture20.py',
+ 'class_catalogue.py',
+ 'class_cohort.py',
+ 'class_cohort20.py',
+ 'class_curated_source.py',
+ 'class_evaluation.py',
+ 'class_final_selection20.py',
+ 'class_fitting.py',
+ 'class_handoff.py',
+ 'class_history20.py',
+ 'class_layout.py',
+ 'class_pair_screening20.py',
+ 'class_pipeline.py',
+ 'class_profile_result.py',
+ 'class_public20.py',
+ 'class_readiness20.py',
+ 'class_run_binding.py',
+ 'class_study.py',
+ 'class_successor.py',
+ 'class_validation20.py',
+ 'cohort_allocation.py',
+ 'defenses.py',
+ 'discover.py',
+ 'discovery_evidence.py',
+ 'experiment.py',
+ 'fidelity.py',
+ 'fitting.py',
+ 'fitting_morphing.py',
+ 'fitting_trace.py',
+ 'fitting_walkie_talkie.py',
+ 'fitting_wtfpad.py',
+ 'front_fixed_configuration.py',
+ 'front_incoming_acceptance.py',
+ 'front_preparation_evidence.py',
+ 'h3_prebaseline.py',
+ 'kernel_tx.py',
+ 'kernel_tx_runtime.py',
+ 'manifest.py',
+ 'orchestrator.py',
+ 'parameters.py',
+ 'per_class_selected_capture_amendment.py',
+ 'pinned_cdp.py',
+ 'playwright_driver.py',
+ 'prepare.py',
+ 'process_scheduler.py',
+ 'profiles.py',
+ 'qualification_control_authority.py',
+ 'qualification_delivery_compatibility.py',
+ 'rapid_action_local_source_facts.py',
+ 'rapid_additive_static_enrollment.py',
+ 'rapid_ael_fifteen_qualification.py',
+ 'rapid_attempt_failure_evidence.py',
+ 'rapid_browser_policy_evidence.py',
+ 'rapid_canary_control_bridge.py',
+ 'rapid_capture_control_compatibility.py',
+ 'rapid_capture_control_installation.py',
+ 'rapid_capture_plan.py',
+ 'rapid_capture_traffic.py',
+ 'rapid_chunk_partial_lane.py',
+ 'rapid_class_epochs.py',
+ 'rapid_collector_failure_evidence.py',
+ 'rapid_enrolled_subgroup.py',
+ 'rapid_epoch_corpus.py',
+ 'rapid_epoch_target_chunks.py',
+ 'rapid_epoch_target_parallel_schedule.py',
+ 'rapid_fixed_condition_target.py',
+ 'rapid_formal_parallel.py',
+ 'rapid_front_capture_amendment.py',
+ 'rapid_front_quick_compatibility.py',
+ 'rapid_front_quick_profile.py',
+ 'rapid_lane_evidence.py',
+ 'rapid_mixed_implementation_target.py',
+ 'rapid_operation_facts.py',
+ 'rapid_ordinary_canary_carry.py',
+ 'rapid_ordinary_canary_retry.py',
+ 'rapid_ordinary_group_canary.py',
+ 'rapid_ordinary_parallel_schedule.py',
+ 'rapid_ordinary_transport_control.py',
+ 'rapid_original_static_parallel_schedule.py',
+ 'rapid_page_evidence.py',
+ 'rapid_parallel_capture.py',
+ 'rapid_parallel_partial_lane.py',
+ 'rapid_partial_lane.py',
+ 'rapid_partial_progress.py',
+ 'rapid_per_class_selected_enrollment.py',
+ 'rapid_per_class_selected_input.py',
+ 'rapid_per_mode_native_target.py',
+ 'rapid_portable_runtime.py',
+ 'rapid_quick_profile.py',
+ 'rapid_rolling_capture.py',
+ 'rapid_rolling_readiness.py',
+ 'rapid_rolling_schedule.py',
+ 'rapid_runtime_compatibility.py',
+ 'rapid_runtime_epochs.py',
+ 'rapid_runtime_inspector.py',
+ 'rapid_selected_budget_input.py',
+ 'rapid_selected_capture_input.py',
+ 'rapid_selected_input_renewal.py',
+ 'rapid_selected_parallel_schedule.py',
+ 'rapid_selection_amendment.py',
+ 'rapid_site_admission.py',
+ 'rapid_slot_chunks.py',
+ 'rapid_static_parallel_schedule.py',
+ 'rapid_study_profile.py',
+ 'rapid_supplemental_cohort.py',
+ 'rapid_target_chunks.py',
+ 'rapid_target_overlay_source.py',
+ 'rapid_target_parallel_schedule.py',
+ 'rapid_undefended_capture.py',
+ 'resource_study.py',
+ 'resource_study_atomic_publish.py',
+ 'resource_study_audit.py',
+ 'resource_study_catalog.py',
+ 'resource_study_cohorts.py',
+ 'resource_study_cs160_preparation.py',
+ 'resource_study_epochs.py',
+ 'resource_study_fixed_mode_preparation.py',
+ 'resource_study_inputs.py',
+ 'resource_study_integrity.py',
+ 'resource_study_lineage.py',
+ 'resource_study_native.py',
+ 'resource_study_network.py',
+ 'resource_study_reader_compatibility.py',
+ 'resource_study_resource_version_inputs.py',
+ 'resource_study_resource_versions.py',
+ 'resource_study_runtime.py',
+ 'resource_study_selection.py',
+ 'resource_study_semantic_refusals.py',
+ 'resource_study_storage.py',
+ 'resource_study_store.py',
+ 'resource_study_supplements.py',
+ 'resource_study_verify.py',
+ 'resource_study_verify_child.py',
+ 'response_budget_qualification.py',
+ 'runtime_provenance.py',
+ 'selected_capture_amendment.py',
+ 'static_budget_capture.py',
+ 'static_budget_capture_amendment.py',
+ 'static_evidence_transport.py',
+ 'supplied_static_admission.py',
+ 'supplied_static_bootstrap_get.py',
+ 'supplied_static_budget_successor.py',
+ 'supplied_static_capture_amendment.py',
+ 'supplied_static_get.py',
+ 'supplied_static_graph.py',
+ 'supplied_static_preparation.py',
+ 'tamaraw_fixed_configuration.py',
+ 'util.py',
+ 'verification.py',
+ 'whole_graph_capture_amendment.py',
+ 'whole_graph_input.py',
+ 'whole_graph_supplement.py')
 
 
 def _epochs():
@@ -1908,6 +2086,151 @@ def create_tamaraw16_condition(parent, cohort_root, declaration_path, declaratio
     return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=False, tamaraw16=True)
 
 
+CS160_DECLARATION = "qcsd-resource-domain-Native148-CS160-condition-amendment-declaration-v1"
+CS160_STRATA = "qcsd-resource-domain-CS120-CS160-original20-science-strata-v1"
+CS160_CHANGE = "CS120-to-CS160-original20-Native148-condition-v1"
+CS160_AMENDMENT = "prospective exact Native148 CS160/180; unchanged ordered frozen20 and CPSP600 physics; separately labelled condition shares400 with literal original120 history"
+
+
+def _cs160_science(old):
+    from .resource_study_native import CS160_POLICY, CS160_PARAMETERS
+    try:
+        settings = old["settings"]
+        if (len(old["urls"]) != 20 or len(set(old["urls"])) != 20
+                or settings["parameters_sha256"] != CS160_PARAMETERS
+                or [settings["timeout_seconds"],settings["capture_seconds"]] != [120,180]
+                or old["policies"].get("parameter_policy") != "fixed-cs-buflo-cpsp-live-v1"
+                or "cs_buflo_duration_policy" in old["policies"]
+                or not _same(settings["policies"],old["policies"])):
+            raise ValueError("CS160 requires original CS120/180 and exact CPSP ordered20")
+        _digest(old["workload_sha256"])
+        result = deepcopy(old)
+        result["policies"]["cs_buflo_duration_policy"] = CS160_POLICY
+        result["settings"].update(timeout_seconds=160,capture_seconds=180)
+        result["settings"]["policies"] = deepcopy(result["policies"])
+        return result
+    except (KeyError,TypeError) as error:
+        raise ValueError("CS160 original full science is malformed") from error
+
+
+def _cs160_pair(old_cell,new_cell,transition):
+    from .resource_study_native import CS160_NATIVE,CS160_CLIENT
+    key = old_cell["hostname"],old_cell["mode"]
+    selected = transition["class_selection"]["selected_hostnames"]
+    if (len(selected) != len(set(selected)) or len(selected) != 50
+            or key[0] not in selected or key[1] != "cs-buflo"
+            or (new_cell["hostname"],new_cell["mode"]) != key
+            or type(new_cell["definition"]["native"])is not list or len(new_cell["definition"]["native"])!=3
+            or new_cell["definition"]["native"][1:] != ["linux/arm64",CS160_NATIVE]
+            or _same(old_cell["definition"]["native"],new_cell["definition"]["native"])
+            or new_cell["definition"]["ready"] is not True
+            or not _same(_cs160_science(_science(old_cell,transition)),_science(new_cell,transition))):
+        raise ValueError("CS160 changes another cell/Native/resource/full science or original50")
+    _digest(new_cell["definition"]["native"][0])
+
+
+def _cs160_strata(old,science,member_id):
+    if (old["mode"] != "cs-buflo" or "science_strata" in old or "condition_strata" in old
+            or not _same(_cs160_science(old["science"]),science)):
+        raise ValueError("CS160 requires one separately labelled original120 condition transition")
+    return {"record_type":CS160_STRATA,"schema_version":1,"shared_quota":400,
+        "strata":[{"condition":"original-CS120/180","science":deepcopy(old["science"]),
+                   "members":[m["cohort_id"]for m in old["members"]]},
+                  {"condition":CS160_CHANGE,"science":deepcopy(science),"members":[member_id]}]}
+
+
+def _cs160_condition_sciences(entry):
+    value = entry["condition_strata"]
+    fields = {"hostname","mode","science","members","writer","condition_strata"}
+    fields.update(k for k in ("pending_retirements","semantic_refusals") if k in entry)
+    if (set(entry) != fields or entry["mode"] != "cs-buflo"
+            or type(value) is not dict or set(value) != {"record_type","schema_version","shared_quota","strata"}
+            or value["record_type"] != CS160_STRATA or type(value["schema_version"]) is not int
+            or value["schema_version"] != 1 or type(value["shared_quota"]) is not int or value["shared_quota"] != 400
+            or type(value["strata"]) is not list or len(value["strata"]) != 2):
+        raise ValueError("CS160 requires its exact two-condition shared400 ledger")
+    assigned=[];sciences={}
+    for stratum,label in zip(value["strata"],("original-CS120/180",CS160_CHANGE)):
+        if (type(stratum) is not dict or set(stratum) != {"condition","science","members"}
+                or stratum["condition"] != label or type(stratum["members"]) is not list
+                or not stratum["members"] or any(type(i)is not str for i in stratum["members"])):
+            raise ValueError("CS160 condition member schema differs")
+        assigned.extend(stratum["members"]);sciences.update({i:stratum["science"]for i in stratum["members"]})
+    if (len(assigned)!=len(set(assigned)) or assigned != [m["cohort_id"]for m in entry["members"]]
+            or entry["writer"]not in value["strata"][1]["members"]
+            or not _same(_cs160_science(value["strata"][0]["science"]),value["strata"][1]["science"])
+            or not _same(entry["science"],value["strata"][1]["science"])):
+        raise ValueError("CS160 rewrites complete original science/member/writer history")
+    return sciences
+
+
+def _cs160_input_declaration(prior):
+    from .resource_study_native import CS160_POLICY,CS160_NATIVE,CS160_CLIENT
+    selected=prior["class_transition"]["class_selection"]["selected_hostnames"]
+    if len(selected)!=len(set(selected)) or len(selected)!=50:
+        raise ValueError("CS160 requires genuine unchanged original50")
+    cells=[]
+    for cell in prior["cells"]:
+        if cell["mode"]!="cs-buflo" or cell["hostname"]not in selected:continue
+        science=_science(cell,prior["class_transition"])
+        if "cs_buflo_duration_policy"in science["policies"]:continue
+        _cs160_science(science)
+        cells.append({"hostname":cell["hostname"],"mode":"cs-buflo",
+            "previous_definition_sha256":cell["definition_sha256"],
+            "workload_sha256":science["workload_sha256"],"urls":science["urls"]})
+    if not cells or len(cells)>50:raise ValueError("CS160 cannot invent a new class or first mode")
+    return {"record_type":"qcsd-Native148-CS160-prospective-original20-preparation-intent-v1",
+        "schema_version":1,"policy":CS160_POLICY,"native_commit":CS160_NATIVE,
+        "client_sha256":CS160_CLIENT,"selected_hostnames":selected,"cells":cells,
+        "shared_quota":400,"scientific_credit":False}
+
+
+def _cs160_declaration_value(parent,prior,affected,retained_digest,contract):
+    value=_cs180_declaration_value(parent,prior,affected,retained_digest,contract)
+    value.update(record_type=CS160_DECLARATION,methodology_amendment=CS160_AMENDMENT)
+    return value
+
+
+def _validate_cs160_declaration(value,expected):
+    if (type(value)is not dict or value.get("condition_change_authorized")is not True
+            or value.get("two_condition_strata_shared400")is not True
+            or value.get("historical_credit_preserved")is not True
+            or type(value.get("rationale"))is not str or not value["rationale"].strip()):
+        raise ValueError("explicit Native148 CS160 prospective methodology declaration required")
+    actual=dict(value);actual.update(condition_change_authorized=False,rationale="")
+    if not _same(actual,expected):
+        raise ValueError("CS160 declaration changes actual parent/full science/retained history/Source")
+
+
+def _cs160_declaration(parent,new,records,hosts,modes):
+    e=_epochs()
+    if (not records or records[-1].get("class_transition")is None or modes!=["cs-buflo"]
+            or not hosts or hosts!=sorted(set(hosts)) or len(hosts)>50):
+        raise ValueError("CS160 requires explicit existing selected50 CS hostnames")
+    intent=_cs160_input_declaration(records[-1]);allowed={r["hostname"]for r in intent["cells"]}
+    if not set(hosts)<=allowed:raise ValueError("CS160 cannot change an absent/already-amended mode")
+    cells={e._key(x):x for x in records[-1]["cells"]};contract=verifier_contract()
+    registry=records[-1]["cohorts"]if records[-1]["record_type"]==ADMISSION else _initial_registry(records[-1],contract)
+    affected=[]
+    for host in hosts:
+        key=host,"cs-buflo";old,candidate=cells[key],e._cell(new,*key)
+        _cs160_pair(old,candidate,records[-1]["class_transition"])
+        if "science_strata"in _entry(registry,key)or "condition_strata"in _entry(registry,key):
+            raise ValueError("CS160 condition was already amended")
+        affected.append({"hostname":host,"mode":"cs-buflo","previous_definition_sha256":old["definition_sha256"],"new_definition_sha256":candidate["definition_sha256"]})
+    return _cs160_declaration_value(parent,records[-1],affected,e._sha(_manifest(registry)),contract)
+
+
+def cs160_template(parent,cohort_root,*,affected_hostnames=(),affected_modes=()):
+    e=_epochs();parent,new=StudyStore(Path(parent).absolute()),StudyStore(Path(cohort_root).absolute())
+    with e._lock(parent.root):
+        return _cs160_declaration(parent,new,e._records(parent),list(affected_hostnames),list(affected_modes))
+
+
+def create_cs160_condition(parent,cohort_root,declaration_path,declaration_sha256):
+    return _create_admission(parent,cohort_root,declaration_path,declaration_sha256,first=False,cs160=True)
+
+
 def _cs180_science(old):
     """Exact prospective science transform; no arbitrary duration/workload waiver."""
     from .resource_study_native import (CS180_OLD_WORKLOAD, CS180_WORKLOAD,
@@ -1956,6 +2279,8 @@ def _cs180_strata(old,science,member_id):
 
 def _condition_sciences(entry):
     value=entry["condition_strata"]
+    if type(value)is dict and value.get("record_type")==CS160_STRATA:
+        return _cs160_condition_sciences(entry)
     if type(value) is dict and value.get("record_type") == T16_STRATA:
         return _t16_condition_sciences(entry)
     if (set(entry)!={"hostname","mode","science","members","writer","condition_strata"}
@@ -2326,6 +2651,9 @@ def _input_context(root, plan):
     study_raw = _read(root / "study.json")
     fields = {"record_type", "schema_version", "root", "study_sha256", "parent", "predecessor",
               "predecessor_sha256", "class_selection_sha256", "source_sha256", "scientific_credit"}
+    if type(value)is dict and "cs160_condition"in value:
+        fields.add("cs160_condition")
+        if "cs180_condition"in value or "tamaraw16_condition"in value:raise ValueError("CS160 is a separate condition root")
     if type(value) is dict and "cs180_condition" in value:
         fields.add("cs180_condition")
     if type(value) is dict and "tamaraw16_condition" in value:
@@ -2352,6 +2680,8 @@ def _input_context(root, plan):
             or not _same(transition.get("class_selection"), plan["class_selection"])
             or not _same(transition.get("class_network"), plan["class_network"])):
         raise ValueError("runtime-cohort local input context root/source/map/predecessor differs")
+    if "cs160_condition"in value and not _same(value["cs160_condition"],_cs160_input_declaration(prior)):
+        raise ValueError("CS160 input intent changes original50/current parent/frozen20")
     if "cs180_condition" in value and not _same(value["cs180_condition"],_cs180_input_declaration(prior)):
         raise ValueError("CS180 input intent changes original parent cell, policy or full scope")
     if "tamaraw16_condition" in value:
@@ -2458,7 +2788,7 @@ def validate_input_authority(store, enrollment, *, plan):
             or any(enrollment["files"].get(name) != value for name, value in expected["files"].items())):
         raise ValueError("runtime-cohort enrollment lacks original immutable stable context")
     host = enrollment["hostname"]
-    if host == INCLUDED or host not in plan["class_network"]["assignments"]:
+    if (host == INCLUDED and "cs160_condition"not in context) or host not in plan["class_network"]["assignments"]:
         raise ValueError("supplemental cohort authority cannot replace literal MAL or selected50")
     cells = _input_cells(context, host); definition = cells[0]["definition"]
     from .resource_study_native import CS180_POLICY,CS180_WORKLOAD,_cs180_scope
@@ -2471,6 +2801,13 @@ def validate_input_authority(store, enrollment, *, plan):
             raise ValueError("explicit CS180 initialization requires its genuine new policy enrollment")
         _cs180_scope(host,enrollment["runtime"],enrollment["workload_sha256"])
         workload=CS180_WORKLOAD
+    elif context.get("cs160_condition")is not None:
+        from .resource_study_native import CS160_POLICY,_cs160_scope
+        actual=context["cs160_condition"];wanted=_cs160_input_declaration(context["predecessor"])
+        rows=[r for r in wanted["cells"]if r["hostname"]==host]
+        if selected_cs!=CS160_POLICY or not _same(actual,wanted)or len(rows)!=1 or enrollment["workload_sha256"]!=rows[0]["workload_sha256"]or enrollment["urls"]!=rows[0]["urls"]:
+            raise ValueError("CS160 enrollment lacks exact actual-parent/frozen20 condition input")
+        _cs160_scope(host,enrollment["runtime"],enrollment["workload_sha256"])
     elif selected_cs is not None:
         raise ValueError("CS180 enrollment lacks explicit original-parent condition input intent")
     from . import tamaraw_fixed_configuration as t
@@ -2534,7 +2871,8 @@ def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None,
         if cs_buflo_duration_policy is not None:
             from .resource_study_native import cs_duration_policy
             cs_duration_policy(cs_buflo_duration_policy)
-            _cs180_input_declaration(current[-1])
+            from .resource_study_native import CS160_POLICY
+            (_cs160_input_declaration if cs_buflo_duration_policy==CS160_POLICY else _cs180_input_declaration)(current[-1])
         if tamaraw_initial16_hostname is not None:
             if cs_buflo_duration_policy is not None: raise ValueError("initial16 cannot combine another science amendment")
             _t16_input_declaration(current[-1], tamaraw_initial16_hostname)
@@ -2570,7 +2908,9 @@ def initialize_cohort(parent, cohort_root, *, cs_buflo_duration_policy=None,
             "class_selection_sha256": e._sha(plan["class_selection"]), "source_sha256": plan["source_sha256"],
             "scientific_credit": False}
         if cs_buflo_duration_policy is not None:
-            context["cs180_condition"]=_cs180_input_declaration(current[-1])
+            from .resource_study_native import CS160_POLICY
+            if cs_buflo_duration_policy==CS160_POLICY:context["cs160_condition"]=_cs160_input_declaration(current[-1])
+            else:context["cs180_condition"]=_cs180_input_declaration(current[-1])
         if tamaraw_initial16_hostname is not None:
             context["tamaraw16_condition"] = _t16_input_declaration(current[-1], tamaraw_initial16_hostname)
         _create(root / INPUT_CONTEXT, canonical_json(context))
@@ -2682,7 +3022,7 @@ def create_first_modes(parent, cohort_root, declaration_path, declaration_sha256
     return _create_admission(parent, cohort_root, declaration_path, declaration_sha256, first=True)
 
 
-def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False, cover=False, condition=False, tamaraw16=False):
+def _create_admission(parent, cohort_root, declaration_path, declaration_sha256, *, first, budget=False, cover=False, condition=False, tamaraw16=False, cs160=False):
     e = _epochs()
     from .resource_study_lineage import prepare_fences, publication_scope, validate_cells, no_retired_history
     parent, new = StudyStore(Path(parent).absolute()), StudyStore(Path(cohort_root).absolute())
@@ -2696,6 +3036,12 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
         if (not _same(context["parent"], {"root": str(parent.root), "study_sha256": parent._file("study.json")[1]["sha256"]})
                 or not _same(context["predecessor"], records[-1]) or context["predecessor_sha256"] != e._sha(records[-1])):
             raise ValueError("runtime cohort input authority has a stale or foreign actual parent head")
+        if cs160:
+            if (first or budget or cover or condition or tamaraw16 or "cs160_condition"not in context
+                    or not _same(context["cs160_condition"],_cs160_input_declaration(records[-1]))):
+                raise ValueError("CS160 requires its separate exact actual-parent preparation intent")
+        elif "cs160_condition"in context:
+            raise ValueError("CS160 initialized root requires explicit CS160 admission")
         if condition and ("cs180_condition" not in context
                 or not _same(context["cs180_condition"],_cs180_input_declaration(records[-1]))):
             raise ValueError("CS180 admission lacks its original actual-parent preparation intent")
@@ -2715,8 +3061,8 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
         if cover and (first or budget):
             raise ValueError("cover replacement cannot combine first-mode or budget authority")
         if first and budget: raise ValueError("budget amendment cannot introduce a first mode")
-        expected = (_t16_declaration if tamaraw16 else _cs180_declaration if condition else _cover_declaration if cover else _budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
-        (_validate_t16_declaration if tamaraw16 else _validate_cs180_declaration if condition else _validate_cover_declaration if cover else _validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
+        expected = (_cs160_declaration if cs160 else _t16_declaration if tamaraw16 else _cs180_declaration if condition else _cover_declaration if cover else _budget_declaration if budget else _first_declaration if first else _declaration)(parent, new, records, hosts, modes)
+        (_validate_cs160_declaration if cs160 else _validate_t16_declaration if tamaraw16 else _validate_cs180_declaration if condition else _validate_cover_declaration if cover else _validate_budget_declaration if budget else _validate_first_declaration if first else _validate_declaration)(declaration, expected)
         current_plans = [StudyStore(root).plan() for root in
                          sorted({c["root"] for c in records[-1]["cells"]})]
         if not any("class_selection" in plan and _same(e._plan(new), plan) for plan in current_plans):
@@ -2752,9 +3098,9 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
             previous["frozen_accepted"] = {"path": relative, "sha256": e._sha(frozen)}
             candidate = e._cell(new, *key)
             member = _member(candidate, declaration["verifier"])
-            if condition or tamaraw16:
+            if cs160 or condition or tamaraw16:
                 science = _science(candidate, records[-1]["class_transition"])
-                entry["condition_strata"] = (_t16_strata if tamaraw16 else _cs180_strata)(entry, science, member["cohort_id"])
+                entry["condition_strata"] = (_cs160_strata if cs160 else _t16_strata if tamaraw16 else _cs180_strata)(entry, science, member["cohort_id"])
                 entry["science"] = science
             elif budget:
                 if "resource_versions" in entry:
@@ -2782,7 +3128,7 @@ def _create_admission(parent, cohort_root, declaration_path, declaration_sha256,
                 _create(store.root / MARKER, canonical_json(value))
             markers[root] = e._sha(value)
         value = {"record_type": ADMISSION, "sequence": len(records), "previous_sha256": e._sha(records[-1]),
-                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": T16_CHANGE if tamaraw16 else CS180_CHANGE if condition else COVER_CHANGE if cover else "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
+                 "parent_study_sha256": parent._file("study.json")[1]["sha256"], "change": CS160_CHANGE if cs160 else T16_CHANGE if tamaraw16 else CS180_CHANGE if condition else COVER_CHANGE if cover else "buflo-duration-budget" if budget else "first-mode" if first else "runtime-cohort",
                  "affected": [[row["hostname"], row["mode"]] for row in declaration["affected"]],
                  "cells": [cells[key] for key in sorted(cells)], "exclusions": records[-1]["exclusions"],
                  "class_transition": records[-1]["class_transition"], "write_fences": fences,
@@ -2821,6 +3167,7 @@ def _validate_record(parent, records, value, *, contract=None):
         return _validate_cover_record(parent, records, value, contract)
     if type(value) is dict and value.get("change") == "first-mode":
         return _validate_first_record(parent, records, value, contract)
+    cs160 = type(value)is dict and value.get("change")==CS160_CHANGE
     condition = type(value) is dict and value.get("change") == CS180_CHANGE
     tamaraw16 = type(value) is dict and value.get("change") == T16_CHANGE
     budget = type(value) is dict and value.get("change") == "buflo-duration-budget"
@@ -2829,7 +3176,7 @@ def _validate_record(parent, records, value, *, contract=None):
     prior = records[-1]
     if (type(value) is not dict or set(value) != fields or value["record_type"] != ADMISSION
             or type(value["sequence"]) is not int or value["sequence"] != len(records)
-            or value["previous_sha256"] != e._sha(prior) or value["change"] != (T16_CHANGE if tamaraw16 else CS180_CHANGE if condition else "buflo-duration-budget" if budget else "runtime-cohort")
+            or value["previous_sha256"] != e._sha(prior) or value["change"] != (CS160_CHANGE if cs160 else T16_CHANGE if tamaraw16 else CS180_CHANGE if condition else "buflo-duration-budget" if budget else "runtime-cohort")
             or value["parent_study_sha256"] != parent._file("study.json")[1]["sha256"]
             or not _same(value["class_transition"], prior.get("class_transition"))
             or value["class_transition"] is None or not _same(value["exclusions"], prior["exclusions"])):
@@ -2865,6 +3212,10 @@ def _validate_record(parent, records, value, *, contract=None):
                 "verifier": contract, "compatible_treatment": False,
                 "stable_lineage_projection": _projection(value["class_transition"]),
                 "runtime_is_analysis_stratum": True, "rationale": ""}
+    if cs160:
+        if any(key[1]!="cs-buflo"for key in affected):raise ValueError("CS160 changes another mode")
+        for key in sorted(affected):_cs160_pair(old_cells[key],new_cells[key],value["class_transition"])
+        expected=_cs160_declaration_value(parent,prior,declaration["affected"],declaration["retained_accepted_manifest_sha256"],contract)
     if condition:
         if affected != {("angkanet26.com", "cs-buflo")}:
             raise ValueError("CS180 cannot change another logical cell")
@@ -2881,7 +3232,7 @@ def _validate_record(parent, records, value, *, contract=None):
             raise ValueError("initial16 cannot change another logical cell")
         key = next(iter(affected)); _t16_pair(old_cells[key], new_cells[key], value["class_transition"])
         expected = _t16_declaration_value(parent, prior, declaration["affected"], declaration["retained_accepted_manifest_sha256"], contract)
-    (_validate_t16_declaration if tamaraw16 else _validate_cs180_declaration if condition else _validate_budget_declaration if budget else _validate_declaration)(declaration, expected)
+    (_validate_cs160_declaration if cs160 else _validate_t16_declaration if tamaraw16 else _validate_cs180_declaration if condition else _validate_budget_declaration if budget else _validate_declaration)(declaration, expected)
     for key, entry in new_entries.items():
         old = old_entries[key]
         if key not in affected:
@@ -2897,13 +3248,13 @@ def _validate_record(parent, records, value, *, contract=None):
             expected_fields.add("semantic_refusals")
             if not _same(entry["semantic_refusals"], old["semantic_refusals"]):
                 raise ValueError("Native-only cohort rewrites immutable semantic-refusal history")
-        if condition or tamaraw16 or "condition_strata" in old: expected_fields.add("condition_strata")
+        if cs160 or condition or tamaraw16 or "condition_strata" in old: expected_fields.add("condition_strata")
         if budget or "science_strata" in old: expected_fields.add("science_strata")
         if "resource_versions" in old:
             if budget: raise ValueError("resource-version and budget changes need separate explicit authority")
             expected_fields.add("resource_versions")
         if (set(entry) != expected_fields
-                or not (budget or condition or tamaraw16) and not _same(entry["science"], old["science"])
+                or not (budget or cs160 or condition or tamaraw16) and not _same(entry["science"], old["science"])
                 or len(entry["members"]) != len(old["members"])+1):
             raise ValueError("runtime cohort changes logical science or member ancestry")
         for before, after in zip(old["members"], entry["members"][:-1]):
@@ -2920,8 +3271,8 @@ def _validate_record(parent, records, value, *, contract=None):
                 or not (budget or tamaraw16) and _same(candidate["definition"]["native"], old_cells[key]["definition"]["native"])
                 or candidate["definition"]["ready"] is not True):
             raise ValueError("runtime cohort writer/Native/ready identity differs")
-        if condition or tamaraw16:
-            expected_strata = (_t16_strata if tamaraw16 else _cs180_strata)(old, entry["science"], member["cohort_id"])
+        if cs160 or condition or tamaraw16:
+            expected_strata = (_cs160_strata if cs160 else _t16_strata if tamaraw16 else _cs180_strata)(old, entry["science"], member["cohort_id"])
             if not _same(entry["condition_strata"], expected_strata):
                 raise ValueError("CS180 rewrites historical condition science strata")
         elif "condition_strata" in old:

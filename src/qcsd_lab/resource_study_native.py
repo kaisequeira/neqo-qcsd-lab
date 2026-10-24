@@ -809,9 +809,15 @@ CS180_OLD_WORKLOAD = "9b8ccfe92309392476b2d4f0d75056d8952443e57c0e49e6b38dde49bf
 CS180_PARAMETERS = "e46036e50bcdef0f10b6711e8a730f9a452e56728da3f1f19288fcfb177839a7"
 
 
+CS160_POLICY = 'qcsd-native148-cs-buflo-cpsp-160s-capture180-original20-v1'
+CS160_NATIVE = '580d25376557ff42dfbb5e030f87d40d695d0663'
+CS160_CLIENT = 'db737cc67fc4fd70812d3e831f48ad9a1c053de681302236ee9e4e4f8421bf69'
+CS160_PARAMETERS = CS180_PARAMETERS
+
+
 def cs_duration_policy(value):
     """Only the explicit prospective Ang condition extends the old120s default."""
-    if value is not None and value != CS180_POLICY:
+    if value is not None and value not in (CS180_POLICY, CS160_POLICY):
         raise ValueError("unsupported explicit CS duration policy")
     return value
 
@@ -822,6 +828,26 @@ def _cs180_scope(hostname, runtime, workload_sha256):
             or runtime["source"].get("neqo_commit") != CS180_NATIVE
             or workload_sha256 != CS180_WORKLOAD):
         raise ValueError("CS180 requires exact Ang current20 workload and genuine Native137")
+
+
+def _cs160_scope(hostname, runtime, workload_sha256):
+    """Only the actual Native148 ELF may use this declared future CS condition."""
+    _retained_runtime(runtime)
+    native_manifest(hostname, ["https://" + hostname + "/"], require_twenty=False)
+    if (runtime["native_commit"] != CS160_NATIVE
+            or runtime["source"]["neqo_commit"] != CS160_NATIVE
+            or runtime["platform"] != "linux/arm64"
+            or type(workload_sha256) is not str or _SHA256.fullmatch(workload_sha256) is None):
+        raise ValueError("CS160 requires actual Native148 full runtime and exact frozen workload")
+
+
+def cs_duration_scope(policy, hostname, runtime, workload_sha256):
+    selected = cs_duration_policy(policy)
+    if selected == CS160_POLICY:
+        return _cs160_scope(hostname, runtime, workload_sha256)
+    if selected == CS180_POLICY:
+        return _cs180_scope(hostname, runtime, workload_sha256)
+    raise ValueError("explicit prospective CS duration policy required")
 
 
 def mode_policies(*, buflo_duration_policy: str | None = None, cs_buflo_duration_policy: str | None = None,
@@ -960,7 +986,8 @@ def _mode_settings(paths: Mapping[str, Path | None], *,
     if cs_duration_policy(cs_buflo_duration_policy) is not None:
         if settings["cs-buflo"]["parameters_sha256"] != CS180_PARAMETERS:
             raise ValueError("CS180 changes the original CPSP parameter bytes")
-        settings["cs-buflo"].update(timeout_seconds=180, capture_seconds=240)
+        settings["cs-buflo"].update(**({"timeout_seconds":160,"capture_seconds":180}
+            if cs_buflo_duration_policy == CS160_POLICY else {"timeout_seconds":180,"capture_seconds":240}))
     buflo.validate_parameters(settings["buflo"]["parameters"])
     if settings["buflo"]["parameters"][buflo.PARAMETER_FIELD] != selected:
         raise ValueError("enrolled BuFLO parameters differ from the explicit duration policy")
@@ -993,8 +1020,12 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
             or frozen_application_manifest is None or frozen_application_manifest_sha256 is None
             or buflo_small_response_aggregate is not False or cs_buflo_duration_policy is not None):
         raise ValueError("initial16 requires genuine Native139, exact frozen20 and its separate ordinary condition")
-    if selected_cs is not None and (hostname != CS180_HOST or runtime.get("native_commit") != CS180_NATIVE):
+    if selected_cs == CS180_POLICY and (hostname != CS180_HOST or runtime.get("native_commit") != CS180_NATIVE):
         raise ValueError("CS180 preparation is restricted to Ang and Native137")
+    if selected_cs == CS160_POLICY:
+        _cs160_scope(hostname,runtime,"0"*64)
+        if frozen_application_manifest is None or frozen_application_manifest_sha256 is None:
+            raise ValueError("CS160 requires paired exact original20 frozen manifest inputs")
     cap = _buflo_chaff_cap(buflo_chaff_cap_bytes)
     aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, cap)
     if aggregate and selected_duration != buflo.CADENCE64_POLICY:
@@ -1076,7 +1107,7 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
     manifest_path = _write(root / "resources.json", manifest if frozen_raw is None else frozen_raw,
                            raw=frozen_raw is not None)
     if selected_cs is not None:
-        _cs180_scope(hostname, bound, sha256_file(manifest_path))
+        cs_duration_scope(selected_cs, hostname, bound, sha256_file(manifest_path))
     prepared = _write(root / "prepared-workload.json", {"preparation": preparation, **manifest})
     paths: dict[str, Path | None] = {"manifest": manifest_path, "prepared_workload": prepared,
         "expected_responses": _write(root / "expected-responses.json", {"responses": expected}),
@@ -1190,7 +1221,7 @@ def _enrollment(directory: str | Path, hostname: str, runtime: Mapping[str, Any]
     elif declared_tamaraw == tamaraw.INITIAL16_POLICY:
         raise ValueError("historical preparation cannot inherit the initial16 condition")
     if selected_cs is not None:
-        _cs180_scope(canonical_host, runtime, enrollment["workload_sha256"])
+        cs_duration_scope(selected_cs, canonical_host, runtime, enrollment["workload_sha256"])
         prepared = _object(_regular(actual_paths["prepared_workload"]))
         if prepared.get("preparation", {}).get("cs_buflo_duration_policy") != selected_cs:
             raise ValueError("CS180 lacks its immutable explicit preparation declaration")
@@ -1211,11 +1242,13 @@ def _capture_inputs(mode: str, root: Path, enrollment: Mapping[str, Any]):
     limits = buflo.capture_limits(mode, {"timeout_seconds": 120, "capture_seconds": 180},
         policy=selected_duration)
     if mode == "cs-buflo" and cs_duration_policy(policies.get("cs_buflo_duration_policy")) is not None:
-        _cs180_scope(enrollment["hostname"], enrollment["runtime"], enrollment["workload_sha256"])
+        selected_cs=cs_duration_policy(policies.get("cs_buflo_duration_policy"))
+        cs_duration_scope(selected_cs,enrollment["hostname"], enrollment["runtime"], enrollment["workload_sha256"])
         prepared = _object(_regular(root / enrollment["paths"]["prepared_workload"]))
-        if prepared.get("preparation", {}).get("cs_buflo_duration_policy") != CS180_POLICY:
+        if prepared.get("preparation", {}).get("cs_buflo_duration_policy") != selected_cs:
             raise ValueError("CS180 capture requires its original explicit prepared policy")
-        limits = {"timeout_seconds": 180, "capture_seconds": 240}
+        limits = ({"timeout_seconds":160,"capture_seconds":180} if selected_cs==CS160_POLICY
+                  else {"timeout_seconds":180,"capture_seconds":240})
     context = SimpleNamespace(qcsd_profile="research-1200", request_policy="as-defined",
         udp_payload_ceiling=1200, limits=collector.Limits(**limits, max_response_bytes=MAX_RESPONSE_BYTES,
             capture_megabytes=256, max_attempts=1), **policies)

@@ -131,7 +131,7 @@ def original250(tmp_path, monkeypatch, capsys):
     assert [r["url"] for r in old_manifest["resources"]] == [r["url"] for r in current_manifest["resources"]]
     qualified = readers.qualify_execution(cohorts.verifier_contract())
     assert set(cohorts.RAW_DEPENDENCIES) == set(readers.execution_files())
-    assert len(cohorts.RAW_DEPENDENCIES) == 176
+    assert len(cohorts.RAW_DEPENDENCIES) == 179
     assert qualified.contract() == cohorts.verifier_contract()
     retained = [HOST, *(f"condition-control-{i:02d}.example" for i in range(48))]
     urls = {host: ([r["url"] for r in old_manifest["resources"]] if host == HOST else
