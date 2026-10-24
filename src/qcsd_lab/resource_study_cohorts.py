@@ -784,11 +784,87 @@ def capture_records_scope(parent, *, writer_root, latest_only=False):
             body_error.add_note("Capture authority callback closure also refused: " + str(failure))
 
 
+class _CellSQLGeneration:
+    """One never-writing, autocommit generation observer for one records call.
+
+    This is not a SQL snapshot or row authority. Every cached cell visit
+    observes this same connection's fresh committed database generation.
+    A different generation only invalidates memoized cells; the original
+    epochs._cell read decides the current cell, including all old failures.
+    """
+    def __init__(self, store):
+        import sqlite3
+        self.root, self.path = store.root, store.database
+        self.pid, self.thread = os.getpid(), threading.get_ident()
+        self.fd, self.connection = None, None
+        self.closed = False
+        self.identity = None
+        try:
+            self.fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            self.identity = self._anchor()
+            self.connection = sqlite3.connect(self.path.as_uri() + "?mode=ro&cache=private",
+                uri=True, timeout=30, isolation_level=None)
+            self.connection.execute("PRAGMA query_only=ON").close()
+            if (self.connection.execute("PRAGMA query_only").fetchone()[0] != 1
+                    or self.connection.in_transaction or self.connection.total_changes != 0
+                    or self.connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal"):
+                raise sqlite3.NotSupportedError("records generation memo requires a readonly autocommit WAL observer")
+            databases = self.connection.execute("PRAGMA database_list").fetchall()
+            if len(databases) != 1 or databases[0][1:] != ("main", str(self.path)):
+                raise ValueError("records generation observer opened another database")
+            self._anchor()
+        except BaseException:
+            self.close()
+            raise
+
+    def _anchor(self):
+        if self.closed or self.pid != os.getpid() or self.thread != threading.get_ident():
+            raise ValueError("records SQL generation observer is closed or foreign")
+        path = self.path
+        if (not path.is_absolute() or path.resolve(strict=True) != path
+                or any(p.is_symlink() for p in (path, *path.parents))):
+            raise ValueError("records SQL generation database path changed")
+        opened, named = os.fstat(self.fd), path.lstat()
+        def identity(s):
+            return (s.st_dev, s.st_ino, s.st_uid, s.st_gid, s.st_mode, s.st_nlink)
+        current = identity(opened)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or current != identity(named)
+                or self.identity is not None and current != self.identity):
+            raise ValueError("records SQL generation database identity changed")
+        # WAL/SHM are intentionally not held as immutable inodes. SQLite can
+        # remove idle sidecars; original Store._connect validates live sidecars
+        # on every actual cell read, including each generation-change fallback.
+        return current
+
+    def generation(self):
+        self._anchor()
+        if self.connection is None or self.connection.in_transaction or self.connection.total_changes != 0:
+            raise ValueError("records SQL generation observer acquired a transaction or writes")
+        row = self.connection.execute("PRAGMA data_version").fetchone()
+        self._anchor()
+        if (row is None or len(row) != 1 or type(row[0]) is not int or row[0] < 0
+                or self.connection.in_transaction or self.connection.total_changes != 0):
+            raise ValueError("records SQL generation observation is malformed")
+        return row[0]
+
+    def close(self):
+        if self.closed: return
+        self.closed = True
+        try:
+            if self.connection is not None: self.connection.close()
+        finally:
+            if self.fd is not None: os.close(self.fd)
+            self.connection, self.fd = None, None
+
+
 class _RecordsRead:
     """Immutable data reuse within exactly one synchronous records() call.
 
-    SQL connections, rows, head, counts, membership and raw proof are never
-    retained here. The original Store.plan SQL suffix runs on every hit.
+    Head, counts, membership and raw proof are never retained here. Immutable
+    cell bytes may be reused only across unchanged fresh per-visit SQL
+    generations on private readonly monitors; a changed generation falls back
+    to the original cell SQL. The Store.plan SQL suffix remains fresh per hit.
     """
     def __init__(self):
         from . import resource_study_network as network
@@ -802,6 +878,11 @@ class _RecordsRead:
         self.lineage_mapping_code = getattr(self.lineage_mapping, "__code__", None)
         self.store_plan = StudyStore.plan
         self.store_plan_code = getattr(self.store_plan, "__code__", None)
+        self.cell_reader = _epochs()._cell
+        self.cell_reader_code = getattr(self.cell_reader, "__code__", None)
+        self.cell_monitors, self.cell_generations = {}, {}
+        self.cell_values, self.cell_witnesses = {}, {}
+        self.cell_generation_unavailable = set()
 
     def check(self):
         if not self.active or self.pid != os.getpid() or self.thread != threading.get_ident():
@@ -959,8 +1040,112 @@ class _RecordsRead:
             self.sciences[key] = value
         return deepcopy(self.sciences[key])
 
+    def _cell_reader_check(self):
+        self.check()
+        current = _epochs()._cell
+        if (current is not self.cell_reader
+                or getattr(current, "__code__", None) is not self.cell_reader_code):
+            raise ValueError("records original cell reader changed within its call")
+
+    def _invalidate_cells(self, root):
+        for key in [key for key in self.cell_values if key[0] == root]:
+            del self.cell_values[key]
+        self.cell_generations.pop(root, None)
+        store = self.stores.get(root)
+        cache = None if store is None else getattr(store, "_epoch_cell_cache", None)
+        if cache is not None:
+            if type(cache) is not dict:
+                raise ValueError("records call-owned epoch cell cache changed type")
+            cache.clear()
+
+    def _cell_generation(self, store):
+        import sqlite3
+        self._cell_reader_check(); root = str(store.root)
+        if root in self.cell_generation_unavailable: return None
+        observer = self.cell_monitors.get(root)
+        try:
+            if observer is None:
+                observer = _CellSQLGeneration(store)
+                self.cell_monitors[root] = observer
+            generation = observer.generation()
+        except sqlite3.Error:
+            # Unsupported/temporarily unavailable monitoring is never an
+            # authority shortcut or scientific refusal: retain original SQL.
+            self._invalidate_cells(root)
+            self.cell_generation_unavailable.add(root)
+            if observer is not None:
+                observer.close(); self.cell_monitors.pop(root, None)
+            return None
+        old = self.cell_generations.get(root)
+        if old is not None and generation != old: self._invalidate_cells(root)
+        self.cell_generations[root] = generation
+        return generation
+
+    def _cell_key(self, store, cell):
+        return (str(store.root), cell["hostname"], cell["mode"],
+                cell["enrollment_path"], cell["enrollment_sha256"], _epochs()._sha(cell))
+
+    def _cell_bytes(self, value):
+        raw = _json(value)
+        return raw, hashlib.sha256(raw).hexdigest()
+
+    def cell(self, store, cell):
+        """Reuse only within a fresh per-visit committed SQL generation."""
+        self._cell_reader_check(); key = self._cell_key(store, cell)
+        before = self._cell_generation(store)
+        saved = self.cell_values.get(key)
+        if before is not None and saved is not None:
+            generation, raw, digest = saved
+            if (type(raw) is not bytes or hashlib.sha256(raw).hexdigest() != digest
+                    or self.cell_witnesses.get(key) != (raw, digest)):
+                raise ValueError("records cached cell memory changed")
+            value = _load(raw)
+            after = self._cell_generation(store)
+            if after == before == generation:
+                self._cell_reader_check()
+                _epochs()._observe_authority("cell", value)
+                return deepcopy(value)
+        # A commit, including an accepted-row commit or ABA restore, cannot
+        # grant a cached return. The original reader runs and owns all old
+        # SQL/enrollment/settings/Source failures. Churn never causes a retry
+        # loop or a new generation-only failure.
+        before = self._cell_generation(store)
+        value = self.cell_reader(store, cell["hostname"], cell["mode"])
+        self._cell_reader_check()
+        after = self._cell_generation(store)
+        raw, digest = self._cell_bytes(value)
+        old = self.cell_witnesses.setdefault(key, (raw, digest))
+        if old != (raw, digest):
+            raise ValueError("records actual cell changed within its call")
+        if before is not None and after == before:
+            self.cell_values[key] = (after, raw, digest)
+        return deepcopy(value)
+
+    def _finish_cells(self):
+        self._cell_reader_check()
+        for key, witness in list(self.cell_witnesses.items()):
+            root, host, mode, relative, expected, _ = key
+            raw, digest = witness
+            if type(raw) is not bytes or hashlib.sha256(raw).hexdigest() != digest:
+                raise ValueError("records cell witness memory changed before closure")
+            store = self.store(root)
+            self.file(store._relative(relative), expected)
+            # Force the original definition constructor as well as its fresh
+            # SQL read, without modifying any Store outside this call.
+            cache = getattr(store, "_epoch_cell_cache", None)
+            if cache is not None:
+                if type(cache) is not dict: raise ValueError("records epoch cell cache changed type")
+                cache.pop((host, mode), None)
+            self._cell_generation(store)
+            current = self.cell_reader(store, host, mode)
+            self._cell_reader_check(); self._cell_generation(store)
+            if self._cell_bytes(current) != witness:
+                raise ValueError("records fresh original cell differs before call closure")
+            self.file(store._relative(relative), expected)
+
     def finish(self):
         self.check()
+        self._finish_cells()
         if self.lineage_plans:
             self._lineage_check()
         checked_lineage = set()
@@ -988,10 +1173,17 @@ class _RecordsRead:
             raise ValueError("records lineage cache lacks a complete study closure")
 
     def discard(self):
+        errors = []
+        for observer in self.cell_monitors.values():
+            try: observer.close()
+            except BaseException as error: errors.append(error)
         self.active = False
         self.files.clear(); self.plans.clear(); self.stores.clear(); self.sciences.clear()
         self.roots.clear(); self.frozen_values.clear()
         self.network_plans.clear(); self.lineage_plans.clear()
+        self.cell_monitors.clear(); self.cell_generations.clear()
+        self.cell_values.clear(); self.cell_witnesses.clear(); self.cell_generation_unavailable.clear()
+        if errors: raise ValueError("records SQL generation observer cleanup refused") from errors[0]
 
 
 @contextmanager
@@ -1011,7 +1203,10 @@ def _records_read_scope():
             if body_error is None: raise
             body_error.add_note("Records input closure also refused: " + str(failure))
         finally:
-            scope.discard(); _PLAN_READ_SCOPE.reset(token)
+            try:
+                scope.discard()
+            finally:
+                _PLAN_READ_SCOPE.reset(token)
 
 
 def _records_cell(cell):
@@ -1021,11 +1216,11 @@ def _records_cell(cell):
     store = StudyStore(cell["root"]) if scope is None else scope.store(cell["root"])
     if scope is not None:
         scope.file(store._relative(cell["enrollment_path"]), cell["enrollment_sha256"])
-    # The original class-row SELECT/path/SHA/stamp check runs on every call,
-    # including hits in the Store's existing immutable enrollment cache.
-    value = _epochs()._cell(store, cell["hostname"], cell["mode"])
-    if scope is not None:
+        value = scope.cell(store, cell)
         scope.file(store._relative(cell["enrollment_path"]), cell["enrollment_sha256"])
+    else:
+        # The entire original no-scope SQL/definition path remains unchanged.
+        value = _epochs()._cell(store, cell["hostname"], cell["mode"])
     return deepcopy(value)
 
 

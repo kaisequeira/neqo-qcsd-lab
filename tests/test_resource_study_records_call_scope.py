@@ -2,7 +2,8 @@
 
 The original disposable ledger/cohort fixtures run actual admission and index
 guards with their explicitly controlled preparation/raw leaves. These controls
-observe parsing and adjust named read-only SELECT results only for refusal.
+observe parsing, named read-only SELECT refusals, and committed database
+changes injected only into disposable fixture connections.
 They grant no live capture or source-deployment qualification. ROOT alone runs
 this source.
 """
@@ -11,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import os
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -174,7 +176,7 @@ def test_body_failure_is_preserved_when_input_closure_also_fails(campaign):
     finally: path.chmod(0o444)
 
 
-def test_cached_store_cell_still_reads_the_current_class_row(cohort_campaign, monkeypatch):
+def test_cached_store_cell_still_reads_the_current_class_row(cohort_campaign):
     c = cohort_campaign; new = c.fresh(); c.append(new)
     record = cohorts.records(c.parent)[-1]
     cell = next(cell for cell in record["cells"] if cell["root"] == str(new.root))
@@ -183,9 +185,23 @@ def test_cached_store_cell_still_reads_the_current_class_row(cohort_campaign, mo
         copied = cohorts._records_cell(cell); copied["definition"]["urls"].clear()
         assert cohorts._records_cell(cell) == cell
 
-        def missing_class(actual, sql, parameters):
-            if actual.root == new.root and sql == "SELECT * FROM classes WHERE hostname=?":
-                return SimpleNamespace(fetchone=lambda: None)
-
-        with observed_transactions(monkeypatch, missing_class), pytest.raises(ValueError, match="not enrolled"):
-            cohorts._records_cell(cell)
+        # A real second-connection commit changes SQLite's data_version.
+        # A SELECT proxy alone does not change the captured database generation.
+        with sqlite3.connect(new.root / "ledger.sqlite3") as writer:
+            # Fault injection is confined to this disposable fixture connection.
+            # Live writer connections retain their original denying function.
+            writer.create_function(lineage.FENCE_FUNCTION, 5, lambda *_: 1)
+            cursor = writer.execute("SELECT * FROM classes WHERE hostname=?", (cell["hostname"],))
+            original = cursor.fetchone()
+            columns = [item[0] for item in cursor.description]
+            assert original is not None
+            try:
+                writer.execute("DELETE FROM classes WHERE hostname=?", (cell["hostname"],))
+                writer.commit()
+                with pytest.raises(ValueError, match="not enrolled"):
+                    cohorts._records_cell(cell)
+            finally:
+                names = ",".join('"' + name.replace('"', '""') + '"' for name in columns)
+                writer.execute("INSERT INTO classes (" + names + ") VALUES (" + ",".join("?" for _ in original) + ")", original)
+                writer.commit()
+        assert cohorts._records_cell(cell) == cell
