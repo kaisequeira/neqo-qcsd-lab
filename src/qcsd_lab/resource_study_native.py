@@ -1659,6 +1659,23 @@ def validate_retained_mode_input(root, runtime, input_path, input_sha256):
     return {'input': value, 'input_raw': input_raw, 'input_sha256': input_sha256, 'historical': old, **checked}
 
 
+def retained_mode_source_binding(source_contract):
+    """Keep an exact126 preparation qualifier under the qualified current reader.
+
+    This transient binding changes execution only. It never rewrites a core,
+    receipt, runtime, readiness result, historical qualification or credit.
+    No other supported historical profile is a retained-core capability.
+    """
+    from .resource_study_cohorts import verifier_contract
+    from . import resource_study_reader_compatibility as reader
+    execution = verifier_contract()
+    qualified = reader.qualify_execution(execution)
+    exact126 = reader.prior_exact126_execution_contract()
+    if type(source_contract) is not dict or source_contract not in (exact126, execution):
+        raise ValueError('retained-mode core requires exact126 or exact current qualified Source')
+    return reader.execution_binding(source_contract, qualified)
+
+
 def retained_mode_assets(root, enrollment, *, provisional=False):
     """Pure current launch binding; final raw readiness is replayed at admission."""
     binding = enrollment.get(RETAINED_MODE_KEY)
@@ -1689,9 +1706,7 @@ def retained_mode_assets(root, enrollment, *, provisional=False):
             or canonical.get('prepare_image_digest') != enrollment['runtime']['prepare_image_digest']
             or canonical.get('source') != enrollment['runtime']['source']):
         raise ValueError('retained canonical bytes differ from exact current runtime fields')
-    from .resource_study_cohorts import verifier_contract
-    if core['input']['source_contract'] != verifier_contract():
-        raise ValueError('retained-mode current Source contract changed')
+    retained_mode_source_binding(core['input']['source_contract'])
     old_path = base / _retained_relative(core['historical_enrollment_path'])
     old = json.loads(retained_mode_read(old_path, core['input']['historical_enrollment']['sha256']))
     assets = core['assets']
