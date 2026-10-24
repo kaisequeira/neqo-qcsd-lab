@@ -578,7 +578,16 @@ def tamaraw_retry_reason(mode: str, result: dict, error: Exception, *,
             return None
     if (origin == "seal" and result.get("success") is True
             and result.get("runner_binding_valid") is True and result.get("failure") is None):
-        return str(error) if str(error) in TAMARAW_RETRY_REASONS else None
+        reason = str(error)
+        if reason in TAMARAW_RETRY_REASONS:
+            return reason
+        # The readonly proof child transports one exact ValueError plus LF.
+        # Only these already retryable seal rejections may allocate a fresh
+        # attempt; the failed attempt and its whole error stay unchanged.
+        for known in TAMARAW_RETRY_REASONS:
+            if reason == f"readonly proof child refused: ValueError: {known}\n":
+                return known
+        return None
     failure = result.get("failure")
     if (origin != "collector" or result.get("success") is not False
             or result.get("runner_binding_valid") is not False
