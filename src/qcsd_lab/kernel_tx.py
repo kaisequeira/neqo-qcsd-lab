@@ -81,6 +81,7 @@ _KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA = {
     KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
     KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
     KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
+    15: KERNEL_TX_ETF_DELTA_NS,
 }
 
 KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS = (
@@ -1981,7 +1982,7 @@ def _qdisc_contract_valid(value: Any, *, runner_schema_version: int) -> bool:
             runner_schema_version
             in {KERNEL_TX_RUNNER_V7_SCHEMA_VERSION, KERNEL_TX_RUNNER_V8_SCHEMA_VERSION,
                 KERNEL_TX_RUNNER_V9_SCHEMA_VERSION, KERNEL_TX_RUNNER_V10_SCHEMA_VERSION,
-                KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION}
+                KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION, 15}
             or contract["delta_ns"] < min(KERNEL_TX_ADAPTER_WINDOW_NS)
         )
         and contract.get("deadline_mode") is False
@@ -4512,7 +4513,197 @@ def _layered_timing_projection(value: Mapping[str, Any]) -> dict[str, Any]:
     return projected
 
 
+KERNEL_TX_CONSERVATIVE_ENQUEUE_RUNNER_SCHEMA_VERSION = 15
+KERNEL_TX_CONSERVATIVE_ENQUEUE_TX_SEMANTICS = "client_only_buflo_kernel_timed_egress_v15; historical_schema14_unchanged=true; enqueue_event_witness=direct_userspace_or_exact_same_datagram_TX_SOFTWARE_conservative_upper_v1; observed_userspace_send_interval_retained=true; TX_SCHED_alone_insufficient=true; SO_TIMESTAMP_and_SO_TIMESTAMPNS_disabled=true; unfragmented_UDP_exact1200=true; physical_deadline_unchanged_release_plus_5ms=true; incoming_window_unchanged_32000000ns=true; original_full_layered_kernel_inventory_and_routed_post_veth_evidence_required=true; no_wire_claim_from_TX_SOFTWARE=true"
+_CONSERVATIVE_SOCKET_KEYS = frozenset({
+    "schema_version", "family", "local_address", "socket_type", "protocol",
+    "timestamping_report_flags", "so_timestamp", "so_timestampns", "fragment_policy",
+})
+_CONSERVATIVE_HELPER_KEYS = frozenset({
+    "schema_version", "before", "after", "datagram_sha256", "source", "destination",
+    "udp_payload_bytes", "requested_txtime_tai_ns", "latest_enqueue_tai_ns",
+    "per_message_timestamp_flags",
+})
+_CONSERVATIVE_WITNESS_KEYS = frozenset({
+    "schema_version", "basis", "item_id", "job_id", "event_id", "endpoint_index",
+    "endpoint", "datagram_sha256", "source_address", "destination_address",
+    "udp_payload_bytes", "release_tai_ns", "deadline_tai_ns",
+    "observed_enqueue_tai_lower_ns", "observed_enqueue_tai_upper_ns", "kernel_timestamp_id",
+    "tx_sched_realtime_ns", "tx_software_realtime_ns", "provisional_software_tai_lower_ns",
+    "provisional_software_tai_upper_ns", "enqueue_event_tai_upper_ns", "helper_guard",
+})
+
+
+def _conservative_socket_guard_valid(value: Any, setup: Mapping[str, Any]) -> bool:
+    guard = _exact_mapping(value, _CONSERVATIVE_SOCKET_KEYS)
+    if guard is None or not _schema(guard) or not _socket_setup_valid(setup):
+        return False
+    family = guard.get("family")
+    return bool(
+        family == setup["family"] and guard.get("local_address") == setup["local_address"]
+        and type(guard.get("socket_type")) is int and guard["socket_type"] == 2
+        and type(guard.get("protocol")) is int and guard["protocol"] == 17
+        and type(guard.get("timestamping_report_flags")) is int
+        and guard["timestamping_report_flags"] == setup["timestamping_report_flags"] == 2_192
+        and type(guard.get("so_timestamp")) is int and guard["so_timestamp"] == 0
+        and type(guard.get("so_timestampns")) is int and guard["so_timestampns"] == 0
+        and type(guard.get("fragment_policy")) is int
+        and (family == "ipv4" and guard["fragment_policy"] in {2, 3}
+             or family == "ipv6" and guard["fragment_policy"] == 1)
+    )
+
+
+def _conservative_enqueue_witness_valid(
+    value: Any, *, item: Mapping[str, Any], job: Mapping[str, Any],
+    setup: Mapping[str, Any], mapping: Mapping[str, Any],
+) -> bool:
+    """Keep observed userspace clocks literal; independently prove E < D.
+
+    An eligible TX_SOFTWARE event is after the datagram's enqueue, not a wire
+    observation. Its complete original ID inventory, physical TX window and
+    independent routed capture remain separate required evidence.
+    """
+    witness = _exact_mapping(value, _CONSERVATIVE_WITNESS_KEYS)
+    if witness is None or not _schema(witness):
+        return False
+    numeric = ("item_id", "job_id", "event_id", "endpoint_index", "endpoint", "udp_payload_bytes",
+        "release_tai_ns", "deadline_tai_ns", "observed_enqueue_tai_lower_ns",
+        "observed_enqueue_tai_upper_ns", "kernel_timestamp_id", "tx_sched_realtime_ns",
+        "tx_software_realtime_ns", "provisional_software_tai_lower_ns",
+        "provisional_software_tai_upper_ns", "enqueue_event_tai_upper_ns")
+    if not all(_u64(witness.get(key)) for key in numeric):
+        return False
+    guard = _exact_mapping(witness.get("helper_guard"), _CONSERVATIVE_HELPER_KEYS)
+    if (guard is None or not _schema(guard) or guard.get("before") != guard.get("after")
+        or not _conservative_socket_guard_valid(guard.get("before"), setup)
+        or not _conservative_socket_guard_valid(guard.get("after"), setup)
+        or not all(_u64(guard.get(key)) for key in ("udp_payload_bytes", "requested_txtime_tai_ns",
+            "latest_enqueue_tai_ns", "per_message_timestamp_flags"))
+        or guard["per_message_timestamp_flags"] != 258):
+        return False
+    identity = {"item_id": "item_id", "job_id": "job_id", "event_id": "event_id",
+        "endpoint_index": "endpoint_index", "endpoint": "endpoint",
+        "datagram_sha256": "datagram_sha256", "source_address": "source_address",
+        "destination_address": "destination_address", "udp_payload_bytes": "udp_payload_bytes",
+        "observed_enqueue_tai_lower_ns": "enqueue_tai_lower_ns",
+        "observed_enqueue_tai_upper_ns": "enqueue_tai_upper_ns",
+        "kernel_timestamp_id": "socket_timestamp_id", "tx_sched_realtime_ns": "tx_sched_realtime_ns",
+        "tx_software_realtime_ns": "tx_software_realtime_ns",
+        "provisional_software_tai_lower_ns": "provisional_tx_software_tai_lower_ns",
+        "provisional_software_tai_upper_ns": "provisional_tx_software_tai_upper_ns"}
+    if (any(witness[key] != item.get(other) for key, other in identity.items())
+        or not _sha256(witness["datagram_sha256"])
+        or not _socket_address(witness["source_address"])
+        or not _socket_address(witness["destination_address"])
+        or witness["endpoint"] != witness["endpoint_index"]
+        or witness["kernel_timestamp_id"] > 2**32 - 1
+        or item.get("role") != "exact-outgoing" or item.get("order_index") != 0
+        or item.get("send_path") != "etf" or item.get("send_attempt") is not None
+        or item.get("txtime_error") is not None or item.get("terminal_outcome") != "transmitted"
+        or item.get("finalization_state") != "controller-and-trace-finalized"
+        or witness["job_id"] != job.get("job_id") or witness["event_id"] != 2 * job["tick"]
+        or witness["release_tai_ns"] != job.get("release_tai_ns")
+        or witness["deadline_tai_ns"] != job.get("deadline_tai_ns")
+        or witness["deadline_tai_ns"] != witness["release_tai_ns"] + 5_000_000
+        or witness["udp_payload_bytes"] != 1_200
+        or guard["datagram_sha256"] != witness["datagram_sha256"]
+        or guard["source"] != witness["source_address"] or guard["source"] != setup["local_address"]
+        or guard["destination"] != witness["destination_address"]
+        or guard["udp_payload_bytes"] != 1_200
+        or guard["requested_txtime_tai_ns"] != item.get("scm_txtime_tai_ns")
+        or guard["requested_txtime_tai_ns"] != witness["release_tai_ns"] + 10_000_000
+        or guard["latest_enqueue_tai_ns"] != witness["deadline_tai_ns"]):
+        return False
+    lower, upper = witness["observed_enqueue_tai_lower_ns"], witness["observed_enqueue_tai_upper_ns"]
+    software_lower = witness["provisional_software_tai_lower_ns"]
+    software_upper = witness["provisional_software_tai_upper_ns"]
+    deadline, release = witness["deadline_tai_ns"], witness["release_tai_ns"]
+    phase = item.get("post_tx_clock_phase")
+    if (not lower <= upper or not lower < deadline or not release <= software_lower
+        or not lower <= software_lower <= software_upper < deadline
+        or witness["tx_sched_realtime_ns"] > witness["tx_software_realtime_ns"]
+        or not _item_enqueue_evidence_valid(item)
+        or not _item_local_enqueue_operation_ordered(phase,
+            enqueue_monotonic_ns=item["enqueue_monotonic_ns"],
+            enqueue_tai_lower_ns=lower, enqueue_tai_upper_ns=upper)
+        or not _clock_frame_contains(mapping, clock="realtime", raw_ns=witness["tx_software_realtime_ns"])
+        or not _clock_phase_valid(phase)):
+        return False
+    final_lower, final_upper = _translated_interval(mapping,
+        clock="realtime", raw_ns=witness["tx_software_realtime_ns"])
+    if (not software_lower <= final_lower <= final_upper <= software_upper
+        or not release <= final_lower <= final_upper < deadline):
+        return False
+    chosen = witness["enqueue_event_tai_upper_ns"]
+    basis = witness["basis"]
+    return bool(
+        basis == "direct-userspace-upper" and upper < deadline and chosen == upper
+        or basis == "same-datagram-kernel-software-upper" and upper >= deadline and chosen == software_upper
+    )
+
+
+def kernel_tx_conservative_enqueue_legacy_projection(value: Any) -> dict[str, Any] | None:
+    """Validated proof projection only; the original receipt/hash is never rewritten.
+
+    This temporary copy feeds the exact original schema14 scientific clauses.
+    Actual observed-U clock/order evidence has already been checked above. Only
+    the independently proven enqueue-event upper bound replaces the old U-only
+    deadline operand in the copy. Independent evidence hashes the original15.
+    """
+    if (not isinstance(value, Mapping) or type(value.get("schema_version")) is not int
+        or value["schema_version"] != KERNEL_TX_CONSERVATIVE_ENQUEUE_RUNNER_SCHEMA_VERSION
+        or value.get("semantics") != KERNEL_TX_CONSERVATIVE_ENQUEUE_TX_SEMANTICS
+        or not isinstance(value.get("jobs"), list)
+        or not isinstance(value.get("enqueue_witnesses"), list)
+        or not isinstance(value.get("clock_mapping"), Mapping)
+        or not _layered_timestamp_inventory_valid(value)):
+        return None
+    setups = value.get("runtime_contract", {}).get("socket_setup")
+    if not isinstance(setups, list):
+        return None
+    items = [(job, item) for job in value["jobs"] for item in job.get("items", [])
+        if isinstance(item, Mapping) and item.get("order_index") == 0]
+    witnesses = value["enqueue_witnesses"]
+    if len(items) != len(witnesses) or not items:
+        return None
+    by_id: dict[int, Mapping[str, Any]] = {}
+    for witness in witnesses:
+        if (not isinstance(witness, Mapping) or not _u64(witness.get("item_id"))
+            or witness["item_id"] in by_id):
+            return None
+        by_id[witness["item_id"]] = witness
+    for job, item in items:
+        index = item.get("endpoint_index")
+        if (not _u64(index) or index >= len(setups) or item.get("item_id") not in by_id
+            or not _conservative_enqueue_witness_valid(by_id[item["item_id"]], item=item,
+                job=job, setup=setups[index], mapping=value["clock_mapping"])):
+            return None
+    projected = deepcopy(dict(value))
+    projected["schema_version"] = KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION
+    projected["semantics"] = KERNEL_TX_LAYERED_TX_SEMANTICS
+    del projected["enqueue_witnesses"]
+    for job in projected["jobs"]:
+        for item in job["items"]:
+            if item["order_index"] == 0:
+                chosen = by_id[item["item_id"]]["enqueue_event_tai_upper_ns"]
+                item["enqueue_tai_upper_ns"] = chosen
+                item["enqueue_tai_ns"] = _midpoint(item["enqueue_tai_lower_ns"], chosen)
+    return projected
+
+
 def kernel_tx_runner_receipt_valid(value: Any) -> bool:
+    """Schema15 is prospective; all historical receipt predicates stay literal."""
+    if isinstance(value, Mapping) and value.get("schema_version") == KERNEL_TX_CONSERVATIVE_ENQUEUE_RUNNER_SCHEMA_VERSION:
+        try:
+            projected = kernel_tx_conservative_enqueue_legacy_projection(value)
+            return projected is not None and _kernel_tx_runner_receipt_valid_legacy(projected)
+        except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+            return False
+    return _kernel_tx_runner_receipt_valid_legacy(value)
+
+
+
+def _kernel_tx_runner_receipt_valid_legacy(value: Any) -> bool:
     """Validate Rust-observable kernel timing evidence without capture claims."""
 
     receipt_schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
@@ -4820,13 +5011,13 @@ def kernel_tx_incoming_window_bound_to_run_valid(run: Mapping[str, Any]) -> bool
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
     if not isinstance(raw, Mapping) or raw.get("schema_version") not in {
-        KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION, KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION,
+        KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION, KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION, KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION, KERNEL_TX_CONSERVATIVE_ENQUEUE_RUNNER_SCHEMA_VERSION,
     }:
         return True
     from .capture_acceptance_policy import (buflo_incoming_release_window,
         BUFLO_KERNEL_PREPARATION_FIELD, validate_buflo_kernel_preparation_marker, _exact_json)
 
-    if raw.get("schema_version") in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION, KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION}:
+    if raw.get("schema_version") in {KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION, KERNEL_TX_CADENCE64_RUNNER_SCHEMA_VERSION, KERNEL_TX_LAYERED_RUNNER_SCHEMA_VERSION, KERNEL_TX_CONSERVATIVE_ENQUEUE_RUNNER_SCHEMA_VERSION}:
         try:
             marker = validate_buflo_kernel_preparation_marker(run.get(BUFLO_KERNEL_PREPARATION_FIELD))
         except (TypeError, ValueError):

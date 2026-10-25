@@ -225,7 +225,15 @@ def test_socket_inventory_bound_rejects_overflow_before_replay():
 
 def test_source_identity_prevents_entire_receipt_downgrade():
     identity = "01e226fb43000691acbda57feb338855b26e66ca"
-    assert policy.LAYERED_TX_REQUIRED_NATIVE_COMMITS == frozenset({identity})
+    assert policy.LAYERED_TX_REQUIRED_NATIVE_COMMITS == frozenset({
+        '01e226fb43000691acbda57feb338855b26e66ca',
+        '3f35aa4332ec4fe64254570c10ab6f865f45db40',
+        '3fc805284119a4c21af38b7410dd56ba0b20cc9d',
+        '403378b1a9d13dab069ed605ef0e094beab6bc73',
+        '42118eabf7b4a78328b655d9bccbae286c481a7c',
+        'd44de7cde8f6e2e72f337c00a01e9816c07753fa',
+        'f64210a47fcd81b9ec75a076e892b4cf4d87e987',
+    })
     historical = cadence.native_run()
     historical["migration_commit"] = "d2c4ec0e7dcc358fb0915d7b09c9a9b91715da8c"
     policy.validate_buflo_kernel_preparation_source_binding(cadence.source(), historical)

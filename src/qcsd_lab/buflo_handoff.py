@@ -789,14 +789,14 @@ def _runner_kernel_tx_requirement(
     wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
     schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
+    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
     if required and not isinstance(raw, Mapping):
         raise ValueError("kernel-TX BuFLO handoff sample has no raw runner receipt")
     if required and not _runner_wakeup_metrics_valid(wakeups):
         raise ValueError("kernel-TX BuFLO handoff runner-wakeup/raw schema pairing is invalid")
     if not required and raw is not None:
         raise ValueError("non-kernel handoff sample carries a raw kernel-TX receipt")
-    if schema == 22:
+    if schema in {22, 23}:
         from .kernel_tx import kernel_tx_incoming_window_bound_to_run_valid
         if not required or not kernel_tx_incoming_window_bound_to_run_valid(run):
             raise ValueError("prospective BuFLO handoff lacks its exact64ms Native policy/parameter binding")
@@ -2185,12 +2185,12 @@ def _buflo_kernel_outgoing_terminal_bindings(
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
     if raw is None:
         if ("buflo_kernel_preparation_policy" in run
-                or isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22):
+                or isinstance(wakeups, Mapping) and wakeups.get("schema_version") in {22, 23}):
             raise ValueError("study handoff BuFLO claimed kernel clock proof is missing")
         return None
     if not isinstance(raw, Mapping) or type(raw.get("schema_version")) is not int:
         raise ValueError("study handoff BuFLO claimed kernel clock proof is invalid")
-    if raw["schema_version"] != 14:
+    if raw["schema_version"] not in {14, 15}:
         if raw["schema_version"] not in set(range(1, 14)):
             raise ValueError("study handoff BuFLO kernel clock schema is unsupported")
         return None
@@ -2202,7 +2202,7 @@ def _buflo_kernel_outgoing_terminal_bindings(
     )
 
     mapping = raw.get("clock_mapping")
-    if (type(wakeups.get("schema_version")) is not int or wakeups["schema_version"] != 22
+    if (type(wakeups.get("schema_version")) is not int or wakeups["schema_version"] != (23 if raw["schema_version"] == 15 else 22)
             or not _runner_wakeup_metrics_valid(wakeups)
             or not isinstance(mapping, Mapping)
             or type(mapping.get("schema_version")) is not int or mapping["schema_version"] != 6
@@ -2535,8 +2535,8 @@ def _buflo_diagnostic_period_us(run: Mapping[str, Any], *, runtime_kind: str) ->
     parameter = run.get("defense_parameters")
     marker = run.get(FIELD)
     prospective = (
-        isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 22
-        or isinstance(raw, Mapping) and raw.get("schema_version") in {13, 14}
+        isinstance(wakeups, Mapping) and wakeups.get("schema_version") in {22, 23}
+        or isinstance(raw, Mapping) and raw.get("schema_version") in {13, 14, 15}
         or isinstance(marker, Mapping) and marker.get("policy") == CADENCE64_ACK_START_POLICY
         or isinstance(parameter, Mapping) and isinstance(parameter.get(RUN_FIELD), Mapping)
         and parameter[RUN_FIELD].get("policy") in {CADENCE64_POLICY, CADENCE64_1280_POLICY}
@@ -2544,7 +2544,7 @@ def _buflo_diagnostic_period_us(run: Mapping[str, Any], *, runtime_kind: str) ->
     if not prospective:
         return 20_000
     required, _ = _runner_kernel_tx_requirement(run, runtime_kind=runtime_kind)
-    if (not required or not isinstance(wakeups, Mapping) or wakeups.get("schema_version") != 22
+    if (not required or not isinstance(wakeups, Mapping) or wakeups.get("schema_version") != (23 if isinstance(raw, Mapping) and raw.get("schema_version") == 15 else 22)
         or run.get("method") != "GET" or not isinstance(parameter, Mapping)
         or not isinstance(parameter.get(RUN_FIELD), Mapping)
         or not cadence64_receipt_matches(parameter[RUN_FIELD], parameter.get("sha256"))):
