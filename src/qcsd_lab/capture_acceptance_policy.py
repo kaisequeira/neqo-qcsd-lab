@@ -45,10 +45,11 @@ LAYERED_TX_REQUIRED_NATIVE_COMMITS: frozenset[str] = frozenset({
     "42118eabf7b4a78328b655d9bccbae286c481a7c",
 })
 
-# Actual Native154 emits the distinct conservative kernel15/runner23 contract.
+# Actual Native154 and Native157 emit the conservative kernel15/runner23 contract.
 # Historical exact14 source requirements above are retained independently.
 CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS: frozenset[str] = frozenset({
     "d6a37bd7b6180b7a303923b7adafea9add968675",
+    "c9e09e7972eed46b44e5de59bf1433b10c8fa72c",
 })
 
 
