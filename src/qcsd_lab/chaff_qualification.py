@@ -4592,6 +4592,7 @@ def _stable_response_identity(
     url: str,
     headers: list[list[str]],
     resource_domain_max_response_bytes: int = 1_048_576,
+    ft_supplemental_binding: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     if len(runs) != QUALIFICATION_RUNS:
         raise PreparationError("exactly three response qualification invocations are required")
@@ -4610,6 +4611,7 @@ def _stable_response_identity(
                 url=url,
                 headers=headers,
                 resource_domain_max_response_bytes=resource_domain_max_response_bytes,
+                ft_supplemental_binding=ft_supplemental_binding,
             )
         except ValueError as error:
             raise PreparationError(str(error)) from error
@@ -4680,28 +4682,55 @@ def _validate_response_receipt(
     url: str,
     headers: list[list[str]],
     resource_domain_max_response_bytes: int = 1_048_576,
+    ft_supplemental_binding: Mapping[str, str] | None = None,
 ) -> tuple[tuple[int, str, int, str], int, int, int, str]:
     # The new direct-resource role declares its own finite16MiB GET bound.
     # Historical callers retain the exact1MiB receipt contract by default.
     if (type(resource_domain_max_response_bytes) is not int
             or resource_domain_max_response_bytes not in {1_048_576, 16_777_216}):
         raise ValueError("response qualification needs its declared finite response cap")
-    receipt, incoming_limit = _receipt_udp_policy(
-        value,
-        legacy_keys=RESPONSE_RECEIPT_KEYS,
-        legacy_schema=QUALIFICATION_SCHEMA_VERSION,
-        directional_schema=RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
-        outgoing_ceiling=UDP_PAYLOAD_CEILING,
-        label="response qualification receipt",
-    )
+    if ft_supplemental_binding is None:
+        receipt, incoming_limit = _receipt_udp_policy(
+            value,
+            legacy_keys=RESPONSE_RECEIPT_KEYS,
+            legacy_schema=QUALIFICATION_SCHEMA_VERSION,
+            directional_schema=RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+            outgoing_ceiling=UDP_PAYLOAD_CEILING,
+            label="response qualification receipt",
+        )
+        schemas = {QUALIFICATION_SCHEMA_VERSION, RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION}
+        artifact_type = RESPONSE_ARTIFACT_TYPE
+    else:
+        # New original wire type; shared validation below does not relabel it
+        # as a legacy qualification or discard any of its Source bindings.
+        fields = {"supplemental_chaff_policy", "application_manifest_sha256",
+                  "chaff_pool_source_sha256", "candidate_manifest_sha256",
+                  "discovery_provenance_sha256"}
+        if (not isinstance(ft_supplemental_binding, Mapping)
+                or set(ft_supplemental_binding) != fields
+                or ft_supplemental_binding["supplemental_chaff_policy"] != "ft-separate-same-host-qualified-chaff-v1"
+                or any(not _digest(ft_supplemental_binding[k]) for k in fields - {"supplemental_chaff_policy"})
+                or qualified_parallel_chaff_streams != 5 or resource_domain_max_response_bytes != 16_777_216
+                or type(selected_chaff_resource_id) is not int
+                or not 2_147_483_648 <= selected_chaff_resource_id <= 2_147_483_711):
+            raise ValueError("explicit separate FT qualification context is invalid")
+        receipt = _exact_mapping(value, RESPONSE_RECEIPT_KEYS | DIRECTIONAL_UDP_RECEIPT_KEYS | fields,
+                                 "separate FT response qualification")
+        if (any(receipt[k] != ft_supplemental_binding[k] for k in fields)
+                or receipt["incoming_udp_payload_limit"] != INCOMING_UDP_PAYLOAD_LIMIT
+                or receipt["outgoing_udp_payload_ceiling"] != UDP_PAYLOAD_CEILING):
+            raise ValueError("separate FT qualification changed one immutable Source or UDP binding")
+        incoming_limit = INCOMING_UDP_PAYLOAD_LIMIT
+        schemas = {1}
+        artifact_type = "qcsd-ft-supplemental-response-qualification"
     started = receipt["started_unix_ns"]
     ended = receipt["ended_unix_ns"]
     invocation_id = receipt["invocation_id"]
     if (
         type(receipt["schema_version"]) is not int
         or receipt["schema_version"]
-        not in {QUALIFICATION_SCHEMA_VERSION, RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION}
-        or receipt["artifact_type"] != RESPONSE_ARTIFACT_TYPE
+        not in schemas
+        or receipt["artifact_type"] != artifact_type
         or receipt["application_workload_sha256"] != application_manifest_sha256
         or type(receipt["application_resource_id"]) is not int
         or receipt["application_resource_id"] != application_resource_id

@@ -465,6 +465,25 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             or type(run.get("seed")) is not int
             or "attempt_id" in receipt and run["seed"] != int(receipt["attempt_id"].replace("-", "")[:16], 16)):
         raise ValueError("Native run source or attempt seed differs from its receipt")
+    if mode in ("front", "tamaraw") and "ft_supplemental_chaff" in enrollment:
+        from . import ft_supplemental_chaff as ft
+        ft_binding = ft.validate_enrollment(root, enrollment, full_proof=True)
+        expected_paths = ft.artifact_paths(enrollment)
+        if (receipt.get("ft_supplemental_chaff") != ft_binding
+                or any(paths.get(key) != relative or files.get(relative) != enrollment["files"].get(relative)
+                       for key, relative in expected_paths.items())
+                or run.get("application_workload_source_hash_sha256") != ft_binding["application_workload_sha256"]
+                or run.get("chaff_manifest_hash_sha256") != ft_binding["chaff_manifest_sha256"]):
+            raise ValueError("independent FT proof lacks its whole original Source/qualification inventory")
+        ft.validate_runtime_inputs(artifact["workload"], artifact["ft_formal_prepared_workload"],
+            artifact["ft_chaff_manifest"], artifact["ft_pool_source"], run, mode)
+        from .capture_session import _validate_chaff_response_receipts
+        _validate_chaff_response_receipts(run, artifact["ft_chaff_manifest"], mode)
+    elif ("ft_supplemental_chaff" in receipt or any(key.startswith("ft_") for key in paths)
+          or any(run.get(key) is not None for key in ("supplemental_chaff_policy",
+              "supplemental_chaff_pool_source_hash_sha256", "supplemental_chaff_selected_pool_resource_id",
+              "supplemental_chaff_qualification_evidence_sha256"))):
+        raise ValueError("legacy or other-mode session cannot claim supplemental FT evidence")
     if 'retained_parameter_preparation' in enrollment:
         from .resource_study_native import retained_mode_receipt_binding, retained_mode_assets
         provisional = receipt.get('purpose') == 'readiness'

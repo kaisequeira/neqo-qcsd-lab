@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from qcsd_lab import tamaraw_fixed_configuration as tamaraw
+
 from qcsd_lab import kernel_capture_router as router
 from qcsd_lab import kernel_tx_runtime as kernel
 from qcsd_lab.kernel_tx import kernel_tx_receipt_sha256
@@ -400,7 +402,10 @@ def test_preparation_uses_host_uid_without_capabilities_and_freezes_only_new_fil
             "workload_path": str(manifest), "workload_sha256": sha256_file(manifest),
             "paths": {"manifest": str(manifest), "chaff_manifest": None},
             "files": {"resources.json": sha256_file(manifest)},
-            "runtime": RUNTIME, "scientific_credit": False})
+            "runtime": RUNTIME, "mode_policies": {"tamaraw": {tamaraw.FIELD: tamaraw.POLICY}},
+            "mode_settings": {"tamaraw": {"configuration_sha256": tamaraw.configuration_sha256(selected_policy=tamaraw.POLICY),
+                "resolved_configuration": tamaraw.resolved_configuration(selected_policy=tamaraw.POLICY)}},
+            "scientific_credit": False})
     monkeypatch.setattr(runtime, "_docker", docker)
     output = backend / "enrollment-attempts/one"
     result = runtime.PreparationRuntime(backend, RUNTIME).prepare({

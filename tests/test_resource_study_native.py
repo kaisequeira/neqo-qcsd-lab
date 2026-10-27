@@ -733,9 +733,14 @@ def test_source070_public_selector_and_complete_reader_closure(tmp_path, monkeyp
     assert not output.exists()
     actual = cohorts._fresh_verifier_contract()
     qualified = helper.qualify_execution(actual)
-    assert helper.EXECUTION_KIND == "070"
-    assert actual == qualified.contract() and actual["transitive_source_files"] == 171
-    prior = helper.prior_complete_fin069_execution_contract()
-    assert helper.require_supported(prior, qualified) is True
-    with pytest.raises(ValueError, match="unsupported or changed Source070"):
-        helper.qualify_execution(prior)
+    assert helper.EXECUTION_KIND == "132"
+    assert actual == qualified.contract() and actual["transitive_source_files"] == 188
+    historical069 = helper.prior_complete_fin069_execution_contract()
+    historical070 = helper.prior_explicit_duration070_execution_contract()
+    assert historical069["transitive_source_files"] == historical070["transitive_source_files"] == 171
+    assert historical069 != historical070
+    assert helper.prior_exact131_execution_contract()["transitive_source_files"] == 179
+    for prior in (historical069, historical070, helper.prior_exact131_execution_contract()):
+        assert helper.require_supported(prior, qualified) is True
+        with pytest.raises(ValueError, match="unsupported or changed Source132"):
+            helper.qualify_execution(prior)

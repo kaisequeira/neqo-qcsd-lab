@@ -795,6 +795,7 @@ def _collect_attempt(
     context: CaptureContext | None = None,
     *,
     application_workload_source: Path | None = None,
+    supplemental_chaff_source: Path | None = None,
     application_response_policy: str | None = None,
 ) -> dict[str, Any]:
     """Capture and validate one Neqo run without promoting or sealing it."""
@@ -824,6 +825,8 @@ def _collect_attempt(
     elif chaff_manifest is None or application_workload_source is None:
         raise ValueError("every defended capture requires prepared source and qualified chaff")
 
+    _validate_ft_pool_source_binding(manifest, application_workload_source, chaff_manifest,
+        supplemental_chaff_source, defense.kind)
     response_policy = _launch_application_response_policy(
         application_workload_source, application_response_policy
     )
@@ -993,6 +996,7 @@ def _collect_attempt(
                 context,
                 neqo,
                 application_workload_source=application_workload_source,
+                supplemental_chaff_source=supplemental_chaff_source,
                 **(
                     {"application_response_policy": response_policy}
                     if response_policy != LEGACY_APPLICATION_RESPONSE_POLICY else {}
@@ -1156,6 +1160,7 @@ def _collect_attempt(
             manifest=manifest,
             chaff_manifest=chaff_manifest,
             application_workload_source=application_workload_source,
+            supplemental_chaff_source=supplemental_chaff_source,
             **(
                 {"application_response_policy": response_policy}
                 if response_policy != LEGACY_APPLICATION_RESPONSE_POLICY else {}
@@ -1950,12 +1955,26 @@ def _merge_runner_wakeup_metrics(
     return merged
 
 
+def _validate_ft_pool_source_binding(manifest, prepared, chaff, pool, mode, run_data=None):
+    fields = ("supplemental_chaff_policy", "supplemental_chaff_pool_source_hash_sha256",
+              "supplemental_chaff_selected_pool_resource_id", "supplemental_chaff_qualification_evidence_sha256")
+    if pool is None:
+        if run_data is not None and any(run_data.get(key) is not None for key in fields):
+            raise ValueError("legacy launch cannot claim separate FT runtime evidence")
+        return
+    if prepared is None or chaff is None or mode not in ("front", "tamaraw"):
+        raise ValueError("separate FT launch requires both prepared sources and FRONT/Tamaraw")
+    from .ft_supplemental_chaff import validate_runtime_inputs
+    validate_runtime_inputs(manifest, prepared, chaff, pool, run_data, mode)
+
+
 def _validate_run_binding(
     run_data: dict[str, Any],
     *,
     manifest: Path,
     chaff_manifest: Path | None = None,
     application_workload_source: Path | None = None,
+    supplemental_chaff_source: Path | None = None,
     application_response_policy: str | None = None,
     workload_id: str,
     defense: Defense,
@@ -1966,6 +1985,8 @@ def _validate_run_binding(
 ) -> None:
     """Bind the runner receipt to every immutable launch input."""
 
+    _validate_ft_pool_source_binding(manifest, application_workload_source, chaff_manifest,
+        supplemental_chaff_source, defense.kind, run_data)
     from . import buflo_fin_permission
     buflo_fin_permission.validate_source_binding(
         load_json(application_workload_source) if application_workload_source is not None else {},
@@ -2176,7 +2197,13 @@ def _validate_chaff_response_receipts(
     """Recompute every runtime chaff identity claim from the frozen manifest."""
 
     manifest = load_json(chaff_manifest_path)
-    resources = manifest.get("resources")
+    if manifest.get("schema_version") == 7:
+        from .ft_supplemental_chaff import resource_view
+        if defense_kind not in ("front", "tamaraw"):
+            raise ValueError("schema-seven separate pool cannot alias another defense")
+        resources = [resource_view(manifest)]
+    else:
+        resources = manifest.get("resources")
     receipts = run_data.get("chaff_responses")
     if not isinstance(resources, list) or len(resources) != 1 or not isinstance(receipts, list):
         raise ValueError("runner chaff response receipt has an invalid schema")
@@ -2475,6 +2502,7 @@ def _client_command(
     output: Path | None = None,
     *,
     application_workload_source: Path | None = None,
+    supplemental_chaff_source: Path | None = None,
     application_response_policy: str | None = None,
 ) -> list[str]:
     if output is None:
@@ -2501,6 +2529,8 @@ def _client_command(
         or not hasattr(context, "limits")
     ):
         raise TypeError("invalid client-command arguments")
+    _validate_ft_pool_source_binding(manifest, application_workload_source, chaff_manifest,
+        supplemental_chaff_source, defense.kind)
     command = [
         NEQO_CLIENT,
         "run",
@@ -2533,6 +2563,8 @@ def _client_command(
         ]
     elif chaff_manifest is not None or application_workload_source is not None:
         raise ValueError("baseline run forbids qualified chaff inputs")
+    if supplemental_chaff_source is not None:
+        command += ["--supplemental-chaff-source", str(supplemental_chaff_source)]
     runner_kind = RUNNER_KIND_BY_KIND.get(defense.kind, defense.kind)
     from .tamaraw_fixed_configuration import validate_policy, validate_configuration
     fixed_tamaraw = validate_policy(getattr(context, "tamaraw_configuration_policy", None))

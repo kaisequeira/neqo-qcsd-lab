@@ -1301,3 +1301,8 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
             prepared=prepared, schedule_rows=schedule_rows)
     return _validate_buflo_single_startup_evidence(run, runner_directory=runner_directory,
         prepared=prepared, schedule_rows=schedule_rows)
+
+
+# Additive Source132 registration; prior Native identities remain exact.
+SOURCE132_NATIVE158_COMMIT = '912db786562065c4cc28abba21e20e6e6ed17fc8'
+CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS = frozenset((*CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS, SOURCE132_NATIVE158_COMMIT))

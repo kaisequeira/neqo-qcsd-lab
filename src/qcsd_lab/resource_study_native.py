@@ -1002,7 +1002,9 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
                    cs_buflo_duration_policy: str | None = None,
                    tamaraw_configuration_policy: str | None = None,
                    frozen_application_manifest: str | Path | None = None,
-                   frozen_application_manifest_sha256: str | None = None) -> dict[str, Any]:
+                   frozen_application_manifest_sha256: str | None = None,
+                   ft_supplemental_chaff_input: str | Path | None = None,
+                   ft_supplemental_chaff_input_sha256: str | None = None) -> dict[str, Any]:
     """Freeze20 real GET URLs, with an ordinary lane independent of chaff failures.
 
     Pools are probed in their given order until20 individually complete URLs
@@ -1032,6 +1034,15 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         raise ValueError("small-response aggregate preserves the fixed64ms640s duration")
     if aggregate and not buflo_aggregate_native_supported(runtime.get("native_commit")):
         raise ValueError("small-response aggregate preparation requires the exact Native128 implementation")
+    ft_requested = ft_supplemental_chaff_input is not None or ft_supplemental_chaff_input_sha256 is not None
+    if ft_requested and (ft_supplemental_chaff_input is None or ft_supplemental_chaff_input_sha256 is None
+            or frozen_application_manifest is None or frozen_application_manifest_sha256 is None
+            or cap is not None or aggregate or cs_buflo_duration_policy is not None
+            or selected_tamaraw == tamaraw.INITIAL16_POLICY):
+        raise ValueError("supplemental FT needs paired input/SHA plus exact frozen20; other mode selectors cannot alias it")
+    if ft_requested:
+        from . import ft_supplemental_chaff as ft
+        ft.require_native158_runtime(runtime)
     pool = _manifest(hostname, urls, require_twenty=False)
     if len(pool["resources"]) < RESOURCES_PER_SESSION:
         raise ValueError("candidate pool has fewer than20 distinct same-host URLs")
@@ -1146,6 +1157,18 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         enrollment["mode_readiness"]["buflo"] = aggregated["error"] is None
         enrollment["buflo_chaff_qualification_error"] = aggregated["error"]
         validate_buflo_aggregate_enrollment(root, enrollment)
+    if ft_requested:
+        from . import ft_supplemental_chaff as ft
+        supplemental = ft.prepare(probe["hostname"], manifest_path, prepared,
+            ft_supplemental_chaff_input, ft_supplemental_chaff_input_sha256,
+            root / "ft-supplemental-chaff", executable, bound)
+        paths.update(supplemental["paths"])
+        enrollment["paths"].update({key: value.relative_to(root).as_posix() for key, value in supplemental["paths"].items()})
+        enrollment["ft_supplemental_chaff"] = supplemental["binding"]
+        enrollment["files"] = _files(root)
+        for selected_mode in ft.MODES:
+            enrollment["mode_readiness"][selected_mode] = True
+        ft.validate_enrollment(root, enrollment, full_proof=True)
     enrollment_path = _write(root / "enrollment.json", enrollment)
     return {**enrollment, "workload_path": str(manifest_path),
         "paths": {**{key: str(value) if value else None for key, value in paths.items()},
@@ -1231,6 +1254,11 @@ def _enrollment(directory: str | Path, hostname: str, runtime: Mapping[str, Any]
         validate_buflo_capped_enrollment(root, enrollment)
     if "buflo_small_response_aggregate_selection" in enrollment:
         validate_buflo_aggregate_enrollment(root, enrollment)
+    if "ft_supplemental_chaff" in enrollment:
+        from . import ft_supplemental_chaff as ft
+        ft.validate_enrollment(root, enrollment)
+    elif any(key.startswith("ft_") for key in enrollment["paths"]):
+        raise ValueError("legacy enrollment cannot claim supplemental FT launch assets")
     return root, enrollment
 
 
@@ -1356,10 +1384,15 @@ def capture_session(hostname: str, mode: str, enrollment_dir: str | Path,
         checked_retained = retained_mode_assets(root, enrollment,
             provisional=retained_readiness_core_sha256 is not None)
         chaff_key = checked_retained['chaff_key']
+    supplemental_source = None
+    if "ft_supplemental_chaff" in enrollment and mode in ("front", "tamaraw"):
+        chaff_key = "ft_chaff_manifest"
+        supplemental_source = root / enrollment["paths"]["ft_pool_source"]
     chaff = root / enrollment["paths"][chaff_key] if mode != "undefended" else None
     defense, context = _capture_inputs(mode, root, enrollment)
     result = collector._collect_attempt(attempt, manifest, chaff, hostname, defense, seed, context,
         application_workload_source=prepared if mode != "undefended" else None,
+        supplemental_chaff_source=supplemental_source,
         application_response_policy="completed-terminal-http-errors-v1" if mode != "undefended" else "http-2xx-only-v1")
     checked, error = None, None
     try:
@@ -1405,6 +1438,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tamaraw-configuration-policy")
     parser.add_argument("--frozen-application-manifest", type=Path)
     parser.add_argument("--frozen-application-manifest-sha256")
+    parser.add_argument("--ft-supplemental-chaff-input", type=Path)
+    parser.add_argument("--ft-supplemental-chaff-input-sha256")
     args = parser.parse_args(argv)
     if args.buflo_chaff_cap_bytes is not None and args.action != "_prepare":
         parser.error("--buflo-chaff-cap-bytes is only valid for _prepare")
@@ -1426,6 +1461,10 @@ def main(argv: list[str] | None = None) -> int:
     if frozen_requested and (args.action != "_prepare" or args.frozen_application_manifest is None
                              or args.frozen_application_manifest_sha256 is None):
         parser.error("frozen application manifest needs paired path/SHA only with _prepare")
+    ft_requested = args.ft_supplemental_chaff_input is not None or args.ft_supplemental_chaff_input_sha256 is not None
+    if ft_requested and (args.action != "_prepare" or args.ft_supplemental_chaff_input is None
+                         or args.ft_supplemental_chaff_input_sha256 is None or not frozen_requested):
+        parser.error("supplemental FT needs paired input/SHA and exact frozen20 only for _prepare")
     cap = _buflo_chaff_cap(args.buflo_chaff_cap_bytes)
     aggregate = _buflo_aggregate_option(args.buflo_small_response_aggregate, cap)
     if aggregate and args.action != "_prepare":
@@ -1457,6 +1496,11 @@ def main(argv: list[str] | None = None) -> int:
         if frozen_requested:
             job = {**job, "frozen_application_manifest": args.frozen_application_manifest,
                    "frozen_application_manifest_sha256": args.frozen_application_manifest_sha256}
+        if "ft_supplemental_chaff_input" in job or "ft_supplemental_chaff_input_sha256" in job:
+            raise ValueError("immutable preparation job cannot inject supplemental FT options; use paired explicit CLI")
+        if ft_requested:
+            job = {**job, "ft_supplemental_chaff_input": args.ft_supplemental_chaff_input,
+                   "ft_supplemental_chaff_input_sha256": args.ft_supplemental_chaff_input_sha256}
     function = {"_prepare": prepare_domain, "_capture": capture_session, "_probe": probe_urls}[args.action]
     result = function(**job)
     sys.stdout.buffer.write(canonical_json(result))

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from qcsd_lab import tamaraw_fixed_configuration as tamaraw
+
 from qcsd_lab import resource_study_cohorts as cohorts
 from qcsd_lab import resource_study_inputs as inputs
 from qcsd_lab import resource_study_native as native
@@ -175,7 +177,10 @@ def test_runtime_passes_frozen_input_separately_and_keeps_four_field_job(donor, 
         return json.dumps({"hostname": HOST, "urls": urls, "runtime": bound,
             "workload_path": str(base / "resources.json"), "workload_sha256": digest,
             "paths": {"manifest": str(base / "resources.json"), "prepared_workload": str(base / "prepared-workload.json")},
-            "files": files, "scientific_credit": False})
+            "files": files, "mode_policies": {"tamaraw": {tamaraw.FIELD: tamaraw.POLICY}},
+            "mode_settings": {"tamaraw": {"configuration_sha256": tamaraw.configuration_sha256(selected_policy=tamaraw.POLICY),
+                "resolved_configuration": tamaraw.resolved_configuration(selected_policy=tamaraw.POLICY)}},
+            "scientific_credit": False})
     monkeypatch.setattr(runtime_adapter, "_docker", docker)
     result = runtime_adapter.PreparationRuntime(root, bound).prepare({"hostname": HOST, "urls": urls},
         root / "enrollment-attempt", frozen_application_manifest=binding)

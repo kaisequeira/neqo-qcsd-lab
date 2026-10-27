@@ -376,7 +376,8 @@ class PreparationRuntime:
                 buflo_duration_policy: str | None = None,
                 cs_buflo_duration_policy: str | None = None,
                 tamaraw_configuration_policy: str | None = None,
-                frozen_application_manifest: dict | None = None) -> dict:
+                frozen_application_manifest: dict | None = None,
+                ft_supplemental_chaff_input: dict | None = None) -> dict:
         from .resource_study_native import _buflo_aggregate_option, buflo_aggregate_native_supported
         aggregate = _buflo_aggregate_option(buflo_small_response_aggregate, buflo_chaff_cap_bytes)
         if aggregate and not buflo_aggregate_native_supported(self.runtime.get("native_commit")):
@@ -403,6 +404,33 @@ class PreparationRuntime:
             from .resource_study_selection import read_frozen_application_manifest
             frozen_raw, _ = read_frozen_application_manifest(self.root, candidate["hostname"],
                 candidate["urls"], frozen_application_manifest)
+        ft_extra_timeout = 0
+        if ft_supplemental_chaff_input is not None:
+            from . import ft_supplemental_chaff as ft
+            ft.require_native158_runtime(self.runtime)
+            ref = ft_supplemental_chaff_input
+            if (type(ref) is not dict or set(ref) != {"path", "sha256", "bytes"}
+                    or frozen_raw is None or aggregate or buflo_chaff_cap_bytes is not None
+                    or cs_buflo_duration_policy is not None or selected_tamaraw == tamaraw.INITIAL16_POLICY):
+                raise ValueError("explicit supplemental FT input needs unchanged frozen20 and its own ordinary mode route")
+            input_path = ft.within(self.root, ref["path"])
+            input_raw = ft.read(input_path, ref["sha256"], limit=1024**2)
+            if len(input_raw) != ref["bytes"]:
+                raise ValueError("whole supplemental FT input length differs")
+            declaration = ft.decode(input_raw)
+            # The container may read only the original mounted study namespace.
+            for source in (declaration["candidate_manifest"], declaration["discovery_provenance"]):
+                source_path = Path(source["path"])
+                if not source_path.is_absolute() or not source_path.is_relative_to(self.root):
+                    raise ValueError("supplemental FT source must be staged in the original mounted study")
+            candidate_raw = ft.read(declaration["candidate_manifest"]["path"], declaration["candidate_manifest"]["sha256"], limit=1024**2)
+            discovery_raw = ft.read(declaration["discovery_provenance"]["path"], declaration["discovery_provenance"]["sha256"], limit=16*1024**2)
+            ft_candidates = ft.checked_input(declaration, ft.decode(frozen_raw), frozen_application_manifest["manifest_sha256"],
+                ft.decode(candidate_raw), candidate_raw, discovery_raw, candidate["hostname"])
+            # Each original Native invocation has its120s bound plus the
+            # unchanged5s process-close allowance. Only declared bounded
+            # padding probes and exactlythree qualifiers add to the old budget.
+            ft_extra_timeout = (len(ft_candidates) + 3) * 125 + 60
         output.mkdir(parents=True, exist_ok=False)
         dns = public_ipv4(candidate["hostname"])
         _put(output / "dns.json", dns)
@@ -427,6 +455,9 @@ class PreparationRuntime:
             native_prepare_options += ("--frozen-application-manifest",
                 str(self.root / frozen_application_manifest["manifest_path"]),
                 "--frozen-application-manifest-sha256", frozen_application_manifest["manifest_sha256"])
+        if ft_supplemental_chaff_input is not None:
+            native_prepare_options += ("--ft-supplemental-chaff-input", str(input_path),
+                "--ft-supplemental-chaff-input-sha256", ft_supplemental_chaff_input["sha256"])
         _put(output / "job.json", job)
         with docker_lock():
             _runtime_check(self.runtime)
@@ -436,9 +467,11 @@ class PreparationRuntime:
                 "--mount", f"type=bind,src={self.root},dst={self.root}",
                 "--entrypoint", "/opt/qcsd-venv/bin/python3", self.runtime["collection_image_digest"],
                 "-I", "-B", "-m", "qcsd_lab.resource_study_native", "_prepare", "--job", str(output / "job.json"), *native_prepare_options,
-                timeout=max(600, len(candidate["urls"]) * 125 + 600))
+                timeout=max(600, len(candidate["urls"]) * 125 + 600) + ft_extra_timeout)
         _put(output / "result.json", json.loads(result.splitlines()[-1]))
         enrollment = load(output / "result.json")
+        if ft_supplemental_chaff_input is None and "ft_supplemental_chaff" in enrollment:
+            raise ValueError("ordinary preparation cannot inject a supplemental FT pool")
         if enrollment.get("mode_policies", {}).get("tamaraw", {}).get(tamaraw.FIELD) != selected_tamaraw:
             raise ValueError("prepared Tamaraw condition differs from the explicit Native CLI option")
         tamaraw_settings = enrollment.get("mode_settings", {}).get("tamaraw", {})
@@ -502,6 +535,10 @@ class PreparationRuntime:
             enrollment["files"][frozen_application_manifest["manifest_path"]] = frozen_application_manifest["manifest_sha256"]
             enrollment["files"][INPUT_CONTEXT] = frozen_application_manifest["context_sha256"]
         enrollment["source_occurrences"] = candidate.get("source_occurrences", [])
+        if ft_supplemental_chaff_input is not None:
+            if ft.read(input_path, ft_supplemental_chaff_input["sha256"], limit=1024**2) != input_raw:
+                raise ValueError("supplemental FT input changed during actual preparation")
+            ft.validate_enrollment(self.root, enrollment, full_proof=True)
         for relative in enrollment["files"]:
             (self.root / relative).chmod(0o444)
         return enrollment
