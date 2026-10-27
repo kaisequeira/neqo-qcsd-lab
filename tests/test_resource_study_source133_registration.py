@@ -12,14 +12,14 @@ from qcsd_lab import resource_study_reader_compatibility as reader
 def test_exact_current189_supports_saved132188_and131179_without_requalification():
     actual = cohorts._fresh_verifier_contract()
     qualified = reader.qualify_execution(actual)
-    assert reader.EXECUTION_KIND == "133" and actual == qualified.contract()
+    assert reader.EXECUTION_KIND == "134" and actual == qualified.contract()
     assert actual["transitive_source_files"] == 189
     assert set(reader.execution_files()) == set(cohorts.RAW_DEPENDENCIES)
     assert len(reader.PRIOR_SDK132_PACKAGE_FILES) == len(reader.PRIOR_EXACT132_FILES) == 188
     assert len(reader.PRIOR_EXACT131_FILES) == 179 and len(reader.PRIOR_SDK131_PACKAGE_FILES) == 187
     for old in (reader.prior_exact132_execution_contract(), reader.prior_exact131_execution_contract()):
         assert reader.require_supported(old, qualified) is True
-        with pytest.raises(ValueError, match="unsupported or changed Source133"):
+        with pytest.raises(ValueError, match="unsupported or changed Source134"):
             reader.qualify_execution(old)
         bound = reader.execution_binding(old, qualified)
         assert bound["admission_reader"] == old and bound["execution_reader"] == actual
@@ -41,7 +41,7 @@ def test_complete_source_authority_refuses_changed_or_partial_graph(mutation):
         value = reader._profile(files)
         if mutation == "partial-count":
             value["transitive_source_files"] = 188
-    with pytest.raises(ValueError, match="unsupported or changed Source133"):
+    with pytest.raises(ValueError, match="unsupported or changed Source134"):
         reader.qualify_execution(value)
 
 
