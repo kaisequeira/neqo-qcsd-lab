@@ -18,6 +18,8 @@ from qcsd_lab import resource_study as study
 SOURCE_ROOT = Path(runtime.__file__).resolve().parents[2]
 RETAINED = Path(__file__).parent / "fixtures/rapid_portable_runtime_55a3836e.py"
 RETAINED_SHA = "55a3836ef6010c19589945706ec5936d53b3c8c26953f96a8b9607de104c07df"
+RECENT_RETAINED = Path(__file__).parent / "fixtures/rapid_portable_runtime_26ffe023.py"
+RECENT_RETAINED_SHA = "26ffe0234f6f7682a0ac69a71e0181a00b9e2ae14ecfd27d60be816c6de98221"
 
 
 def _put(path, raw, mode=0o644):
@@ -45,8 +47,11 @@ def _complete_runtime(tmp_path, monkeypatch, retained):
     lab = {name: (SOURCE_ROOT / name).read_bytes() for name in
            ("Dockerfile", runtime.SOURCE_PATH, runtime.CLI_PATH, runtime.VERIFIER_PATH)}
     if retained:
-        raw = RETAINED.read_bytes()
-        assert len(raw) == 55191 and hashlib.sha256(raw).hexdigest() == RETAINED_SHA
+        selected = RECENT_RETAINED if retained == "source131" else RETAINED
+        raw = selected.read_bytes()
+        expected_sha = RECENT_RETAINED_SHA if retained == "source131" else RETAINED_SHA
+        expected_bytes = runtime.RETAINED_SOURCE131_PRODUCER_BYTES if retained == "source131" else 55191
+        assert len(raw) == expected_bytes and hashlib.sha256(raw).hexdigest() == expected_sha
         lab[runtime.SOURCE_PATH] = raw
     lab["uv.lock"] = b"controlled Python dependency lock"
     native = {"Cargo.lock": b"controlled Native dependency lock"}
@@ -144,13 +149,15 @@ def _complete_runtime(tmp_path, monkeypatch, retained):
     return path, expected
 
 
-@pytest.mark.parametrize("retained", [False, True], ids=["current", "exact-retained-55a383"])
+@pytest.mark.parametrize("retained", [False, True, "source131"],
+                         ids=["current", "exact-retained-55a383", "exact-retained-26ffe023"])
 def test_public_runtime_identity_reopens_complete_current_and_retained_runtime(tmp_path, monkeypatch, retained):
     path, expected = _complete_runtime(tmp_path, monkeypatch, retained)
     assert study.runtime_identity(path) == expected
 
 
-@pytest.mark.parametrize("retained", [False, True], ids=["current", "exact-retained-55a383"])
+@pytest.mark.parametrize("retained", [False, True, "source131"],
+                         ids=["current", "exact-retained-55a383", "exact-retained-26ffe023"])
 @pytest.mark.parametrize("change", ["producer", "client"])
 def test_public_runtime_identity_rejects_tampered_producer_and_exported_client(
         tmp_path, monkeypatch, retained, change):

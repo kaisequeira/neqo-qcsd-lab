@@ -593,8 +593,9 @@ def _commands(root, inputs, images, original):
             commands["reuse-" + role + "-base-inspect"] = [docker, "image", "inspect", "--format", "{{json .}}", alias]
     for role in ("collection", "prepare"):
         command = [docker, "build"] + (["--pull"] if original is None else [])
-        if role == "collection" and inputs["mode"] == "cold-build":
-            command.append("--no-cache")
+        # Exact archived Source and metadata bind this build. Keep download
+        # mounts and first-role Native output reusable: a global reset also
+        # clears BuildKit cache mounts before execution.
         commands[role + "-image-build"] = command + ["--platform", inputs["platform"], "--build-context",
             "rapid-recipe=" + str(root / "image-context/recipe"), "--file", str(root / "image-context/Portable.Dockerfile"),
             "--iidfile", str(root / (role + "-image-id.txt")), "--target", "portable-" + role, str(root / "image-context/source")]
@@ -912,6 +913,8 @@ def main(argv=None):
 # including the original source-equality guard, input/operation/installed proof.
 RETAINED_PORTABLE_PRODUCER_SHA256 = "55a3836ef6010c19589945706ec5936d53b3c8c26953f96a8b9607de104c07df"
 RETAINED_PORTABLE_PRODUCER_BYTES = 55191
+RETAINED_SOURCE131_PRODUCER_SHA256 = "26ffe0234f6f7682a0ac69a71e0181a00b9e2ae14ecfd27d60be816c6de98221"
+RETAINED_SOURCE131_PRODUCER_BYTES = 58793
 RESOURCE_REUSE_NATIVE139 = "6e50096dbce397e3f4e7be88de17d75986da5dff"
 
 
@@ -919,9 +922,14 @@ def _retained_original_verify(path, value, *, seen):
     from types import ModuleType
     producer = path.parent / "image-context/source" / SOURCE_PATH
     raw = _read(producer)
-    if len(raw) != RETAINED_PORTABLE_PRODUCER_BYTES or _sha(raw) != RETAINED_PORTABLE_PRODUCER_SHA256:
+    digest = _sha(raw)
+    supported = {
+        RETAINED_PORTABLE_PRODUCER_SHA256: RETAINED_PORTABLE_PRODUCER_BYTES,
+        RETAINED_SOURCE131_PRODUCER_SHA256: RETAINED_SOURCE131_PRODUCER_BYTES,
+    }
+    if digest not in supported or len(raw) != supported[digest]:
         raise ValueError("portable reuse has an unsupported retained producer source")
-    module = ModuleType("qcsd_lab._retained_portable_source55a3836e")
+    module = ModuleType("qcsd_lab._retained_portable_source_" + digest)
     module.__file__ = str(producer); module.__package__ = __package__
     exec(compile(raw, str(producer), "exec"), module.__dict__)
     # This runs the full original verifier at its actual source path. No source

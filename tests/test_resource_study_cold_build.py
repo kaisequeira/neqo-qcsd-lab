@@ -59,15 +59,22 @@ def test_mutated_gate_bytes_refuse_prospective_rewrite():
         runtime.dockerfile_bytes(changed, cache_namespace=NAMESPACE, check_policy=LIVE)
 
 
-def test_prospective_policy_cannot_relabel_reuse_or_create_stage(tmp_path):
+def test_prospective_policy_cannot_relabel_reuse_or_create_stage(tmp_path, monkeypatch, staged):
     images = {role: "sha256:" + "c" * 64 for role in ("collection", "prepare")}
     with pytest.raises(ValueError, match="reuse"):
         runtime.dockerfile_bytes(RAW, cache_namespace=NAMESPACE, original=images, check_policy=LIVE)
+    original_root = staged("full")
+    original_inputs = (original_root / "build-inputs.json").read_bytes()
+    original = {"build_inputs_sha256": runtime._sha(original_inputs),
+                "source": json.loads(original_inputs)["source"]}
+    canonical = original_root / "canonical-runtime.json"
+    canonical.write_bytes(runtime._json(original))
+    monkeypatch.setattr(runtime, "_original", lambda *_args, **_kwargs: (original, None))
     destination = tmp_path / "never-created"
     with pytest.raises(ValueError, match="reuse"):
-        runtime.stage(tmp_path / "absent", "a" * 40, "b" * 40, destination,
-            selected_platform="linux/arm64", docker=tmp_path / "absent-docker",
-            original_canonical={"path": "absent"}, cold_check_policy=LIVE)
+        runtime.stage(tmp_path / "checkout", "a" * 40, "b" * 40, destination,
+            selected_platform="linux/arm64", docker=tmp_path / "docker",
+            original_canonical=runtime.reference(canonical), cold_check_policy=LIVE)
     assert not destination.exists()
 
 
@@ -179,6 +186,10 @@ def test_public_original_dispatches_public_reader_with_cycle_tracking(tmp_path, 
         calls.append((root, actual, seen))
         return expected
     monkeypatch.setattr(runtime, "_verify", verify)
+    # Supply actual Source for the dispatcher's existing complete comparison.
+    producer = path.parent / "image-context/source" / runtime.SOURCE_PATH
+    producer.parent.mkdir(parents=True)
+    producer.write_bytes(Path(runtime.__file__).read_bytes())
     assert runtime._original({"controlled": True}, seen=frozenset({"earlier"})) == expected
     assert calls == [(path.parent, value, frozenset({"earlier", str(path)}))]
 
@@ -296,3 +307,28 @@ def test_installed_reader_still_refuses_source_and_byte_mutation(installed, chan
         implementation["source_files"]["src/qcsd_lab/controlled.py"] = "f" * 64
     with pytest.raises(ValueError):
         runtime.verify_installed("collection")
+
+
+def test_cold_roles_share_source_recipe_without_download_cache_reset(tmp_path):
+    root = tmp_path / "new-source"
+    commands = runtime._commands(root, {"actor": "503:1000", "platform": "linux/arm64", "mode": "cold-build"}, {}, None)
+    for role in ("collection", "prepare"):
+        command = commands[role + "-image-build"]
+        assert command[:3] == ["docker", "build", "--pull"]
+        assert "--no-cache" not in command
+        assert command[command.index("--platform") + 1] == "linux/arm64"
+        assert command[command.index("--file") + 1] == str(root / "image-context/Portable.Dockerfile")
+        assert command[command.index("--target") + 1] == "portable-" + role
+        assert command[-1] == str(root / "image-context/source")
+
+
+def test_source_bound_download_namespace_preserves_locked_release():
+    first = runtime.dockerfile_bytes(RAW, cache_namespace="a" * 64, check_policy=LIVE).decode()
+    second = runtime.dockerfile_bytes(RAW, cache_namespace="b" * 64, check_policy=LIVE).decode()
+    assert first != second and first.replace("a" * 64, "b" * 64) == second
+    for kind in ("registry", "git"):
+        assert "id=qcsd-cargo-" + kind + "-" + chr(36) + "{TARGETARCH}-" + "a" * 64 + "," in first
+    assert "COPY neqo-qcsd/ ./" in first
+    assert "COPY --from=source-metadata /source-metadata.json /tmp/source-metadata.json" in first
+    assert 'NEQO_QCSD_GIT_COMMIT="' + chr(36) + '{neqo_commit}" cargo build --locked --release' in first
+    assert "cargo test -p" not in first
