@@ -285,6 +285,32 @@ def selection_proof_present(enrollment: dict, receipt: dict | None = None) -> bo
         or prefixed((receipt or {}).get("artifact_paths", {}), "resource_selection_"))
 
 
+def _verify_cs_supplemental_receipt(root, enrollment, receipt, paths, files, artifact, run):
+    """Replay the complete CS pool proof and join its original session assets.
+
+    This is a scoped additional Raw gate. The caller still requires the exact
+    formal20 working GETs, packet/trace/clock and CS defense realization gates.
+    """
+    from . import cs_supplemental_chaff as cs
+    if (receipt.get("mode") != "cs-buflo" or "ft_supplemental_chaff" in receipt
+            or any(key.startswith("ft_") for key in paths)):
+        raise ValueError("separate CS session cannot claim FRONT/Tamaraw pool authority")
+    binding = cs.validate_enrollment(root, enrollment, full_proof=True)
+    expected_paths = cs.artifact_paths(enrollment)
+    if (receipt.get("cs_supplemental_chaff") != binding
+            or any(paths.get(key) != relative or relative not in files
+                   or files[relative] != enrollment["files"].get(relative)
+                   or artifact.get(key) != within(root, relative)
+                   for key, relative in expected_paths.items())
+            or run.get("application_workload_source_hash_sha256") != binding["application_workload_sha256"]
+            or run.get("chaff_manifest_hash_sha256") != binding["chaff_manifest_sha256"]):
+        raise ValueError("independent CS proof lacks its whole original Source/qualification inventory")
+    cs.validate_runtime_inputs(artifact["workload"], artifact["cs_formal_prepared_workload"],
+        artifact["cs_chaff_manifest"], artifact["cs_pool_source"], run, "cs-buflo")
+    from .capture_session import _validate_chaff_response_receipts
+    _validate_chaff_response_receipts(run, artifact["cs_chaff_manifest"], "cs_buflo")
+
+
 def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     """Return independently derived facts or raise; suitable for StudyStore."""
     from .fidelity import (reconcile_direct_runner_artifacts, validate_primary_capture_clock_integrity,
@@ -465,7 +491,12 @@ def verify_receipt(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             or type(run.get("seed")) is not int
             or "attempt_id" in receipt and run["seed"] != int(receipt["attempt_id"].replace("-", "")[:16], 16)):
         raise ValueError("Native run source or attempt seed differs from its receipt")
-    if mode in ("front", "tamaraw") and "ft_supplemental_chaff" in enrollment:
+    if (("cs_supplemental_chaff" in receipt or any(key.startswith("cs_") for key in paths))
+            and not (mode == "cs-buflo" and "cs_supplemental_chaff" in enrollment)):
+        raise ValueError("legacy or other-mode session cannot claim supplemental CS evidence")
+    if mode == "cs-buflo" and "cs_supplemental_chaff" in enrollment:
+        _verify_cs_supplemental_receipt(root, enrollment, receipt, paths, files, artifact, run)
+    elif mode in ("front", "tamaraw") and "ft_supplemental_chaff" in enrollment:
         from . import ft_supplemental_chaff as ft
         ft_binding = ft.validate_enrollment(root, enrollment, full_proof=True)
         expected_paths = ft.artifact_paths(enrollment)

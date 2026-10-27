@@ -9,11 +9,15 @@ from qcsd_lab import resource_study_reader_compatibility as reader
 def test_source132_has_complete188_profile_and_preserves_exact131_reader179_package187():
     current = cohorts._fresh_verifier_contract()
     qualified = reader.qualify_execution(current)
-    assert reader.EXECUTION_KIND == "132"
-    assert current == qualified.contract() and current["transitive_source_files"] == 188
+    assert reader.EXECUTION_KIND == "133"
+    assert current == qualified.contract() and current["transitive_source_files"] == 189
     files = reader.execution_files()
     assert set(files) == set(cohorts.RAW_DEPENDENCIES)
-    assert len(files) == 188
+    assert len(files) == 189
+    assert reader.prior_exact132_execution_contract() == reader.PRIOR_SDK132_PROFILE
+    assert reader.PRIOR_SDK132_PROFILE["transitive_source_files"] == 188
+    assert len(reader.PRIOR_SDK132_PACKAGE_FILES) == 188
+    assert reader.require_supported(reader.prior_exact132_execution_contract(), qualified) is True
     assert len(reader.PRIOR_EXACT131_FILES) == 179
     assert len(reader.PRIOR_SDK131_PACKAGE_FILES) == 187
     assert "ft_supplemental_chaff.py" not in reader.PRIOR_SDK131_PACKAGE_FILES
@@ -35,17 +39,17 @@ def test_current132_never_qualifies_a_dated_or_partial_or_changed_profile():
              reader.prior_explicit_duration070_execution_contract()]
     for old in dated:
         assert reader.require_supported(old, qualified) is True
-        with pytest.raises(ValueError, match="unsupported or changed Source132"):
+        with pytest.raises(ValueError, match="unsupported or changed Source133"):
             reader.qualify_execution(old)
     actual = reader.execution_files()
     wrong = dict(actual);wrong["ft_supplemental_chaff.py"] = "0" * 64
-    with pytest.raises(ValueError, match="unsupported or changed Source132"):
+    with pytest.raises(ValueError, match="unsupported or changed Source133"):
         reader.qualify_execution(reader._profile(wrong))
     partial = dict(actual);partial.pop("report.py")
-    with pytest.raises(ValueError, match="unsupported or changed Source132"):
+    with pytest.raises(ValueError, match="unsupported or changed Source133"):
         reader.qualify_execution(reader._profile(partial))
     wrong = copy.deepcopy(current);wrong["transitive_source_files"] = 180
-    with pytest.raises(ValueError, match="unsupported or changed Source132"):
+    with pytest.raises(ValueError, match="unsupported or changed Source133"):
         reader.qualify_execution(wrong)
 
 def test_native158_schema7_guard_requires_exact_new_commit_and_matching_source():
@@ -64,7 +68,7 @@ def test_native158_schema7_guard_requires_exact_new_commit_and_matching_source()
 def test_additive_native158_conservative_contract_keeps154_and157_requirements():
     old = {"d6a37bd7b6180b7a303923b7adafea9add968675",
            "c9e09e7972eed46b44e5de59bf1433b10c8fa72c"}
-    assert policy.CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS == old | {ft.SOURCE132_NATIVE158_COMMIT}
+    assert policy.CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS == old | {ft.SOURCE132_NATIVE158_COMMIT, ft.SOURCE133_NATIVE159_COMMIT}
     for commit in policy.CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS:
         run = {"migration_commit": commit, "runner_wakeup_metrics": {"schema_version": 23}}
         policy._require_conservative_enqueue_source_contract(run, {"schema_version": 15})

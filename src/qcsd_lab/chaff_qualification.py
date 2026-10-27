@@ -4593,6 +4593,7 @@ def _stable_response_identity(
     headers: list[list[str]],
     resource_domain_max_response_bytes: int = 1_048_576,
     ft_supplemental_binding: Mapping[str, str] | None = None,
+    cs_supplemental_binding: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     if len(runs) != QUALIFICATION_RUNS:
         raise PreparationError("exactly three response qualification invocations are required")
@@ -4612,6 +4613,7 @@ def _stable_response_identity(
                 headers=headers,
                 resource_domain_max_response_bytes=resource_domain_max_response_bytes,
                 ft_supplemental_binding=ft_supplemental_binding,
+                cs_supplemental_binding=cs_supplemental_binding,
             )
         except ValueError as error:
             raise PreparationError(str(error)) from error
@@ -4683,13 +4685,37 @@ def _validate_response_receipt(
     headers: list[list[str]],
     resource_domain_max_response_bytes: int = 1_048_576,
     ft_supplemental_binding: Mapping[str, str] | None = None,
+    cs_supplemental_binding: Mapping[str, str] | None = None,
 ) -> tuple[tuple[int, str, int, str], int, int, int, str]:
     # The new direct-resource role declares its own finite16MiB GET bound.
     # Historical callers retain the exact1MiB receipt contract by default.
     if (type(resource_domain_max_response_bytes) is not int
             or resource_domain_max_response_bytes not in {1_048_576, 16_777_216}):
         raise ValueError("response qualification needs its declared finite response cap")
-    if ft_supplemental_binding is None:
+    if ft_supplemental_binding is not None and cs_supplemental_binding is not None:
+        raise ValueError("FT and CS qualification authorities cannot alias one receipt")
+    if cs_supplemental_binding is not None:
+        fields = {"supplemental_chaff_policy", "application_manifest_sha256",
+                  "chaff_pool_source_sha256", "candidate_manifest_sha256",
+                  "discovery_provenance_sha256"}
+        if (not isinstance(cs_supplemental_binding, Mapping)
+                or set(cs_supplemental_binding) != fields
+                or cs_supplemental_binding["supplemental_chaff_policy"] != "cs-separate-same-host-qualified-chaff-v1"
+                or any(not _digest(cs_supplemental_binding[k]) for k in fields - {"supplemental_chaff_policy"})
+                or qualified_parallel_chaff_streams != 5 or resource_domain_max_response_bytes != 16_777_216
+                or type(selected_chaff_resource_id) is not int
+                or not 2_147_483_648 <= selected_chaff_resource_id <= 2_147_483_711):
+            raise ValueError("explicit separate CS qualification context is invalid")
+        receipt = _exact_mapping(value, RESPONSE_RECEIPT_KEYS | DIRECTIONAL_UDP_RECEIPT_KEYS | fields,
+                                 "separate CS response qualification")
+        if (any(receipt[k] != cs_supplemental_binding[k] for k in fields)
+                or receipt["incoming_udp_payload_limit"] != INCOMING_UDP_PAYLOAD_LIMIT
+                or receipt["outgoing_udp_payload_ceiling"] != UDP_PAYLOAD_CEILING):
+            raise ValueError("separate CS qualification changed one immutable Source or UDP binding")
+        incoming_limit = INCOMING_UDP_PAYLOAD_LIMIT
+        schemas = {1}
+        artifact_type = "qcsd-cs-supplemental-response-qualification"
+    elif ft_supplemental_binding is None:
         receipt, incoming_limit = _receipt_udp_policy(
             value,
             legacy_keys=RESPONSE_RECEIPT_KEYS,

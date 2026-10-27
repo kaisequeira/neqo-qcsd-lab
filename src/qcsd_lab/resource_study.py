@@ -219,10 +219,15 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
            resource_version_input: Path | None = None,
            resource_version_input_sha256: str | None = None,
            ft_supplemental_chaff_input: Path | None = None,
-           ft_supplemental_chaff_input_sha256: str | None = None) -> dict:
+           ft_supplemental_chaff_input_sha256: str | None = None,
+           cs_supplemental_chaff_input: Path | None = None,
+           cs_supplemental_chaff_input_sha256: str | None = None) -> dict:
     ft_requested = ft_supplemental_chaff_input is not None or ft_supplemental_chaff_input_sha256 is not None
+    cs_requested = cs_supplemental_chaff_input is not None or cs_supplemental_chaff_input_sha256 is not None
+    if ft_requested and cs_requested:
+        raise ValueError("FT and CS supplemental preparations require independent typed receipt groups")
     version_requested = resource_version_input is not None or resource_version_input_sha256 is not None
-    if version_requested and ft_requested:
+    if version_requested and (ft_requested or cs_requested):
         raise ValueError("supplemental FT cannot replace or reinterpret a resource-version preparation")
     if version_requested:
         if (resource_version_input is None or resource_version_input_sha256 is None
@@ -283,6 +288,19 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
             raise ValueError("supplemental FT input must be staged in the mounted study root")
         ft_input = {"path": input_path.relative_to(root.absolute()).as_posix(),
                     "sha256": ft_supplemental_chaff_input_sha256, "bytes": len(raw)}
+    cs_input = None
+    if cs_requested:
+        from . import cs_supplemental_chaff as cs
+        if (cs_supplemental_chaff_input is None or cs_supplemental_chaff_input_sha256 is None
+                or not frozen_manifest_requested or len(hostnames) != 1 or aggregate or cap is not None
+                or cs_buflo_duration_policy is not None or selected_tamaraw == tamaraw.INITIAL16_POLICY):
+            raise ValueError("supplemental CS requires fresh paired input/SHA and exact original20; other modes cannot alias it")
+        input_path = Path(cs_supplemental_chaff_input).absolute()
+        raw = cs.read(input_path, cs_supplemental_chaff_input_sha256, limit=1024**2)
+        if not input_path.is_relative_to(root.absolute()):
+            raise ValueError("supplemental CS input must be staged in the mounted study root")
+        cs_input = {"path": input_path.relative_to(root.absolute()).as_posix(),
+                    "sha256": cs_supplemental_chaff_input_sha256, "bytes": len(raw)}
     store = StudyStore(root)
     from .resource_study_cohorts import require_tamaraw_preparation
     for hostname in hostnames: require_tamaraw_preparation(store, hostname, selected_tamaraw)
@@ -301,6 +319,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
     completed = {r["hostname"] for r in store.enrolled()}
     if ft_requested and completed.intersection(hostnames):
         raise ValueError("supplemental FT requires a fresh cohort enrollment; original evidence is immutable")
+    if cs_requested and completed.intersection(hostnames):
+        raise ValueError("supplemental CS requires a fresh cohort enrollment; original evidence is immutable")
     if tamaraw_configuration_policy is not None and completed.intersection(hostnames):
         raise ValueError("an explicit Tamaraw condition requires fresh enrollment")
     if cs_buflo_duration_policy is not None and completed.intersection(hostnames):
@@ -345,6 +365,8 @@ def enroll(root: Path, runtime: dict, hostnames: list[str], *, backend=None,
                 duration_option["buflo_small_response_aggregate"] = True
             if ft_input is not None:
                 duration_option["ft_supplemental_chaff_input"] = ft_input
+            if cs_input is not None:
+                duration_option["cs_supplemental_chaff_input"] = cs_input
             if frozen_manifest is not None:
                 enrollment = backend.prepare(candidate, attempt, frozen_application_manifest=frozen_manifest,
                     **({"buflo_chaff_cap_bytes": cap} if cap is not None else {}), **duration_option)
@@ -434,6 +456,11 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
     capped_binding = None
     aggregate_binding = None
     ft_binding = None
+    cs_binding = None
+    if attempt["mode"] == "cs-buflo" and "cs_supplemental_chaff" in enrollment:
+        from . import cs_supplemental_chaff as cs
+        cs_binding = cs.validate_enrollment(root, enrollment)
+        paths.update(cs.artifact_paths(enrollment))
     if attempt["mode"] in ("front", "tamaraw") and "ft_supplemental_chaff" in enrollment:
         from . import ft_supplemental_chaff as ft
         ft_binding = ft.validate_enrollment(root, enrollment)
@@ -499,6 +526,8 @@ def seal(root: Path, attempt: dict, enrollment: dict, runtime: dict, result: dic
         receipt["buflo_small_response_aggregate_selection"] = aggregate_binding
     if ft_binding is not None:
         receipt["ft_supplemental_chaff"] = ft_binding
+    if cs_binding is not None:
+        receipt["cs_supplemental_chaff"] = cs_binding
     plan = StudyStore(root).plan()
     from .resource_study_epochs import stable_lineage_active
     if "class_selection" in plan or stable_lineage_active(StudyStore(root)):
@@ -1071,6 +1100,9 @@ def parser():
             child.add_argument("--ft-supplemental-chaff-input", type=Path,
                                help="explicit separate same-host FRONT/Tamaraw padding declaration; formal20 unchanged")
             child.add_argument("--ft-supplemental-chaff-input-sha256")
+            child.add_argument("--cs-supplemental-chaff-input", type=Path,
+                               help="explicit separate same-host CS padding declaration; exact formal20 unchanged")
+            child.add_argument("--cs-supplemental-chaff-input-sha256")
             child.add_argument("--cs-buflo-duration-policy", help="explicit Ang Native137 CS180/240 prospective condition")
             child.add_argument("--tamaraw-configuration-policy", help="explicit ResourceStudy fixed Tamaraw condition; historical default8192")
             child.add_argument("--buflo-duration-policy",
@@ -1203,11 +1235,19 @@ def main(argv=None):
         elif args.action == "prepare":
             ft_requested = args.ft_supplemental_chaff_input is not None or args.ft_supplemental_chaff_input_sha256 is not None
             version_requested = args.resource_version_input is not None or args.resource_version_input_sha256 is not None
+            cs_requested = args.cs_supplemental_chaff_input is not None or args.cs_supplemental_chaff_input_sha256 is not None
+            if ft_requested and cs_requested:
+                raise ValueError("FT and CS require independently qualified supplemental preparations")
             if ft_requested and (args.ft_supplemental_chaff_input is None
                     or args.ft_supplemental_chaff_input_sha256 is None or version_requested
                     or not args.enroll or args.runtime is None or len(args.hostname) != 1
                     or args.frozen_application_manifest is None or args.frozen_application_manifest_sha256 is None):
                 raise ValueError("supplemental FT requires paired input/SHA and existing exact frozen20 live enrollment")
+            if cs_requested and (args.cs_supplemental_chaff_input is None
+                    or args.cs_supplemental_chaff_input_sha256 is None or version_requested
+                    or not args.enroll or args.runtime is None or len(args.hostname) != 1
+                    or args.frozen_application_manifest is None or args.frozen_application_manifest_sha256 is None):
+                raise ValueError("supplemental CS requires paired input/SHA and existing exact frozen20 live enrollment")
             if version_requested and (args.resource_version_input is None or args.resource_version_input_sha256 is None
                     or not args.enroll or args.runtime is None or len(args.hostname) != 1
                     or not (root / "inputs/resource-version-input-context.json").is_file()
@@ -1297,6 +1337,9 @@ def main(argv=None):
                     **({"ft_supplemental_chaff_input": args.ft_supplemental_chaff_input,
                         "ft_supplemental_chaff_input_sha256": args.ft_supplemental_chaff_input_sha256}
                        if ft_requested else {}),
+                    **({"cs_supplemental_chaff_input": args.cs_supplemental_chaff_input,
+                        "cs_supplemental_chaff_input_sha256": args.cs_supplemental_chaff_input_sha256}
+                       if cs_requested else {}),
                     **({"resource_version_input": args.resource_version_input,
                         "resource_version_input_sha256": args.resource_version_input_sha256}
                        if version_requested else {}),

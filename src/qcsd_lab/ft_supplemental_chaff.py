@@ -191,7 +191,7 @@ def derive_manifest(pool, pool_sha, evidence, evidence_sha):
 def prepare(hostname, formal_path, prepared_path, input_path, input_sha, output, client, runtime):
     """Only genuine Native processes create the probe and qualification facts."""
     from . import resource_study_native as native, chaff_qualification as chaff
-    require_native158_runtime(runtime)
+    require_registered_ft_runtime(runtime)
     root = native._new_directory(output)
     declaration_raw = read(input_path, input_sha, limit=1024**2)
     declaration = decode(declaration_raw)
@@ -298,7 +298,7 @@ def resource_view(manifest):
 def validate_enrollment(root, enrollment, *, full_proof=False):
     """Reconstruct the complete typed binding; optionally replay original runs."""
     from . import resource_study_native as native
-    require_native158_runtime(enrollment.get("runtime"))
+    require_registered_ft_runtime(enrollment.get("runtime"))
     binding = enrollment.get("ft_supplemental_chaff")
     need(type(binding) is dict and binding.get("policy") == POLICY and binding.get("allowed_modes") == list(MODES),
          "explicit FT supplemental enrollment required")
@@ -510,7 +510,8 @@ def validate_runtime_inputs(formal_path, prepared_path, chaff_path, pool_path, r
     formal, prepared = decode(read(formal_path)), decode(read(prepared_path))
     manifest, pool = decode(read(chaff_path)), decode(read(pool_path))
     resource_view(manifest)
-    need(pool.get("probe_native_commit") == SOURCE132_NATIVE158_COMMIT and (run is None or run.get("migration_commit") == SOURCE132_NATIVE158_COMMIT), "FT schema7 requires the exact registered Native158 Source")
+    native_commit = require_registered_ft_native_commit(pool.get("probe_native_commit"))
+    need(run is None or run.get("migration_commit") == native_commit, "FT schema7 must retain the same genuine registered probe and runtime Source")
     need(formal["resources"] == prepared["resources"] and len(formal["resources"]) == 20
          and manifest["application_manifest_sha256"] == pool["application_manifest_sha256"] == sha256_file(formal_path)
          and manifest["application_workload_sha256"] == pool["application_workload_sha256"] == sha256_file(prepared_path)
@@ -529,4 +530,26 @@ def require_native158_runtime(runtime):
     need(type(runtime) is dict and runtime.get("native_commit") == SOURCE132_NATIVE158_COMMIT
          and type(runtime.get("source")) is dict and runtime["source"].get("neqo_commit") == SOURCE132_NATIVE158_COMMIT,
          "explicit FT schema7 requires exact new Native158 runtime and Source identity")
+    return runtime
+
+
+# Additive future authority: old912/158 evidence stays on its literal branch.
+# Root renders this only after committing and freezing genuine new Native159.
+SOURCE133_NATIVE159_COMMIT = '685b9930d339a6d14c1fb7262c3b91a6ffb963ab'
+def require_registered_ft_native_commit(value):
+    if value == SOURCE132_NATIVE158_COMMIT:
+        return value
+    need(re.fullmatch(r"[0-9a-f]{40}", SOURCE133_NATIVE159_COMMIT) is not None
+         and value == SOURCE133_NATIVE159_COMMIT,
+         "FT schema7 requires literal historical158 or genuine separately registered159 Source")
+    return value
+
+def require_registered_ft_runtime(runtime):
+    need(type(runtime) is dict, "whole actual FT runtime required")
+    value = require_registered_ft_native_commit(runtime.get("native_commit"))
+    if value == SOURCE132_NATIVE158_COMMIT:
+        return require_native158_runtime(runtime)
+    need(type(runtime.get("source")) is dict
+         and runtime["source"].get("neqo_commit") == value,
+         "new159 FT runtime must retain its own actual Native Source, never relabel158 evidence")
     return runtime

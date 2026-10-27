@@ -1306,3 +1306,10 @@ def validate_buflo_startup_evidence(run: Mapping[str, Any], *, runner_directory:
 # Additive Source132 registration; prior Native identities remain exact.
 SOURCE132_NATIVE158_COMMIT = '912db786562065c4cc28abba21e20e6e6ed17fc8'
 CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS = frozenset((*CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS, SOURCE132_NATIVE158_COMMIT))
+
+
+# Additive actual Source133 authority; historical157/158 identities remain literal.
+# This placeholder must be rendered only after a genuine clean Native159 commit.
+SOURCE133_NATIVE159_COMMIT = '685b9930d339a6d14c1fb7262c3b91a6ffb963ab'
+CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS = frozenset(
+    (*CONSERVATIVE_ENQUEUE_REQUIRED_NATIVE_COMMITS, SOURCE133_NATIVE159_COMMIT))

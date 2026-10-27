@@ -825,7 +825,7 @@ def _collect_attempt(
     elif chaff_manifest is None or application_workload_source is None:
         raise ValueError("every defended capture requires prepared source and qualified chaff")
 
-    _validate_ft_pool_source_binding(manifest, application_workload_source, chaff_manifest,
+    _validate_supplemental_pool_source_binding(manifest, application_workload_source, chaff_manifest,
         supplemental_chaff_source, defense.kind)
     response_policy = _launch_application_response_policy(
         application_workload_source, application_response_policy
@@ -1955,6 +1955,20 @@ def _merge_runner_wakeup_metrics(
     return merged
 
 
+def _validate_supplemental_pool_source_binding(manifest, prepared, chaff, pool, mode, run_data=None):
+    """Dispatch CS schema8 without assigning it any FRONT/Tamaraw authority."""
+    if mode == "cs_buflo":
+        if pool is not None:
+            if prepared is None or chaff is None:
+                raise ValueError("separate CS launch requires both prepared sources")
+            from .cs_supplemental_chaff import validate_runtime_inputs
+            validate_runtime_inputs(manifest, prepared, chaff, pool, run_data, "cs-buflo")
+            return
+        if chaff is not None and load_json(chaff).get("schema_version") == 8:
+            raise ValueError("schema-eight CS launch requires its explicit separate pool source")
+    _validate_ft_pool_source_binding(manifest, prepared, chaff, pool, mode, run_data)
+
+
 def _validate_ft_pool_source_binding(manifest, prepared, chaff, pool, mode, run_data=None):
     fields = ("supplemental_chaff_policy", "supplemental_chaff_pool_source_hash_sha256",
               "supplemental_chaff_selected_pool_resource_id", "supplemental_chaff_qualification_evidence_sha256")
@@ -1985,7 +1999,7 @@ def _validate_run_binding(
 ) -> None:
     """Bind the runner receipt to every immutable launch input."""
 
-    _validate_ft_pool_source_binding(manifest, application_workload_source, chaff_manifest,
+    _validate_supplemental_pool_source_binding(manifest, application_workload_source, chaff_manifest,
         supplemental_chaff_source, defense.kind, run_data)
     from . import buflo_fin_permission
     buflo_fin_permission.validate_source_binding(
@@ -2201,6 +2215,11 @@ def _validate_chaff_response_receipts(
         from .ft_supplemental_chaff import resource_view
         if defense_kind not in ("front", "tamaraw"):
             raise ValueError("schema-seven separate pool cannot alias another defense")
+        resources = [resource_view(manifest)]
+    elif manifest.get("schema_version") == 8:
+        from .cs_supplemental_chaff import resource_view
+        if defense_kind != "cs_buflo":
+            raise ValueError("schema-eight separate CS pool cannot alias another defense")
         resources = [resource_view(manifest)]
     else:
         resources = manifest.get("resources")
@@ -2529,7 +2548,7 @@ def _client_command(
         or not hasattr(context, "limits")
     ):
         raise TypeError("invalid client-command arguments")
-    _validate_ft_pool_source_binding(manifest, application_workload_source, chaff_manifest,
+    _validate_supplemental_pool_source_binding(manifest, application_workload_source, chaff_manifest,
         supplemental_chaff_source, defense.kind)
     command = [
         NEQO_CLIENT,
