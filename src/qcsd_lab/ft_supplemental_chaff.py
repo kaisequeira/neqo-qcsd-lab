@@ -553,3 +553,25 @@ def require_registered_ft_runtime(runtime):
          and runtime["source"].get("neqo_commit") == value,
          "new159 FT runtime must retain its own actual Native Source, never relabel158 evidence")
     return runtime
+
+
+# Native164 retains the schema7 protocol. Its prospective probes and all three
+# five-response qualifications must still identify their own exact Source.
+SOURCE139_NATIVE164_COMMIT = 'c8db8c2fd57578a443d2c375495499f450ddc451'
+_Source134_require_registered_ft_native_commit = require_registered_ft_native_commit
+_Source134_require_registered_ft_runtime = require_registered_ft_runtime
+
+
+def require_registered_ft_native_commit(value):
+    if value == SOURCE139_NATIVE164_COMMIT:
+        return value
+    return _Source134_require_registered_ft_native_commit(value)
+
+
+def require_registered_ft_runtime(runtime):
+    if type(runtime) is dict and runtime.get("native_commit") == SOURCE139_NATIVE164_COMMIT:
+        need(type(runtime.get("source")) is dict
+             and runtime["source"].get("neqo_commit") == SOURCE139_NATIVE164_COMMIT,
+             "Native164 FT schema7 must retain its own exact runtime and Source identity")
+        return runtime
+    return _Source134_require_registered_ft_runtime(runtime)

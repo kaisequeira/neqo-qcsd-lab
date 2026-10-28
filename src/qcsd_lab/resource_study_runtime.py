@@ -437,7 +437,7 @@ class PreparationRuntime:
             ft_extra_timeout = (len(ft_candidates) + 3) * 125 + 60
         if cs_supplemental_chaff_input is not None:
             from . import cs_supplemental_chaff as cs
-            cs.require_native159_runtime(self.runtime)
+            cs.require_registered_cs_runtime(self.runtime)
             ref = cs_supplemental_chaff_input
             if (type(ref) is not dict or set(ref) != {"path", "sha256", "bytes"}
                     or frozen_raw is None or aggregate or buflo_chaff_cap_bytes is not None

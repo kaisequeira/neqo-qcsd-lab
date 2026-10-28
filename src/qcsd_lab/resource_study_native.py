@@ -1055,7 +1055,7 @@ def prepare_domain(hostname: str, urls: Iterable[str], output: str | Path, *,
         raise ValueError("supplemental CS needs paired input/SHA plus exact frozen20; other mode selectors cannot alias it")
     if cs_requested:
         from . import cs_supplemental_chaff as cs
-        cs.require_native159_runtime(runtime)
+        cs.require_registered_cs_runtime(runtime)
     pool = _manifest(hostname, urls, require_twenty=False)
     if len(pool["resources"]) < RESOURCES_PER_SESSION:
         raise ValueError("candidate pool has fewer than20 distinct same-host URLs")

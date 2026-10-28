@@ -191,7 +191,7 @@ def derive_manifest(pool, pool_sha, evidence, evidence_sha):
 def prepare(hostname, formal_path, prepared_path, input_path, input_sha, output, client, runtime):
     """Only genuine Native processes create the probe and qualification facts."""
     from . import resource_study_native as native, chaff_qualification as chaff
-    require_native159_runtime(runtime)
+    require_registered_cs_runtime(runtime)
     root = native._new_directory(output)
     declaration_raw = read(input_path, input_sha, limit=1024**2)
     declaration = decode(declaration_raw)
@@ -298,7 +298,7 @@ def resource_view(manifest):
 def validate_enrollment(root, enrollment, *, full_proof=False):
     """Reconstruct the complete typed binding; optionally replay original runs."""
     from . import resource_study_native as native
-    require_native159_runtime(enrollment.get("runtime"))
+    require_registered_cs_runtime(enrollment.get("runtime"))
     binding = enrollment.get("cs_supplemental_chaff")
     need(type(binding) is dict and binding.get("policy") == POLICY and binding.get("allowed_modes") == list(MODES),
          "explicit CS supplemental enrollment required")
@@ -510,10 +510,9 @@ def validate_runtime_inputs(formal_path, prepared_path, chaff_path, pool_path, r
     formal, prepared = decode(read(formal_path)), decode(read(prepared_path))
     manifest, pool = decode(read(chaff_path)), decode(read(pool_path))
     resource_view(manifest)
-    need(re.fullmatch(r"[0-9a-f]{40}", SOURCE133_NATIVE159_COMMIT) is not None
-         and pool.get("probe_native_commit") == SOURCE133_NATIVE159_COMMIT
-         and (run is None or run.get("migration_commit") == SOURCE133_NATIVE159_COMMIT),
-         "CS schema8 requires the exact registered Native159 Source")
+    native_commit = require_registered_cs_native_commit(pool.get("probe_native_commit"))
+    need(run is None or run.get("migration_commit") == native_commit,
+         "CS schema8 must retain the same genuine registered probe and runtime Source")
     need(formal["resources"] == prepared["resources"] and len(formal["resources"]) == 20
          and manifest["application_manifest_sha256"] == pool["application_manifest_sha256"] == sha256_file(formal_path)
          and manifest["application_workload_sha256"] == pool["application_workload_sha256"] == sha256_file(prepared_path)
@@ -534,3 +533,26 @@ def require_native159_runtime(runtime):
          and type(runtime.get("source")) is dict and runtime["source"].get("neqo_commit") == SOURCE133_NATIVE159_COMMIT,
          "explicit CS schema8 requires exact new Native159 runtime and Source identity")
     return runtime
+
+
+# Preserve the literal Native159 guard above. The new registration grants no
+# authority to old evidence: every pool, qualification and run keeps its Source.
+SOURCE139_NATIVE164_COMMIT = 'c8db8c2fd57578a443d2c375495499f450ddc451'
+
+
+def require_registered_cs_native_commit(value):
+    if value == SOURCE139_NATIVE164_COMMIT:
+        return value
+    need(re.fullmatch(r"[0-9a-f]{40}", SOURCE133_NATIVE159_COMMIT) is not None
+         and value == SOURCE133_NATIVE159_COMMIT,
+         "CS schema8 requires literal Native159 or separately registered Native164 Source")
+    return value
+
+
+def require_registered_cs_runtime(runtime):
+    if type(runtime) is dict and runtime.get("native_commit") == SOURCE139_NATIVE164_COMMIT:
+        need(type(runtime.get("source")) is dict
+             and runtime["source"].get("neqo_commit") == SOURCE139_NATIVE164_COMMIT,
+             "Native164 CS schema8 must retain its own exact runtime and Source identity")
+        return runtime
+    return require_native159_runtime(runtime)

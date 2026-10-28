@@ -18,6 +18,8 @@ from qcsd_lab import chaff_qualification as chaff
 from qcsd_lab import cs_supplemental_chaff as cs
 from qcsd_lab import ft_supplemental_chaff as ft
 from qcsd_lab import resource_study_native as native
+from qcsd_lab import resource_study_cohorts as cohorts
+from qcsd_lab import resource_study_reader_compatibility as compatibility
 from qcsd_lab import resource_study_verify as raw
 from qcsd_lab.resource_study_inputs import canonical_json, native_manifest, sha256_file
 
@@ -111,7 +113,9 @@ def qualification_receipt(module, prepared, pool_path, identifier, index, commit
 def make_case(tmp_path, monkeypatch, *, family="cs", axis="159", corrupt_qualification=None,
               native_entry=False):
     module = cs if family == "cs" else ft
-    commit = SYNTHETIC159 if axis == "159" else ft.SOURCE132_NATIVE158_COMMIT
+    assert axis in ("158", "159", "164")
+    commit = (SYNTHETIC159 if axis == "159" else
+              ft.SOURCE139_NATIVE164_COMMIT if axis == "164" else ft.SOURCE132_NATIVE158_COMMIT)
     if axis == "159":
         monkeypatch.setattr(module, "SOURCE133_NATIVE159_COMMIT", SYNTHETIC159)
     root = tmp_path / f"synthetic-noncredit-{family}-{axis}"
@@ -418,3 +422,137 @@ def test_FT7_cannot_be_relabelled_as_CS8(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         collector._validate_supplemental_pool_source_binding(case.formal, case.prepared,
             case.artifact["ft_chaff_manifest"], case.artifact["ft_pool_source"], "cs_buflo")
+
+
+@pytest.mark.parametrize("family,commit", [
+    ("ft", ft.SOURCE132_NATIVE158_COMMIT),
+    ("ft", ft.SOURCE133_NATIVE159_COMMIT),
+    ("ft", ft.SOURCE139_NATIVE164_COMMIT),
+    ("cs", cs.SOURCE133_NATIVE159_COMMIT),
+    ("cs", cs.SOURCE139_NATIVE164_COMMIT),
+])
+def test_registered_supplemental_sources_retain_their_exact_runtime_identity(family, commit):
+    module = ft if family == "ft" else cs
+    check = module.require_registered_ft_runtime if family == "ft" else module.require_registered_cs_runtime
+    runtime = {"native_commit": commit, "source": {"neqo_commit": commit}}
+    assert check(runtime) is runtime
+    with pytest.raises(ValueError):
+        check({**runtime, "source": {"neqo_commit": "0" * 40}})
+    with pytest.raises(ValueError):
+        check({**runtime, "source": None})
+
+
+@pytest.mark.parametrize("commit", [None, "", "g" * 40, "0" * 40,
+    "c14959bbeee406dd1d909ce8aa6162c89da5bdb2",
+    "b77d46df18565a46f494fca0e1fa5a4c37e4dd63"])
+def test_native164_registration_does_not_admit_other_runtime_revisions(commit):
+    runtime = {"native_commit": commit, "source": {"neqo_commit": commit}}
+    for check in (ft.require_registered_ft_runtime, cs.require_registered_cs_runtime):
+        with pytest.raises(ValueError):
+            check(runtime)
+
+
+def test_native164_does_not_widen_literal_historical_runtime_guards():
+    assert ft.SOURCE139_NATIVE164_COMMIT == cs.SOURCE139_NATIVE164_COMMIT == \
+        "c8db8c2fd57578a443d2c375495499f450ddc451"
+    runtime = {"native_commit": cs.SOURCE139_NATIVE164_COMMIT,
+               "source": {"neqo_commit": cs.SOURCE139_NATIVE164_COMMIT}}
+    for check in (ft.require_native158_runtime, cs.require_native159_runtime):
+        with pytest.raises(ValueError):
+            check(runtime)
+
+
+@pytest.mark.parametrize("family", ["ft", "cs"])
+def test_native164_full_supplemental_proof_preserves_original20_and_own_source(
+        tmp_path, monkeypatch, family):
+    # This reuses only the existing explicitly synthetic Native boundary fixture;
+    # no live qualification or scientific authority is created by the test.
+    case = make_case(tmp_path, monkeypatch, family=family, axis="164")
+    assert len(case.calls) == 6  # all3 candidate probes, including404, then3x5
+    evidence = json.loads(case.artifact[f"{case.prefix}_qualification_evidence"].read_bytes())
+    assert len(evidence["runs"]) == 3
+    assert all(len(row["receipt"]["requests"]) == 5 for row in evidence["runs"])
+    assert all(row["receipt"]["source"]["migration_commit"] == cs.SOURCE139_NATIVE164_COMMIT
+               for row in evidence["runs"])
+    assert len(json.loads(case.formal.read_bytes())["resources"]) == 20
+    assert json.loads(case.prepared.read_bytes())["resources"] == json.loads(case.formal.read_bytes())["resources"]
+    # Collector helpers take Defense.kind; the CS dispatcher translates this
+    # internal spelling to the public "cs-buflo" module policy itself.
+    modes = ("front", "tamaraw") if family == "ft" else ("cs_buflo",)
+    for mode in modes:
+        collector._validate_supplemental_pool_source_binding(case.formal, case.prepared,
+            case.artifact[f"{case.prefix}_chaff_manifest"], case.artifact[f"{case.prefix}_pool_source"],
+            mode, case.run)
+        collector._validate_chaff_response_receipts(case.run,
+            case.artifact[f"{case.prefix}_chaff_manifest"], mode)
+    if family == "cs":
+        cs_raw(case)
+    case.run["migration_commit"] = cs.SOURCE133_NATIVE159_COMMIT
+    with pytest.raises(ValueError):
+        collector._validate_supplemental_pool_source_binding(case.formal, case.prepared,
+            case.artifact[f"{case.prefix}_chaff_manifest"], case.artifact[f"{case.prefix}_pool_source"],
+            modes[0], case.run)
+
+
+def test_native164_public_CS_prepare_keeps_qualification_and_mode_boundaries(tmp_path, monkeypatch):
+    case = make_case(tmp_path, monkeypatch, axis="164", native_entry=True)
+    assert len(case.calls) == 27
+    assert case.enrollment["scientific_credit"] is False
+    assert case.enrollment["mode_readiness"] == {"undefended": True, "front": False,
+        "tamaraw": False, "buflo": False, "cs-buflo": True}
+    assert case.enrollment["qualification_error"] is not None
+    assert case.enrollment["paths"]["chaff_manifest"] is None
+    assert len(json.loads(case.formal.read_bytes())["resources"]) == 20
+    cs_raw(case)
+
+
+@pytest.mark.parametrize("family", ["ft", "cs"])
+@pytest.mark.parametrize("mutation", ["four-of-five", "borrowed159", "wrong-wire", "body-mismatch"])
+def test_native164_still_requires_each_own_complete_three_by_five_qualification(
+        tmp_path, monkeypatch, family, mutation):
+    def corrupt(receipt, index):
+        if index != 2:
+            return
+        if mutation == "four-of-five":
+            receipt["requests"].pop()
+        elif mutation == "borrowed159":
+            receipt["source"]["migration_commit"] = cs.SOURCE133_NATIVE159_COMMIT
+        elif mutation == "wrong-wire":
+            receipt["artifact_type"] = ("qcsd-cs-supplemental-response-qualification"
+                if family == "ft" else "qcsd-ft-supplemental-response-qualification")
+        else:
+            receipt["requests"][4]["body_sha256"] = "0" * 64
+    with pytest.raises((ValueError, chaff.PreparationError)):
+        make_case(tmp_path, monkeypatch, family=family, axis="164", corrupt_qualification=corrupt)
+    failed = tmp_path / f"synthetic-noncredit-{family}-164/classes/supplemental/qualification/2/native/qualification.json"
+    assert failed.is_file()
+
+
+def test_source139_exact_execution_is_distinct_from_literal134_and_keeps_historical_readers():
+    actual = cohorts.verifier_contract()
+    qualified = compatibility.qualify_execution(actual)
+    prior = compatibility.prior_exact134_execution_contract()
+    assert compatibility.require_supported(prior, qualified)
+    assert compatibility.require_supported(actual, qualified)
+    assert actual != prior
+    with pytest.raises(ValueError):
+        compatibility.qualify_execution(prior)
+    files = compatibility.execution_files()
+    assert len(files) == len(compatibility.PRIOR_EXACT134_FILES) == 189
+    changed = {name for name, digest in files.items()
+               if compatibility.PRIOR_EXACT134_FILES[name] != digest}
+    assert changed == {"ft_supplemental_chaff.py", "cs_supplemental_chaff.py",
+        "resource_study_native.py", "resource_study_runtime.py", compatibility.HELPER_NAME}
+    for name in compatibility.PRIMARY_FILES:
+        if name != "resource_study_native.py":
+            assert actual["files"][name] == prior["files"][name]
+    assert compatibility.SOURCE139_NATIVE164_COMMIT == cs.SOURCE139_NATIVE164_COMMIT
+    for name in changed:
+        substituted = {**files, name: "0" * 64}
+        with pytest.raises(ValueError):
+            compatibility.qualify_execution(compatibility._profile(substituted))
+    binding = compatibility.execution_binding(prior, qualified)
+    assert binding["record_type"] == compatibility.BINDING_TYPE
+    assert binding["source139_Native164_supplemental_registration"] == cs.SOURCE139_NATIVE164_COMMIT
+    assert binding["source139_existing_own_probe_three_by_five_qualification_and_pilot_required"] is True
+    assert binding["source139_original20_application_and_old158159_evidence_preserved"] is True
