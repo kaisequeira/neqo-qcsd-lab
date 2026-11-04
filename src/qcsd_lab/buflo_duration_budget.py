@@ -1,0 +1,227 @@
+"""Prospective fixed BuFLO duration support; historical traffic stays unchanged.
+
+These named policies bound1200-byte opportunities at their exact fixed cadence. Each does
+not authorize a capture, change physical timing, or establish graph viability.
+The caller must separately bind this traffic choice into a prospective plan.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+from typing import Any
+
+POLICY = "rapid-v6-fixed-200s-duration-budget-v1"
+PARAMETER_FIELD = "duration_budget_policy"
+RUN_FIELD = "buflo_duration_budget"
+INPUT_POLICY = "reviewed-buflo-fixed-duration200-study-candidate-v1"
+PARAMETER_PATH = "config/defense-params/buflo-duration200.json"
+PARAMETER_SEMANTICS = (
+    "qcsd-udp1200-adaptation-with-explicit-fixed-200-second-event-budget-and-"
+    "versioned-terminal-subcell-policy"
+)
+FINAL_COHORT_POLICY = "rapid-v6-common-five-complete-get-body-at-most-10000000-v1"
+FINAL_COHORT_BODY_LIMIT = 10_000_000
+PARAMETERS = {
+    "schema_version": 1,
+    "interval_us": 20_000,
+    "minimum_duration_us": 10_000_000,
+    "packet_size": 1_200,
+    "max_events": 10_000,
+    "implementation_scope": "client_only_quic",
+    "paper_equivalent": False,
+    PARAMETER_FIELD: POLICY,
+}
+RECEIPT = {
+    "schema_version": 1,
+    "policy": POLICY,
+    "interval_us": 20_000,
+    "minimum_duration_us": 10_000_000,
+    "packet_size": 1_200,
+    "max_events": 10_000,
+    "duration_budget_us": 200_000_000,
+}
+# Separate prospective policy; historical constants and canonical bytes stay exact.
+CADENCE64_POLICY = "rapid-v7-fixed-64ms-640s-duration-budget-v1"
+CADENCE64_INPUT_POLICY = "reviewed-buflo-fixed-cadence64-duration640-study-candidate-v1"
+CADENCE64_PARAMETER_PATH = "config/defense-params/buflo-cadence64-budget640.json"
+CADENCE64_PARAMETER_SEMANTICS = (
+    "qcsd-udp1200-client-only-adaptation-with-explicit-fixed-64ms-cadence-"
+    "640-second-event-budget-and-versioned-terminal-subcell-policy"
+)
+CADENCE64_PARAMETERS = {**PARAMETERS, "interval_us": 64_000, PARAMETER_FIELD: CADENCE64_POLICY}
+CADENCE64_RECEIPT = {**RECEIPT, "policy": CADENCE64_POLICY, "interval_us": 64_000,
+                     "duration_budget_us": 640_000_000}
+# Explicit prospective opt-in; historical200/640 constants and bytes stay exact.
+CADENCE64_1280_POLICY = "rapid-v8-fixed-64ms-1280s-duration-budget-v1"
+CADENCE64_1280_INPUT_POLICY = "reviewed-buflo-fixed-cadence64-duration1280-study-candidate-v1"
+CADENCE64_1280_PARAMETER_PATH = "config/defense-params/buflo-cadence64-budget1280.json"
+CADENCE64_1280_PARAMETER_SEMANTICS = (
+    "qcsd-udp1200-client-only-adaptation-with-explicit-fixed-64ms-cadence-"
+    "1280-second-event-budget-and-versioned-terminal-subcell-policy"
+)
+CADENCE64_1280_PARAMETERS = {**CADENCE64_PARAMETERS, "max_events": 20_000,
+                             PARAMETER_FIELD: CADENCE64_1280_POLICY}
+CADENCE64_1280_RECEIPT = {**CADENCE64_RECEIPT, "policy": CADENCE64_1280_POLICY,
+                          "max_events": 20_000, "duration_budget_us": 1_280_000_000}
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def parameter_bytes() -> bytes:
+    return (json.dumps(PARAMETERS, indent=2, allow_nan=False) + "\n").encode()
+
+
+PARAMETER_SHA256 = hashlib.sha256(parameter_bytes()).hexdigest()
+
+
+def cadence64_parameter_bytes() -> bytes:
+    return (json.dumps(CADENCE64_PARAMETERS, indent=2, allow_nan=False) + "\n").encode()
+
+
+CADENCE64_PARAMETER_SHA256 = hashlib.sha256(cadence64_parameter_bytes()).hexdigest()
+
+
+def cadence64_1280_parameter_bytes() -> bytes:
+    return (json.dumps(CADENCE64_1280_PARAMETERS, indent=2, allow_nan=False) + "\n").encode()
+
+
+CADENCE64_1280_PARAMETER_SHA256 = hashlib.sha256(cadence64_1280_parameter_bytes()).hexdigest()
+
+
+def preparation_policy(value: Any = None) -> str:
+    """The original640 default changes only after an exact explicit selector."""
+    if value is None:
+        return CADENCE64_POLICY
+    if type(value) is not str or value not in {CADENCE64_POLICY, CADENCE64_1280_POLICY}:
+        raise ValueError("unknown explicit Native BuFLO duration policy")
+    return value
+
+
+def cadence64_receipt_matches(value: Any, digest: Any) -> bool:
+    """Authenticate each named64ms receipt against its own exact parameter bytes."""
+    try:
+        validate_receipt(value)
+    except ValueError:
+        return False
+    if value["policy"] == CADENCE64_POLICY:
+        return type(digest) is str and digest == CADENCE64_PARAMETER_SHA256
+    if value["policy"] == CADENCE64_1280_POLICY:
+        return type(digest) is str and digest == CADENCE64_1280_PARAMETER_SHA256
+    return False
+
+
+def _exact(value: Any, expected: Mapping[str, Any], label: str) -> None:
+    if (not isinstance(value, Mapping) or set(value) != set(expected)
+        or any(type(value[key]) is not type(item) or value[key] != item
+               for key, item in expected.items())):
+        raise ValueError(f"{label} requires its exact typed fixed-duration contract")
+
+
+def validate_parameters(value: Any, *, ceiling: int = 1_200) -> None:
+    expected = (CADENCE64_1280_PARAMETERS if isinstance(value, Mapping) and value.get(PARAMETER_FIELD) == CADENCE64_1280_POLICY
+                else CADENCE64_PARAMETERS if isinstance(value, Mapping) and value.get(PARAMETER_FIELD) == CADENCE64_POLICY else PARAMETERS)
+    _exact(value, expected, "BuFLO duration parameters")
+    if type(ceiling) is not int or ceiling < 1_200:
+        raise ValueError("BuFLO duration parameters exceed the UDP ceiling")
+
+
+def validate_receipt(value: Any) -> None:
+    expected = (CADENCE64_1280_RECEIPT if isinstance(value, Mapping) and value.get("policy") == CADENCE64_1280_POLICY
+                else CADENCE64_RECEIPT if isinstance(value, Mapping) and value.get("policy") == CADENCE64_POLICY else RECEIPT)
+    _exact(value, expected, "Native BuFLO duration receipt")
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("BuFLO duration parameters contain a duplicate key")
+        value[key] = item
+    return value
+
+
+def parse_parameters(raw: bytes) -> Mapping[str, Any]:
+    if type(raw) is not bytes:
+        raise ValueError("BuFLO duration parameter evidence must be exact bytes")
+    value = json.loads(raw, object_pairs_hook=_unique_object)
+    validate_parameters(value)
+    return value
+
+
+def validate_native_receipt(run: Mapping[str, Any], raw: bytes, *,
+                            expected_path: str | None = None) -> dict[str, Any]:
+    """Join the actual raw marker to the exact hashed parsed parameter file.
+
+    The recorded parameter path may be an execution-namespace path; the frozen
+    artifact bytes provide the content proof. A live caller can additionally
+    require its actual supplied path. No timing or completion guard is waived.
+    """
+    parsed = parse_parameters(raw)
+    parameter = run.get("defense_parameters")
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    digest = hashlib.sha256(raw).hexdigest()
+    # Native `method` is the HTTP request method; the selected defense lives in
+    # resolved_configuration.defense and the parameter provenance below.
+    if (run.get("method") != "GET" or not isinstance(parameter, Mapping)
+        or parameter.get("kind") != "buflo" or parameter.get("sha256") != digest
+        or not isinstance(parameter.get("path"), str) or not parameter["path"]
+        or parameter.get("implementation_scope") != "client_only_quic"
+        or parameter.get("paper_equivalent") is not False
+        or not isinstance(defense, Mapping) or defense.get("kind") != "buflo"
+        or defense.get("parameters") != parameter["path"]
+        or expected_path is not None and parameter["path"] != expected_path):
+        raise ValueError("Native BuFLO duration receipt differs from its hashed parsed parameters")
+    expected = (CADENCE64_1280_RECEIPT if parsed[PARAMETER_FIELD] == CADENCE64_1280_POLICY
+                else CADENCE64_RECEIPT if parsed[PARAMETER_FIELD] == CADENCE64_POLICY else RECEIPT)
+    _exact(parameter.get(RUN_FIELD), expected, "Native BuFLO duration receipt")
+    return {RUN_FIELD: dict(parameter[RUN_FIELD]),
+            "buflo_duration_budget_parameter_sha256": digest}
+
+
+def schedule_bounds(metrics: Mapping[str, Any]) -> tuple[int, int]:
+    """Only metrics joined to a real parameter receipt can widen the old bound."""
+    if RUN_FIELD not in metrics:
+        if "buflo_duration_budget_parameter_sha256" in metrics:
+            raise ValueError("BuFLO schedule budget digest has no typed Native receipt")
+        return 6_000, 120_000_000
+    validate_receipt(metrics[RUN_FIELD])
+    digest = metrics.get("buflo_duration_budget_parameter_sha256")
+    if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+        raise ValueError("BuFLO schedule budget has no exact parameter-byte identity")
+    receipt = metrics[RUN_FIELD]
+    return receipt["max_events"], receipt["duration_budget_us"]
+
+
+def capture_limits(mode: str, original: Mapping[str, Any], *, policy: str | None) -> dict[str, Any]:
+    """Derive recorder limits after an explicit prospective plan amendment."""
+    if policy is not None and (type(policy) is not str or policy not in {POLICY, CADENCE64_POLICY, CADENCE64_1280_POLICY}):
+        raise ValueError("unknown BuFLO duration budget policy")
+    result = dict(original)
+    if policy in {POLICY, CADENCE64_POLICY, CADENCE64_1280_POLICY} and mode == "buflo":
+        if (type(result.get("timeout_seconds")) is not int or result["timeout_seconds"] != 120
+            or type(result.get("capture_seconds")) is not int or result["capture_seconds"] != 180):
+            raise ValueError("BuFLO duration limits must derive from the original 120/180-second limits")
+        if policy == CADENCE64_1280_POLICY:
+            result.update(timeout_seconds=1320, capture_seconds=1380)
+        elif policy == CADENCE64_POLICY:
+            result.update(timeout_seconds=680, capture_seconds=740)
+        else:
+            result.update(timeout_seconds=240, capture_seconds=300)
+    return result
+
+
+def final_cohort_body_screen(total_body_bytes: int, *, policy: str) -> dict[str, Any]:
+    """Prospective common-five headroom; never a retroactive GET rejection.
+
+    Twelve MB of nominal receive-credit opportunities does not prove a graph
+    completes. Framing, control traffic and live responses still need a canary.
+    """
+    if (policy != FINAL_COHORT_POLICY or type(total_body_bytes) is not int
+        or total_body_bytes <= 0):
+        raise ValueError("common-five headroom needs its explicit policy and positive complete-GET body sum")
+    return {"policy": policy, "total_body_bytes": total_body_bytes,
+            "maximum_body_bytes": FINAL_COHORT_BODY_LIMIT,
+            "within_declared_headroom": total_body_bytes <= FINAL_COHORT_BODY_LIMIT,
+            "capture_viability_proven": False, "scientific_credit": False}

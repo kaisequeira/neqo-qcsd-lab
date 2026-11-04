@@ -1,0 +1,1236 @@
+from __future__ import annotations
+
+import ipaddress
+import json
+import os
+import re
+from collections.abc import Mapping
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+from .application_response_policy import (
+    APPROVED_ORIGINS_CHAFF_POLICY,
+    application_response_policy,
+    primary_document_identity_policy,
+    qualified_chaff_origin_policy,
+    validate_application_response_policy_evidence,
+    validate_primary_document_identity_evidence,
+)
+
+from .discovery_evidence import (
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    evidence_sha256,
+    validate_passive_render_contract,
+    validate_render_observation,
+    verify_discovery_event_audit,
+)
+from .util import SOURCE_METADATA_KEYS, sha256_bytes
+
+SENSITIVE = {"authorization", "cookie", "cookie2", "proxy-authorization"}
+CONNECTION_SPECIFIC = {
+    "connection",
+    "host",
+    "keep-alive",
+    "proxy-connection",
+    "transfer-encoding",
+    "upgrade",
+}
+CONDITIONAL = {
+    "if-match",
+    "if-modified-since",
+    "if-none-match",
+    "if-range",
+    "if-unmodified-since",
+    "range",
+}
+MANIFEST_KEYS = {"preparation", "resources", "replay"}
+RESOURCE_KEYS = {
+    "id",
+    "url",
+    "type",
+    "content_length",
+    "data_length",
+    "chaff_priority",
+    "known_valid",
+    "depends_on",
+    "headers",
+}
+REPLAY_KEYS = {
+    "source_url",
+    "final_url",
+    "chromium_version",
+    "settle_ms",
+    "observed_request_count",
+    "observed_origins",
+    "reviewed_origins",
+    "exclusions",
+    "response_stability",
+}
+PREPARATION_KEYS = {
+    "buflo_kernel_preparation_policy",
+    "buflo_incoming_credit_release_policy",
+    "tamaraw_capture_policy",
+    "front_capture_policy",
+    "terminal_primary_partial_cell_policy",
+    "qualified_chaff_origin_policy",
+    "application_response_policy",
+    "application_response_policy_evidence",
+    "primary_document_identity_policy",
+    "primary_document_identity_evidence",
+    "source_url",
+    "final_url",
+    "chromium_version",
+    "settle_ms",
+    "observed_request_count",
+    "observed_origins",
+    "approved_origins",
+    "exclusions",
+    "max_response_bytes",
+    "timeout_seconds",
+    "stability_runs",
+    "stability_profile",
+    "stability_defense",
+    "stability_seed",
+    "neqo_version",
+    "neqo_base_commit",
+    "published_qcsd_commit",
+    "migration_commit",
+    "expected_responses",
+    "lab_source",
+    "prepare_image_digest",
+    "udp_payload_qualification",
+    "coverage_admission",
+    "passive_render_contract",
+    "passive_render_contract_sha256",
+    "render_observation",
+    "render_observation_sha256",
+    "discovery_event_audit",
+    "discovery_event_audit_sha256",
+    "origin_ip_pins",
+    "browser_request_headers",
+    "request_header_transformation",
+}
+DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
+    "passive_render_contract",
+    "passive_render_contract_sha256",
+    "render_observation",
+    "render_observation_sha256",
+    "discovery_event_audit",
+    "discovery_event_audit_sha256",
+}
+LEGACY_OPTIONAL_PREPARATION_KEYS = {
+    "buflo_kernel_preparation_policy",
+    "buflo_incoming_credit_release_policy",
+    "tamaraw_capture_policy",
+    "front_capture_policy",
+    "terminal_primary_partial_cell_policy",
+    "qualified_chaff_origin_policy",
+    "application_response_policy",
+    "application_response_policy_evidence",
+    "primary_document_identity_policy",
+    "primary_document_identity_evidence",
+    "udp_payload_qualification",
+    "coverage_admission",
+    "origin_ip_pins",
+    "browser_request_headers",
+    "request_header_transformation",
+    *DISCOVERY_EVIDENCE_PREPARATION_KEYS,
+}
+EXPECTED_RESPONSE_KEYS = {"resource_id", "status", "bytes", "body_sha256"}
+COMPLETE_COVERAGE_POLICY = "all-approved-origins-and-rendered-resources"
+COVERAGE_ADMISSION_KEYS = {
+    "schema_version",
+    "policy",
+    "required_origins",
+    "required_resources",
+}
+COVERAGE_ADMISSION_RESOURCE_KEYS = {"id", "url"}
+COVERAGE_ADMISSION_V2_KEYS = COVERAGE_ADMISSION_KEYS | {
+    "passive_render_contract_sha256",
+    "render_observation_sha256",
+    "discovery_event_audit_sha256",
+    "network_request_count",
+    "resource_occurrence_count",
+    "exclusion_occurrence_count",
+}
+COVERAGE_ADMISSION_V3_KEYS = COVERAGE_ADMISSION_V2_KEYS | {
+    "origin_ip_pins_sha256",
+    "browser_request_headers_sha256",
+}
+UDP_PAYLOAD_QUALIFICATION_KEYS = {
+    "schema_version",
+    "configured_udp_payload_ceiling",
+    "runs",
+}
+UDP_PAYLOAD_QUALIFICATION_V2_KEYS = {
+    "schema_version",
+    "outgoing_udp_payload_ceiling",
+    "incoming_udp_payload_limit",
+    "runs",
+}
+UDP_PAYLOAD_RUN_KEYS = {"run_index", "packets_sha256", "total", "incoming", "outgoing"}
+UDP_PAYLOAD_STATISTIC_KEYS = {
+    "packet_count",
+    "observed_udp_payload_max",
+    "oversized_packet_count",
+}
+U32_MAX = 2**32 - 1
+U64_MAX = 2**64 - 1
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+RESEARCH_MAX_RESPONSE_BYTES = 1_048_576
+RESEARCH_PREPARATION_REQUIRED = (
+    "requires a workload produced by ./qcsd-lab prepare with research-grade provenance"
+)
+
+
+def https_origin(value: str) -> str | None:
+    """Return the canonical endpoint origin used by Neqo for an HTTPS URL."""
+
+    parts = urlsplit(value)
+    if (
+        parts.scheme.lower() != "https"
+        or parts.hostname is None
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        return None
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    host = parts.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    return f"https://{host}" if port in {None, 443} else f"https://{host}:{port}"
+
+
+def safe_discovery_headers(headers: dict[str, str]) -> list[list[str]]:
+    safe: list[list[str]] = []
+    for raw_name, value in headers.items():
+        name = raw_name.lower()
+        if (
+            name.startswith(":")
+            or name in SENSITIVE
+            or name in CONNECTION_SPECIFIC
+            or name in CONDITIONAL
+        ):
+            continue
+        if name == "te" and value.lower() != "trailers":
+            continue
+        if any(character in value for character in ("\0", "\r", "\n")):
+            continue
+        safe.append([name, value])
+    safe.sort()
+    return safe
+
+
+def validate_manifest(manifest: dict[str, Any]) -> None:
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest must be a JSON object")
+    unknown = set(manifest) - MANIFEST_KEYS
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"manifest contains unsupported fields: {names}")
+    if "replay" in manifest and "preparation" in manifest:
+        raise ValueError("manifest cannot contain both replay and preparation metadata")
+    if "replay" in manifest:
+        _validate_replay(manifest["replay"])
+    resources = manifest.get("resources")
+    if not isinstance(resources, list) or not resources:
+        raise ValueError("manifest requires at least one resource")
+    if any(not isinstance(resource, dict) for resource in resources):
+        raise ValueError("manifest resources must be objects")
+    ids = [resource.get("id") for resource in resources]
+    if any(
+        not isinstance(resource_id, int)
+        or isinstance(resource_id, bool)
+        or not 0 <= resource_id <= U32_MAX
+        for resource_id in ids
+    ) or len(set(ids)) != len(resources):
+        raise ValueError("resource IDs must be integers and unique")
+    id_set = set(ids)
+    graph: dict[int, list[int]] = {}
+    for resource in resources:
+        unknown_resource = set(resource) - RESOURCE_KEYS
+        if unknown_resource:
+            raise ValueError(
+                "manifest resource contains unsupported fields: "
+                + ", ".join(sorted(unknown_resource))
+            )
+        resource_url = resource.get("url", "")
+        if not isinstance(resource_url, str):
+            raise ValueError(f"resource {resource.get('id')} URL must be a string")
+        if https_origin(resource_url) is None:
+            raise ValueError(f"resource {resource.get('id')} is not absolute credential-free HTTPS")
+        dependencies = resource.get("depends_on", [])
+        if (
+            not isinstance(dependencies, list)
+            or any(
+                not isinstance(dependency, int)
+                or isinstance(dependency, bool)
+                or not 0 <= dependency <= U32_MAX
+                for dependency in dependencies
+            )
+            or len(dependencies) != len(set(dependencies))
+            or resource["id"] in dependencies
+            or not set(dependencies) <= id_set
+        ):
+            raise ValueError(f"invalid dependencies for resource {resource['id']}")
+        graph[resource["id"]] = dependencies
+        _validate_resource_fields(resource)
+        headers = resource.get("headers", [])
+        if not isinstance(headers, list) or any(
+            not isinstance(header, list)
+            or len(header) != 2
+            or not all(isinstance(part, str) for part in header)
+            for header in headers
+        ):
+            raise ValueError(f"resource {resource['id']} headers must be name/value pairs")
+        for raw_name, value in headers:
+            name = raw_name.lower()
+            if (
+                not raw_name
+                or not raw_name.isascii()
+                or any(
+                    not (character.isalnum() or character in "!#$%&'*+-.^_`|~")
+                    for character in raw_name
+                )
+                or name.startswith(":")
+                or name in SENSITIVE
+                or name in CONNECTION_SPECIFIC
+                or name in CONDITIONAL
+                or (name == "te" and value.lower() != "trailers")
+            ):
+                raise ValueError(f"header {raw_name!r} cannot be stored in a workload manifest")
+            if any(character in value for character in ("\0", "\r", "\n")):
+                raise ValueError(f"header {raw_name!r} has an unsafe value")
+    visiting: set[int] = set()
+    visited: set[int] = set()
+
+    def visit(resource_id: int) -> None:
+        if resource_id in visited:
+            return
+        if resource_id in visiting:
+            raise ValueError(f"dependency cycle at resource {resource_id}")
+        visiting.add(resource_id)
+        for dependency in graph[resource_id]:
+            visit(dependency)
+        visiting.remove(resource_id)
+        visited.add(resource_id)
+
+    for resource_id in graph:
+        visit(resource_id)
+    if "preparation" in manifest:
+        _validate_preparation(manifest["preparation"], resources, id_set)
+
+
+def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str) -> None:
+    """Require the exact clean preparation policy used by research campaigns.
+
+    General manifest validation intentionally continues to accept the small
+    bare and legacy replay manifests used by smoke tests.  This additional
+    gate is for fitting and evaluation only: it first applies the complete
+    manifest schema (including expected-response coverage), then tightens the
+    preparation and build-provenance requirements.
+    """
+
+    validate_manifest(manifest)
+    preparation = manifest.get("preparation")
+    if not isinstance(preparation, dict):
+        raise ValueError(f"research workload {workload_id!r} {RESEARCH_PREPARATION_REQUIRED}")
+
+    from .rapid_selected_capture_input import is_selected, validate_preparation as validate_selected_preparation
+    if is_selected(preparation):
+        validate_selected_preparation(preparation, manifest["resources"])
+        return
+    from . import rapid_selected_budget_input as selected_budget
+    if selected_budget.is_selected(preparation):
+        selected_budget.validate_preparation(preparation, manifest["resources"])
+        return
+    from .supplied_static_capture_amendment import is_amended, validate_preparation
+    if is_amended(preparation):
+        validate_preparation(preparation, manifest["resources"])
+        return
+    from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
+    if is_budget(preparation):
+        validate_budget_preparation(preparation, manifest["resources"])
+        return
+    from .whole_graph_supplement import is_whole, validate_preparation as validate_whole_preparation
+    if is_whole(preparation):
+        validate_whole_preparation(preparation, manifest["resources"])
+        return
+    if "data_role" in preparation:
+        from .supplied_static_preparation import validate_static_preparation
+        validate_static_preparation(preparation, manifest["resources"])
+        return
+
+    try:
+        validate_prepared_navigation_graph(
+            manifest["resources"],
+            source_url=preparation["source_url"],
+            final_url=preparation["final_url"],
+        )
+    except ValueError as error:
+        raise ValueError(f"research workload {workload_id!r} {error}") from error
+
+    for resource in manifest["resources"]:
+        names = [header[0].lower() for header in resource.get("headers", [])]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(
+                f"research workload {workload_id!r} resource {resource['id']} contains "
+                "duplicate request header names: " + ", ".join(duplicates)
+            )
+
+    required_policy = {
+        "stability_runs": 3,
+        "stability_profile": "live",
+        "stability_defense": "none",
+        "stability_seed": 0,
+        "max_response_bytes": RESEARCH_MAX_RESPONSE_BYTES,
+    }
+    for field, expected in required_policy.items():
+        if preparation[field] != expected:
+            raise ValueError(
+                f"research workload {workload_id!r} preparation {field} must be {expected!r}"
+            )
+
+    if "udp_payload_qualification" not in preparation:
+        raise ValueError(
+            f"research workload {workload_id!r} preparation requires the exact "
+            "versioned UDP-payload qualification receipt"
+        )
+
+    source = preparation["lab_source"]
+    if source["lab_dirty"] is not False or source["neqo_dirty"] is not False:
+        raise ValueError(
+            f"research workload {workload_id!r} requires clean lab and Neqo preparation sources"
+        )
+    for field in ("lab_patch_sha256", "neqo_patch_sha256"):
+        if source[field] != EMPTY_SHA256:
+            raise ValueError(
+                f"research workload {workload_id!r} preparation {field} must be the "
+                "SHA-256 of an empty patch"
+            )
+
+    commit_fields = {
+        "preparation.neqo_base_commit": preparation["neqo_base_commit"],
+        "preparation.published_qcsd_commit": preparation["published_qcsd_commit"],
+        "preparation.lab_source.lab_commit": source["lab_commit"],
+        "preparation.lab_source.neqo_commit": source["neqo_commit"],
+        "preparation.lab_source.neqo_pinned_commit": source["neqo_pinned_commit"],
+    }
+    for field, value in commit_fields.items():
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise ValueError(
+                f"research workload {workload_id!r} {field} must be a 40-character "
+                "lowercase hexadecimal commit"
+            )
+    if source["neqo_commit"] != source["neqo_pinned_commit"]:
+        raise ValueError(
+            f"research workload {workload_id!r} preparation Neqo commit must equal the "
+            "pinned submodule commit"
+        )
+
+    images = {
+        "preparation.prepare_image_digest": preparation["prepare_image_digest"],
+        "preparation.lab_source.image_digest": source["image_digest"],
+    }
+    for field, value in images.items():
+        if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+            raise ValueError(
+                f"research workload {workload_id!r} {field} must be a concrete "
+                "sha256:<64 lowercase hex> image digest"
+            )
+    if preparation["prepare_image_digest"] != source["image_digest"]:
+        raise ValueError(
+            f"research workload {workload_id!r} preparation image digest does not match "
+            "its source provenance"
+        )
+
+
+def validate_prepared_navigation_graph(
+    resources: list[dict[str, Any]],
+    *,
+    source_url: str,
+    final_url: str,
+) -> None:
+    """Require every dependency root to represent the observed page navigation."""
+
+    navigation_urls = {source_url, final_url}
+    roots = [resource for resource in resources if not resource.get("depends_on", [])]
+    navigation_roots = [
+        resource
+        for resource in roots
+        if resource.get("type") == "Document" and resource.get("url") in navigation_urls
+    ]
+    if not navigation_roots:
+        raise ValueError("must retain a dependency-root Document for its source/final navigation")
+    invalid_roots = [resource["id"] for resource in roots if resource not in navigation_roots]
+    if invalid_roots:
+        identifiers = ", ".join(map(str, sorted(invalid_roots)))
+        raise ValueError(
+            "must not promote non-navigation resources to dependency roots; "
+            f"invalid root IDs: {identifiers}"
+        )
+
+
+def _validate_resource_fields(resource: dict[str, Any]) -> None:
+    for key in ("content_length", "data_length"):
+        value = resource.get(key)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= U64_MAX
+        ):
+            raise ValueError(f"resource {resource['id']} {key} must be a non-negative integer")
+    for key in ("chaff_priority", "known_valid"):
+        if key in resource and not isinstance(resource[key], bool):
+            raise ValueError(f"resource {resource['id']} {key} must be boolean")
+    if "type" in resource and not isinstance(resource["type"], str):
+        raise ValueError(f"resource {resource['id']} type must be a string")
+
+
+def _validate_preparation(
+    value: Any,
+    resources: list[dict[str, Any]],
+    resource_ids: set[int],
+) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("manifest preparation metadata must be an object")
+    from .rapid_selected_capture_input import is_selected, validate_preparation as validate_selected_preparation
+    if is_selected(value):
+        validate_selected_preparation(value, resources)
+        return
+    from . import rapid_selected_budget_input as selected_budget
+    if selected_budget.is_selected(value):
+        selected_budget.validate_preparation(value, resources)
+        return
+    from .supplied_static_capture_amendment import is_amended, validate_preparation
+    if is_amended(value):
+        validate_preparation(value, resources)
+        return
+    from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
+    if is_budget(value):
+        validate_budget_preparation(value, resources)
+        return
+    from .whole_graph_supplement import is_whole, validate_preparation as validate_whole_preparation
+    if is_whole(value):
+        validate_whole_preparation(value, resources)
+        return
+    if "data_role" in value:
+        from .supplied_static_preparation import validate_static_preparation
+        validate_static_preparation(value, resources)
+        return
+    unknown = set(value) - PREPARATION_KEYS
+    if unknown:
+        raise ValueError(
+            "manifest preparation metadata contains unsupported fields: "
+            + ", ".join(sorted(unknown))
+        )
+    missing = PREPARATION_KEYS - LEGACY_OPTIONAL_PREPARATION_KEYS - set(value)
+    if missing:
+        raise ValueError(f"manifest preparation metadata is missing: {', '.join(sorted(missing))}")
+    for key in ("source_url", "final_url"):
+        if https_origin(str(value[key])) is None:
+            raise ValueError(f"manifest preparation {key} must be absolute credential-free HTTPS")
+    for key in ("observed_origins", "approved_origins"):
+        origins = value[key]
+        if (
+            not isinstance(origins, list)
+            or any(not isinstance(candidate, str) for candidate in origins)
+            or len(origins) != len(set(origins))
+        ):
+            raise ValueError(f"manifest preparation {key} must contain unique origins")
+        for candidate in origins:
+            parts = urlsplit(str(candidate))
+            if (
+                parts.scheme != "https"
+                or not parts.netloc
+                or parts.username is not None
+                or parts.password is not None
+                or parts.path not in {"", "/"}
+                or parts.query
+                or parts.fragment
+            ):
+                raise ValueError(f"manifest preparation {key} contains an invalid HTTPS origin")
+    # Approved origins are normally an allow-list, not an assertion that every
+    # optional content origin appeared in one Chromium load.  A preparation can
+    # opt into the complete-coverage admission contract validated below.
+    approved = set(value["approved_origins"])
+    if https_origin(value["source_url"]) not in approved:
+        raise ValueError("manifest preparation source URL origin must be approved")
+    if https_origin(value["final_url"]) not in approved:
+        raise ValueError("manifest preparation final URL origin must be approved")
+    if any(https_origin(resource["url"]) not in approved for resource in resources):
+        raise ValueError("manifest preparation resources must use approved origins")
+    if "origin_ip_pins" in value:
+        _validate_preparation_origin_ip_pins(
+            value["origin_ip_pins"], approved_origins=value["approved_origins"]
+        )
+    header_evidence_fields = {
+        "browser_request_headers",
+        "request_header_transformation",
+    } & set(value)
+    if header_evidence_fields and header_evidence_fields != {
+        "browser_request_headers",
+        "request_header_transformation",
+    }:
+        raise ValueError("manifest preparation browser-header evidence is incomplete")
+    browser_headers_by_id: dict[int, list[list[str]]] | None = None
+    if header_evidence_fields:
+        if (
+            value["request_header_transformation"]
+            != "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+        ):
+            raise ValueError("manifest preparation request-header transformation is invalid")
+        browser_headers_by_id = _validate_browser_request_headers(
+            value["browser_request_headers"], resource_ids=resource_ids
+        )
+    positive = ("max_response_bytes", "timeout_seconds", "stability_runs")
+    non_negative = ("settle_ms", "observed_request_count", "stability_seed")
+    if any(
+        not isinstance(value[key], int) or isinstance(value[key], bool) or value[key] < 1
+        for key in positive
+    ) or any(
+        not isinstance(value[key], int)
+        or isinstance(value[key], bool)
+        or not 0 <= value[key] <= U64_MAX
+        for key in non_negative
+    ):
+        raise ValueError("manifest preparation counts are invalid")
+    if value["stability_runs"] < 2:
+        raise ValueError("manifest preparation requires at least two stability runs")
+    if "udp_payload_qualification" in value:
+        _validate_udp_payload_qualification(
+            value["udp_payload_qualification"],
+            stability_runs=value["stability_runs"],
+        )
+    for key in (
+        "chromium_version",
+        "prepare_image_digest",
+        "stability_profile",
+        "stability_defense",
+        "neqo_version",
+        "neqo_base_commit",
+        "published_qcsd_commit",
+        "migration_commit",
+    ):
+        if not isinstance(value[key], str) or not value[key].strip():
+            raise ValueError(f"manifest preparation {key} must be a non-empty string")
+    lab_source = value["lab_source"]
+    if not isinstance(lab_source, dict) or set(lab_source) != SOURCE_METADATA_KEYS:
+        raise ValueError("manifest preparation lab_source provenance is invalid")
+    for key in ("lab_dirty", "neqo_dirty"):
+        if lab_source[key] is not None and not isinstance(lab_source[key], bool):
+            raise ValueError("manifest preparation lab_source provenance is invalid")
+    image_digest = lab_source["image_digest"]
+    if image_digest is not None and (not isinstance(image_digest, str) or not image_digest.strip()):
+        raise ValueError("manifest preparation lab_source provenance is invalid")
+    for key in ("lab_commit", "neqo_commit", "neqo_pinned_commit"):
+        if not isinstance(lab_source[key], str) or not lab_source[key]:
+            raise ValueError("manifest preparation lab_source provenance is invalid")
+    for key in ("lab_patch_sha256", "neqo_patch_sha256"):
+        digest = lab_source[key]
+        if digest is not None and (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError("manifest preparation lab_source provenance is invalid")
+    exclusions = value["exclusions"]
+    if not isinstance(exclusions, list) or any(
+        not isinstance(item, dict)
+        or set(item) != {"url", "reason"}
+        or not isinstance(item["url"], str)
+        or not isinstance(item["reason"], str)
+        or not item["reason"].strip()
+        for item in exclusions
+    ):
+        raise ValueError("manifest preparation exclusions require url and reason")
+    evidence_fields = set(value) & DISCOVERY_EVIDENCE_PREPARATION_KEYS
+    if evidence_fields and evidence_fields != DISCOVERY_EVIDENCE_PREPARATION_KEYS:
+        raise ValueError("manifest preparation discovery evidence is incomplete")
+    if evidence_fields:
+        validate_passive_render_contract(
+            value["passive_render_contract"],
+            digest=value["passive_render_contract_sha256"],
+        )
+        validate_render_observation(value["render_observation"])
+        if (
+            evidence_sha256(value["render_observation"])
+            != value["render_observation_sha256"]
+            or evidence_sha256(value["discovery_event_audit"])
+            != value["discovery_event_audit_sha256"]
+        ):
+            raise ValueError("manifest preparation discovery evidence SHA-256 is invalid")
+        if (
+            value["discovery_event_audit"].get("render_observation_sha256")
+            != value["render_observation_sha256"]
+        ):
+            raise ValueError("discovery audit is bound to another render observation")
+        audit_resources = resources
+        if browser_headers_by_id is not None:
+            audit_resources = deepcopy(resources)
+            for resource in audit_resources:
+                resource["headers"] = browser_headers_by_id[resource["id"]]
+        verify_discovery_event_audit(
+            value["discovery_event_audit"],
+            render_observation=value["render_observation"],
+            resources=audit_resources,
+            exclusions=exclusions,
+            approved_origins=value["approved_origins"],
+            observed_request_count=value["observed_request_count"],
+            expected_root_document_url=value["source_url"],
+            expected_final_document_url=value["final_url"],
+            expected_observed_origins=value["observed_origins"],
+        )
+    if "coverage_admission" in value:
+        _validate_coverage_admission(
+            value["coverage_admission"],
+            approved_origins=value["approved_origins"],
+            resources=resources,
+            exclusions=exclusions,
+            preparation=value,
+        )
+    responses = value["expected_responses"]
+    if not isinstance(responses, list) or len(responses) != len(resource_ids):
+        raise ValueError("manifest preparation requires one expected response per resource")
+    response_ids: set[int] = set()
+    for response in responses:
+        if not isinstance(response, dict) or set(response) != EXPECTED_RESPONSE_KEYS:
+            raise ValueError(
+                "manifest preparation expected responses require resource_id, status, bytes, "
+                "and body_sha256"
+            )
+        resource_id = response["resource_id"]
+        if (
+            not isinstance(resource_id, int)
+            or isinstance(resource_id, bool)
+            or not 0 <= resource_id <= U32_MAX
+        ):
+            raise ValueError("manifest preparation response resource_id must be an integer")
+        if (
+            not isinstance(response["status"], int)
+            or isinstance(response["status"], bool)
+            or not 100 <= response["status"] <= 599
+            or not isinstance(response["bytes"], int)
+            or isinstance(response["bytes"], bool)
+            or not 0 <= response["bytes"] <= U64_MAX
+            or not isinstance(response["body_sha256"], str)
+            or len(response["body_sha256"]) != 64
+            or any(character not in "0123456789abcdef" for character in response["body_sha256"])
+        ):
+            raise ValueError("manifest preparation expected response identity is invalid")
+        response_ids.add(resource_id)
+    if response_ids != resource_ids or len(response_ids) != len(responses):
+        raise ValueError("manifest preparation expected response IDs must match resources")
+    chaff_origin_policy = qualified_chaff_origin_policy({"preparation": value})
+    if chaff_origin_policy == APPROVED_ORIGINS_CHAFF_POLICY and any(
+        https_origin(candidate) != candidate for candidate in value["approved_origins"]
+    ):
+        raise ValueError("approved-origin chaff policy requires canonical HTTPS origins")
+    if any(key in value for key in (
+        "application_response_policy", "application_response_policy_evidence",
+        "primary_document_identity_policy", "primary_document_identity_evidence",
+    )):
+        policy_manifest = {"preparation": value, "resources": resources}
+        application_response_policy(policy_manifest)
+        primary_document_identity_policy(policy_manifest)
+        validate_application_response_policy_evidence(policy_manifest)
+        validate_primary_document_identity_evidence(policy_manifest)
+    from .capture_acceptance_policy import validate_buflo_preparation_policy
+    validate_buflo_preparation_policy(value)
+    from .capture_acceptance_policy import validate_buflo_kernel_preparation_policy
+    validate_buflo_kernel_preparation_policy(value)
+    from .capture_acceptance_policy import validate_tamaraw_preparation_policy
+    validate_tamaraw_preparation_policy(value)
+    from .capture_acceptance_policy import validate_front_preparation_policy
+    validate_front_preparation_policy(value)
+
+
+def _validate_coverage_admission(
+    value: Any,
+    *,
+    approved_origins: list[str],
+    resources: list[dict[str, Any]],
+    exclusions: list[dict[str, str]],
+    preparation: Mapping[str, Any],
+) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "manifest preparation coverage admission requires exact schema, policy, origins, "
+            "and resource IDs"
+        )
+    schema_version = value.get("schema_version")
+    expected_keys = {
+        1: COVERAGE_ADMISSION_KEYS,
+        2: COVERAGE_ADMISSION_V2_KEYS,
+        3: COVERAGE_ADMISSION_V3_KEYS,
+    }.get(schema_version)
+    if set(value) != expected_keys:
+        raise ValueError(
+            "manifest preparation coverage admission requires exact schema, policy, origins, "
+            "and resource IDs"
+        )
+    if schema_version not in {1, 2, 3} or isinstance(schema_version, bool):
+        raise ValueError("manifest preparation coverage admission schema is invalid")
+    if value["policy"] != COMPLETE_COVERAGE_POLICY:
+        raise ValueError("manifest preparation coverage admission policy is invalid")
+    if value["required_origins"] != approved_origins:
+        raise ValueError(
+            "manifest preparation coverage admission must require every approved origin"
+        )
+    required_resources = value["required_resources"]
+    if (
+        not isinstance(required_resources, list)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != COVERAGE_ADMISSION_RESOURCE_KEYS
+            or not isinstance(item["id"], int)
+            or isinstance(item["id"], bool)
+            or not isinstance(item["url"], str)
+            for item in required_resources
+        )
+        or required_resources
+        != [{"id": resource["id"], "url": resource["url"]} for resource in resources]
+    ):
+        raise ValueError(
+            "manifest preparation coverage admission must bind every rendered resource ID/URL"
+        )
+    retained_origins = {https_origin(resource["url"]) for resource in resources}
+    if missing := set(approved_origins) - retained_origins:
+        raise ValueError(
+            "manifest preparation coverage admission has no retained resource for approved "
+            "origins: " + ", ".join(sorted(missing))
+        )
+    unavailable_reasons = {"HTTP/3 preflight unavailable", "HTTP/3 dependency unavailable"}
+    if unavailable := [item for item in exclusions if item["reason"] in unavailable_reasons]:
+        raise ValueError(
+            "manifest preparation coverage admission cannot contain HTTP/3-unavailable or "
+            "orphaned exclusions: " + ", ".join(sorted({item["url"] for item in unavailable}))
+        )
+    if schema_version in {2, 3}:
+        if not DISCOVERY_EVIDENCE_PREPARATION_KEYS <= set(preparation):
+            raise ValueError("coverage admission schema two requires discovery evidence")
+        audit = preparation["discovery_event_audit"]
+        summary = audit.get("summary") if isinstance(audit, Mapping) else None
+        expected_evidence = {
+            "passive_render_contract_sha256": preparation[
+                "passive_render_contract_sha256"
+            ],
+            "render_observation_sha256": preparation["render_observation_sha256"],
+            "discovery_event_audit_sha256": preparation[
+                "discovery_event_audit_sha256"
+            ],
+            "network_request_count": (
+                summary.get("network_request_count") if isinstance(summary, Mapping) else None
+            ),
+            "resource_occurrence_count": (
+                summary.get("resource_occurrence_count") if isinstance(summary, Mapping) else None
+            ),
+            "exclusion_occurrence_count": (
+                summary.get("exclusion_occurrence_count") if isinstance(summary, Mapping) else None
+            ),
+        }
+        if any(value[key] != expected for key, expected in expected_evidence.items()):
+            raise ValueError("coverage admission discovery-evidence binding does not verify")
+        if value["passive_render_contract_sha256"] != PASSIVE_RENDER_CONTRACT_SHA256:
+            raise ValueError("coverage admission binds an obsolete render contract")
+    if schema_version == 3:
+        pins = preparation.get("origin_ip_pins")
+        _validate_preparation_origin_ip_pins(
+            pins, approved_origins=approved_origins
+        )
+        if value["origin_ip_pins_sha256"] != evidence_sha256(pins):
+            raise ValueError("coverage admission origin-IP pin binding does not verify")
+        browser_headers = preparation.get("browser_request_headers")
+        if (
+            preparation.get("request_header_transformation")
+            != "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+            or value["browser_request_headers_sha256"]
+            != evidence_sha256(browser_headers)
+        ):
+            raise ValueError("coverage admission browser-header binding does not verify")
+
+
+def _validate_preparation_origin_ip_pins(
+    value: Any, *, approved_origins: list[str]
+) -> None:
+    """Validate the exact public address selected for every approved origin."""
+
+    if not isinstance(value, dict) or list(value) != sorted(value) or set(value) != set(
+        approved_origins
+    ):
+        raise ValueError(
+            "manifest preparation origin-IP pins must exactly cover approved origins"
+        )
+    hostname_addresses: dict[str, str] = {}
+    for approved_origin, raw_address in value.items():
+        if not isinstance(approved_origin, str) or not isinstance(raw_address, str):
+            raise ValueError("manifest preparation origin-IP pin is malformed")
+        try:
+            address = ipaddress.ip_address(raw_address)
+        except ValueError as error:
+            raise ValueError("manifest preparation origin-IP pin is malformed") from error
+        if address.compressed != raw_address or not _is_public_network_address(address):
+            raise ValueError("manifest preparation origin-IP pin is not canonical public IP")
+        hostname = urlsplit(approved_origin).hostname
+        if hostname is None:
+            raise ValueError("manifest preparation origin-IP pin is malformed")
+        previous = hostname_addresses.setdefault(hostname, raw_address)
+        if previous != raw_address:
+            raise ValueError(
+                "manifest preparation origin-IP pins conflict for a shared hostname"
+            )
+
+
+def _is_public_network_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Mirror the exact client-side public-origin policy without DNS access."""
+
+    octets = address.packed
+    if isinstance(address, ipaddress.IPv4Address):
+        a, b, c, _d = octets
+        return not (
+            a == 0
+            or a == 10
+            or a == 127
+            or a >= 224
+            or (a == 100 and 64 <= b <= 127)
+            or (a == 169 and b == 254)
+            or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 0)
+            or (a == 192 and b == 168)
+            or (a == 192 and b == 88 and c == 99)
+            or (a == 198 and b in {18, 19})
+            or (a == 198 and b == 51 and c == 100)
+            or (a == 203 and b == 0 and c == 113)
+        )
+    global_unicast = octets[0] & 0xE0 == 0x20
+    ietf_special = octets[0] == 0x20 and octets[1] == 0x01 and octets[2] & 0xFE == 0
+    deprecated_6to4 = octets[0] == 0x20 and octets[1] == 0x02
+    documentation = octets[:4] == bytes((0x20, 0x01, 0x0D, 0xB8)) or (
+        octets[0] == 0x3F and octets[1] == 0xFF and octets[2] & 0xF0 == 0
+    )
+    return global_unicast and not ietf_special and not deprecated_6to4 and not documentation
+
+
+def _validate_browser_request_headers(
+    value: Any, *, resource_ids: set[int]
+) -> dict[int, list[list[str]]]:
+    if not isinstance(value, list):
+        raise ValueError("manifest preparation browser request headers are malformed")
+    by_id: dict[int, list[list[str]]] = {}
+    for item in value:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"resource_id", "headers"}
+            or type(item["resource_id"]) is not int
+            or item["resource_id"] in by_id
+            or not isinstance(item["headers"], list)
+        ):
+            raise ValueError("manifest preparation browser request headers are malformed")
+        headers = item["headers"]
+        if (
+            any(
+                not isinstance(header, list)
+                or len(header) != 2
+                or any(not isinstance(part, str) for part in header)
+                for header in headers
+            )
+            or len({header[0] for header in headers}) != len(headers)
+            or safe_discovery_headers(dict(headers)) != headers
+        ):
+            raise ValueError("manifest preparation browser request headers are not canonical")
+        by_id[item["resource_id"]] = deepcopy(headers)
+    if set(by_id) != resource_ids or [item["resource_id"] for item in value] != sorted(
+        resource_ids
+    ):
+        raise ValueError(
+            "manifest preparation browser request headers must cover resources in ID order"
+        )
+    return by_id
+
+
+def _validate_udp_payload_qualification(value: Any, *, stability_runs: int) -> None:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        _validate_udp_payload_qualification_v2(value, stability_runs=stability_runs)
+        return
+    if not isinstance(value, dict) or set(value) != UDP_PAYLOAD_QUALIFICATION_KEYS:
+        raise ValueError(
+            "manifest preparation UDP-payload qualification requires exact schema, ceiling, "
+            "and runs fields"
+        )
+    if value["schema_version"] != 1 or isinstance(value["schema_version"], bool):
+        raise ValueError("manifest preparation UDP-payload qualification schema is invalid")
+    ceiling = value["configured_udp_payload_ceiling"]
+    if not isinstance(ceiling, int) or isinstance(ceiling, bool) or ceiling != 1_200:
+        raise ValueError(
+            "manifest preparation UDP-payload qualification ceiling must be exactly 1200"
+        )
+    runs = value["runs"]
+    if not isinstance(runs, list) or len(runs) != stability_runs:
+        raise ValueError(
+            "manifest preparation UDP-payload qualification must cover every stability run"
+        )
+    for expected_index, run in enumerate(runs):
+        if not isinstance(run, dict) or set(run) != UDP_PAYLOAD_RUN_KEYS:
+            raise ValueError(
+                "manifest preparation UDP-payload qualification run receipt is invalid"
+            )
+        if run["run_index"] != expected_index or isinstance(run["run_index"], bool):
+            raise ValueError("manifest preparation UDP-payload qualification runs must be ordered")
+        digest = run["packets_sha256"]
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(
+                "manifest preparation UDP-payload qualification packets hash is invalid"
+            )
+        statistics: dict[str, dict[str, int]] = {}
+        for direction in ("total", "incoming", "outgoing"):
+            statistic = run[direction]
+            if not isinstance(statistic, dict) or set(statistic) != UDP_PAYLOAD_STATISTIC_KEYS:
+                raise ValueError(
+                    "manifest preparation UDP-payload qualification statistics are invalid"
+                )
+            if any(
+                not isinstance(statistic[field], int)
+                or isinstance(statistic[field], bool)
+                or statistic[field] < (1 if field != "oversized_packet_count" else 0)
+                for field in UDP_PAYLOAD_STATISTIC_KEYS
+            ):
+                raise ValueError(
+                    "manifest preparation UDP-payload qualification statistics are invalid"
+                )
+            if (
+                statistic["oversized_packet_count"] != 0
+                or statistic["observed_udp_payload_max"] > ceiling
+            ):
+                raise ValueError(
+                    "manifest preparation UDP-payload qualification recorded an oversized packet"
+                )
+            statistics[direction] = statistic
+        if statistics["total"]["packet_count"] != (
+            statistics["incoming"]["packet_count"] + statistics["outgoing"]["packet_count"]
+        ):
+            raise ValueError(
+                "manifest preparation UDP-payload qualification packet counts disagree"
+            )
+        if statistics["total"]["observed_udp_payload_max"] != max(
+            statistics["incoming"]["observed_udp_payload_max"],
+            statistics["outgoing"]["observed_udp_payload_max"],
+        ):
+            raise ValueError("manifest preparation UDP-payload qualification maxima disagree")
+
+
+def _validate_udp_payload_qualification_v2(value: dict[str, Any], *, stability_runs: int) -> None:
+    label = "manifest preparation UDP-payload qualification"
+    if set(value) != UDP_PAYLOAD_QUALIFICATION_V2_KEYS:
+        raise ValueError(f"{label} requires exact directional schema and runs fields")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 2:
+        raise ValueError(f"{label} schema is invalid")
+    outgoing_limit = value["outgoing_udp_payload_ceiling"]
+    incoming_limit = value["incoming_udp_payload_limit"]
+    if type(outgoing_limit) is not int or outgoing_limit != 1_200:
+        raise ValueError(f"{label} outgoing ceiling must be exactly 1200")
+    if type(incoming_limit) is not int or incoming_limit != 65_527:
+        raise ValueError(f"{label} incoming limit must be exactly 65527")
+    runs = value["runs"]
+    if not isinstance(runs, list) or len(runs) != stability_runs:
+        raise ValueError(f"{label} must cover every stability run")
+    for expected_index, run in enumerate(runs):
+        if not isinstance(run, dict) or set(run) != UDP_PAYLOAD_RUN_KEYS:
+            raise ValueError(f"{label} run receipt is invalid")
+        if type(run["run_index"]) is not int or run["run_index"] != expected_index:
+            raise ValueError(f"{label} runs must be ordered")
+        digest = run["packets_sha256"]
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"{label} packets hash is invalid")
+        statistics: dict[str, dict[str, int]] = {}
+        for direction in ("total", "incoming", "outgoing"):
+            statistic = run[direction]
+            if not isinstance(statistic, dict) or set(statistic) != UDP_PAYLOAD_STATISTIC_KEYS:
+                raise ValueError(f"{label} statistics are invalid")
+            if any(
+                type(statistic[field]) is not int
+                or statistic[field] < (0 if field == "oversized_packet_count" else 1)
+                for field in UDP_PAYLOAD_STATISTIC_KEYS
+            ):
+                raise ValueError(f"{label} statistics are invalid")
+            statistics[direction] = statistic
+        for direction, limit in (("incoming", incoming_limit), ("outgoing", outgoing_limit)):
+            if statistics[direction]["observed_udp_payload_max"] > limit:
+                raise ValueError(f"{label} recorded an oversized {direction} packet")
+        if statistics["total"]["packet_count"] != (
+            statistics["incoming"]["packet_count"] + statistics["outgoing"]["packet_count"]
+        ):
+            raise ValueError(f"{label} packet counts disagree")
+        if statistics["total"]["observed_udp_payload_max"] != max(
+            statistics["incoming"]["observed_udp_payload_max"],
+            statistics["outgoing"]["observed_udp_payload_max"],
+        ):
+            raise ValueError(f"{label} maxima disagree")
+        if statistics["total"]["oversized_packet_count"] != (
+            statistics["incoming"]["oversized_packet_count"]
+            + statistics["outgoing"]["oversized_packet_count"]
+        ):
+            raise ValueError(f"{label} oversized packet counts disagree")
+        if any(statistics[direction]["oversized_packet_count"] for direction in statistics):
+            raise ValueError(f"{label} recorded an oversized packet")
+
+
+def _validate_replay(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("manifest replay metadata must be an object")
+    unknown = set(value) - REPLAY_KEYS
+    if unknown:
+        raise ValueError(
+            f"manifest replay metadata contains unsupported fields: {', '.join(sorted(unknown))}"
+        )
+    required = {
+        "source_url",
+        "final_url",
+        "chromium_version",
+        "settle_ms",
+        "observed_request_count",
+        "observed_origins",
+        "reviewed_origins",
+        "exclusions",
+    }
+    missing = required - set(value)
+    if missing:
+        raise ValueError(f"manifest replay metadata is missing: {', '.join(sorted(missing))}")
+    for key in ("source_url", "final_url"):
+        if https_origin(str(value[key])) is None:
+            raise ValueError(f"manifest replay {key} must be absolute credential-free HTTPS")
+    for key in ("observed_origins", "reviewed_origins"):
+        origins = value[key]
+        if not isinstance(origins, list) or len(origins) != len(set(origins)):
+            raise ValueError(f"manifest replay {key} must contain unique origins")
+        for origin in origins:
+            parts = urlsplit(str(origin))
+            if (
+                parts.scheme != "https"
+                or not parts.netloc
+                or parts.username is not None
+                or parts.password is not None
+                or parts.path not in {"", "/"}
+            ):
+                raise ValueError(f"manifest replay {key} contains an invalid HTTPS origin")
+    if not set(value["reviewed_origins"]) <= set(value["observed_origins"]):
+        raise ValueError("reviewed origins must be a subset of observed origins")
+    if int(value["settle_ms"]) < 0 or int(value["observed_request_count"]) < 1:
+        raise ValueError("manifest replay counts must be non-negative")
+    exclusions = value["exclusions"]
+    if not isinstance(exclusions, list) or any(
+        not isinstance(item, dict)
+        or set(item) != {"url", "reason"}
+        or not str(item["reason"]).strip()
+        for item in exclusions
+    ):
+        raise ValueError("manifest replay exclusions require url and reason")
+    stability = value.get("response_stability")
+    if stability is not None:
+        if not isinstance(stability, dict) or set(stability) != {
+            "runs",
+            "stable_resource_ids",
+        }:
+            raise ValueError(
+                "manifest replay response_stability requires runs and stable_resource_ids"
+            )
+        stable_ids = stability["stable_resource_ids"]
+        if (
+            int(stability["runs"]) < 2
+            or not isinstance(stable_ids, list)
+            or len(stable_ids) != len(set(stable_ids))
+            or any(not isinstance(resource_id, int) for resource_id in stable_ids)
+        ):
+            raise ValueError("manifest replay response_stability is invalid")
+
+
+def runtime_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Return only fields understood by the Neqo workload runner."""
+
+    validate_manifest(manifest)
+    # Preparation has already frozen every safe concrete request header on its
+    # resource.  The lab deliberately exposes no second runtime policy layer.
+    preparation = manifest.get("preparation")
+    if not isinstance(preparation, dict):
+        return {"resources": manifest["resources"]}
+    return {
+        "resources": project_stable_response_lengths(
+            manifest["resources"], preparation["expected_responses"]
+        )
+    }
+
+
+def project_stable_response_lengths(
+    resources: list[dict[str, Any]],
+    expected_responses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Copy resources and make each effective length its stable GET byte count."""
+
+    resource_ids = [resource.get("id") for resource in resources]
+    response_ids = [response.get("resource_id") for response in expected_responses]
+    if (
+        len(resource_ids) != len(set(resource_ids))
+        or len(response_ids) != len(set(response_ids))
+        or set(response_ids) != set(resource_ids)
+    ):
+        raise ValueError("stable response length map must match resources exactly")
+
+    lengths: dict[int, int] = {}
+    for response in expected_responses:
+        resource_id = response.get("resource_id")
+        length = response.get("bytes")
+        if (
+            not isinstance(resource_id, int)
+            or isinstance(resource_id, bool)
+            or not isinstance(length, int)
+            or isinstance(length, bool)
+            or not 0 <= length <= U64_MAX
+        ):
+            raise ValueError("stable response length map is invalid")
+        lengths[resource_id] = length
+
+    projected = deepcopy(resources)
+    for resource in projected:
+        stable_length = lengths[resource["id"]]
+        data_length = resource.get("data_length")
+        if data_length is None:
+            data_length = 0
+        resource["content_length"] = stable_length
+        resource["data_length"] = min(data_length, stable_length)
+    return projected
+
+
+def canonical_bytes(manifest: dict[str, Any]) -> bytes:
+    return (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+
+
+def write_frozen_manifest(
+    path: Path,
+    manifest: dict[str, Any],
+    *,
+    force: bool = False,
+    exclusive: bool = False,
+) -> str:
+    validate_manifest(manifest)
+    data = canonical_bytes(manifest)
+    digest = sha256_bytes(data)
+    if exclusive:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open("xb") as output:
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+        except FileExistsError:
+            raise FileExistsError(f"{path} already exists; choose a new workload ID") from None
+        return digest
+    if path.exists() and path.read_bytes() != data and not force:
+        raise FileExistsError(f"{path} is immutable; choose a new version or pass --force")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return digest

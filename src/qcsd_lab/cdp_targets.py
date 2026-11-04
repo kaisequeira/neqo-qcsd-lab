@@ -1,0 +1,8943 @@
+"""Race-free recursive CDP instrumentation for page-related network targets.
+
+The image-level Playwright ownership patch prevents Playwright's private CDP
+clients from attaching iframe, dedicated-worker, or shared-worker targets.
+QCSD then owns every resume decision.  Page-related targets use Chromium's
+public non-flat target transport recursively.  A separate browser-session
+guard holds browser-level shared workers paused while the page transport adopts
+them non-flat. The same public browser session discovers page targets and
+rejects any sibling popup in the root context. Every child acknowledges its
+complete Network/Fetch/recursion setup and exact bootstrap-request ownership
+before it resumes.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from collections.abc import Callable, Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+from urllib.parse import urlsplit
+
+from .browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    POPUP_GUARD_MARKER,
+    POPUP_NAVIGATION_API,
+    TARGET_EGRESS_BINDING,
+    TARGET_EGRESS_SHIM_SCHEMA_VERSION,
+    popup_navigation_guard_source,
+    target_egress_apis,
+    target_egress_shim_source,
+    validate_target_egress_shim_result,
+)
+
+CDP_TARGET_INSTRUMENTATION_POLICY = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v22"
+)
+BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
+EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
+NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 5
+NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-cutoff-held-fetch-disposal-v4"
+_PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 4
+_PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v3"
+)
+_OLDER_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
+_OLDER_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v2"
+)
+_HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
+_HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v1"
+)
+SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 3
+SRCDOC_PSEUDO_DOCUMENT_POLICY = (
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-v3"
+)
+_PREVIOUS_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
+)
+_PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION = 4
+_PRE_REQUEST_CSP_POLICY = "chromium-143-attached-iframe-loader-bound-pre-network-csp-denial-v1"
+_BOOTSTRAP_WORKER_TYPES = ("worker", "shared_worker")
+_BOOTSTRAP_OWNER_TYPES = ("page", "iframe", "worker", "shared_worker")
+_ALLOWED_CHILD_TARGET_TYPES = frozenset({"iframe", "shared_worker", "worker"})
+_FORWARDED_METHODS = frozenset(
+    {
+        "Fetch.requestPaused",
+        "Network.loadingFailed",
+        "Network.loadingFinished",
+        "Network.requestWillBeSent",
+        "Network.requestWillBeSentExtraInfo",
+        "Network.requestServedFromCache",
+        "Network.responseReceived",
+    }
+)
+_NON_REPLAYABLE_NETWORK_EVENTS = frozenset(
+    {
+        "Network.webSocketCreated",
+        "Network.webSocketWillSendHandshakeRequest",
+        "Network.webSocketHandshakeResponseReceived",
+        "Network.webSocketFrameSent",
+        "Network.webTransportCreated",
+        "Network.webTransportConnectionEstablished",
+        "Network.directTCPSocketCreated",
+        "Network.directTCPSocketOpened",
+        "Network.directTCPSocketChunkSent",
+        "Network.directUDPSocketCreated",
+        "Network.directUDPSocketOpened",
+        "Network.directUDPSocketChunkSent",
+    }
+)
+_NON_REPLAYABLE_RUNTIME_EVENTS = frozenset({"Runtime.bindingCalled"})
+_NON_REPLAYABLE_EGRESS_EVENTS = _NON_REPLAYABLE_NETWORK_EVENTS | _NON_REPLAYABLE_RUNTIME_EVENTS
+_TARGET_LIFECYCLE_METHODS = frozenset(
+    {
+        "Inspector.targetCrashed",
+        "Target.targetCrashed",
+        "Target.targetCreated",
+        "Target.targetDestroyed",
+        "Target.targetInfoChanged",
+    }
+)
+_EMPTY_RESULT_POLICY_COMMANDS = frozenset({"Fetch.continueRequest", "Fetch.failRequest"})
+_ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE = (
+    "CDPSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId."
+)
+_ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE = (
+    "CDPSession.send: Protocol error (Fetch.failRequest): Invalid InterceptionId."
+)
+_ROOT_SEND_NO_SESSION_MESSAGE = (
+    "CDPSession.send: Protocol error (Target.sendMessageToTarget): No session with given id"
+)
+_ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL = (
+    "catalogue-navigation-policy:Fetch.continueRequest"
+)
+_ROOT_FAIL_INVALID_INTERCEPTION_POLICY_LABEL = (
+    "catalogue-navigation-policy:Fetch.failRequest"
+)
+_HTTP_METHOD_TOKEN_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~"
+)
+_ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES = frozenset({"Font", "Stylesheet"})
+_ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES = frozenset({"Other", "Script"})
+_ROOT_TERMINAL_HISTORY_LIMIT = 4_096
+_ROOT_CONTINUE_DIAGNOSTIC_LIMIT = 32
+_ROOT_DISCARD_SECONDARY_LIMIT = 8
+_ROOT_FETCH_IDENTITY_LIMIT = 20_000
+_ROOT_NETWORK_IDENTITY_LIMIT = 20_000
+_PRE_SHUTDOWN_NETWORK_IDENTITY_LIMIT = 20_000
+_PRE_SHUTDOWN_FETCH_IDENTITY_LIMIT = 20_000
+_NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT = 4_096
+_SRCDOC_IDENTITY_HISTORY_LIMIT = 20_000
+_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
+_PAGE_FRAME_IDENTITY_LIMIT = 4_096
+_SRCDOC_EVENT_ORDINAL_LIMIT = _PAGE_FRAME_IDENTITY_LIMIT * 5
+_ROOT_PAGE_LIFECYCLE_METHODS = frozenset(
+    {
+        "Page.frameAttached",
+        "Page.frameDetached",
+        "Page.frameRequestedNavigation",
+        "Page.frameStartedNavigating",
+        "Page.frameStartedLoading",
+        "Page.frameStoppedLoading",
+        "Page.frameNavigated",
+    }
+)
+_SRCDOC_REQUEST_FIELDS = frozenset({"frameId", "reason", "url", "disposition"})
+_SRCDOC_STARTED_NAVIGATING_FIELDS = frozenset(
+    {"frameId", "loaderId", "navigationType", "url"}
+)
+_SRCDOC_ABORT_TERMINAL_FIELDS = frozenset(
+    {"requestId", "timestamp", "type", "errorText", "canceled"}
+)
+_SRCDOC_FINISH_TERMINAL_FIELDS = frozenset(
+    {"requestId", "timestamp", "encodedDataLength"}
+)
+_SRCDOC_FINISH_ENCODED_DATA_LENGTHS = frozenset({15, 33})
+_SRCDOC_TERMINAL_METHODS = (
+    "Network.loadingFailed",
+    "Network.loadingFinished",
+)
+_BASE_SETUP_COMMANDS = (
+    # Network.Initiator.stack is populated for script-created requests only
+    # when the Debugger domain was enabled before the relevant script ran.
+    ("Debugger.enable", {}),
+    ("Network.enable", {}),
+    ("Network.setCacheDisabled", {"cacheDisabled": True}),
+    ("Network.setBypassServiceWorker", {"bypass": True}),
+    ("Runtime.enable", {}),
+    ("Runtime.addBinding", {"name": TARGET_EGRESS_BINDING}),
+)
+_FETCH_SETUP_COMMAND = (
+    "Fetch.enable",
+    {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+)
+_AUTO_ATTACH_COMMAND = (
+    "Target.setAutoAttach",
+    {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": False},
+)
+_TARGET_BARRIER_COMMAND = ("Target.getTargetInfo", {})
+_PAGE_TARGET_TYPES = frozenset({"page", "iframe"})
+_WORKER_TARGET_TYPES = frozenset({"worker", "shared_worker"})
+_IFRAME_INSTRUMENTATION = "beforeScriptExecution"
+_IFRAME_INSTALLATION_KIND = "iframe-pre-author-installation"
+_IFRAME_SYNTHETIC_EXPRESSION = "true"
+_IFRAME_INSTRUMENTATION_COMMAND = (
+    "Debugger.setInstrumentationBreakpoint",
+    {"instrumentation": _IFRAME_INSTRUMENTATION},
+)
+_WORKER_INSTRUMENTATION_COMMAND = (
+    "Debugger.setInstrumentationBreakpoint",
+    {"instrumentation": "beforeScriptExecution"},
+)
+_IFRAME_CONTEXT_EVENTS = frozenset(
+    {
+        "Runtime.executionContextCreated",
+        "Runtime.executionContextDestroyed",
+        "Runtime.executionContextsCleared",
+    }
+)
+_CDP_PROTOCOL_ERROR_CODE_MIN = -(2**31)
+_CDP_PROTOCOL_ERROR_CODE_MAX = 2**31 - 1
+_CDP_PROTOCOL_ERROR_MESSAGE_MAX_CHARS = 240
+_BLOCKED_DOCUMENT_FAILURE_FIELDS = frozenset(
+    {"requestId", "timestamp", "type", "errorText", "canceled", "blockedReason"}
+)
+_ERROR_DOCUMENT_FINISH_FIELDS = frozenset({"requestId", "timestamp", "encodedDataLength"})
+_ERROR_DOCUMENT_URL = "chrome-error://chromewebdata/"
+_CSP_ERROR_NAVIGATED_FRAME_FIELDS = frozenset({
+    "adFrameStatus", "crossOriginIsolatedContextType", "domainAndRegistry",
+    "gatedAPIFeatures", "id", "loaderId", "mimeType", "name", "parentId",
+    "secureContextType", "securityOrigin", "securityOriginDetails", "unreachableUrl", "url",
+})
+_ERROR_DOCUMENT_RESOURCE_REQUEST_FIELDS = frozenset(
+    {
+        "requestId",
+        "loaderId",
+        "documentURL",
+        "request",
+        "timestamp",
+        "wallTime",
+        "initiator",
+        "redirectHasExtraInfo",
+        "type",
+        "frameId",
+        "hasUserGesture",
+    }
+)
+_ERROR_DOCUMENT_RESOURCE_INNER_REQUEST_FIELDS = frozenset(
+    {
+        "url",
+        "method",
+        "headers",
+        "mixedContentType",
+        "initialPriority",
+        "referrerPolicy",
+        "isSameSite",
+    }
+)
+_ERROR_DOCUMENT_RESOURCE_INITIATOR_FIELDS = frozenset({"type", "url", "lineNumber", "columnNumber"})
+_ERROR_DOCUMENT_PARSER_LINE_MAX = 4_095
+_ERROR_DOCUMENT_RESOURCE_RESPONSE_FIELDS = frozenset(
+    {"requestId", "loaderId", "timestamp", "type", "response", "hasExtraInfo", "frameId"}
+)
+_ERROR_DOCUMENT_RESOURCE_INNER_RESPONSE_FIELDS = frozenset(
+    {
+        "url",
+        "status",
+        "statusText",
+        "headers",
+        "mimeType",
+        "charset",
+        "connectionReused",
+        "connectionId",
+        "fromDiskCache",
+        "fromServiceWorker",
+        "fromPrefetchCache",
+        "encodedDataLength",
+        "protocol",
+        "securityState",
+        "isIpProtectionUsed",
+    }
+)
+_PINNED_ERROR_DOCUMENT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "HeadlessChrome/143.0.0.0 Safari/537.36"
+)
+# Chromium 143's built-in error document references exactly these three PNG
+# data URLs, in this order. The third values record the originally observed
+# parser columns. These parser positions vary with the rendered error document;
+# the pinned image URL hashes, owner, order, and lifecycle establish identity.
+# Copying the large browser-owned URLs into QCSD would add no evidence.
+_ERROR_DOCUMENT_RESOURCE_SIGNATURES = (
+    (4026, "98da97a017b2bd58cb9851bda86d9634cee3a573f4e210a384926eddaf3cb692", 624),
+    (6366, "ea2294b4439707e90c81be91f46f2e4399d1f0f9ef67a0abbb2e513acf0e9632", 624),
+    (230, "3b99d5fc9d5cbfc903dc91de38fe13a68a643a816014921c83c9dcffcbffc642", 625),
+)
+_ERROR_DOCUMENT_PARSER_COLUMN_MAX = 16_383
+
+
+def _egress_evaluate_command(target_type: str) -> tuple[str, dict[str, Any]]:
+    return (
+        "Runtime.evaluate",
+        {
+            "expression": target_egress_shim_source(target_type),
+            "returnByValue": True,
+            "awaitPromise": False,
+        },
+    )
+
+
+def _is_finite_protocol_number(value: object) -> bool:
+    """Accept only finite CDP JSON numbers, never booleans or huge integers."""
+
+    if type(value) not in {int, float}:
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
+
+
+def _worker_egress_evaluate_command(
+    target_type: str,
+    call_frame_id: str,
+) -> tuple[str, dict[str, Any]]:
+    if target_type not in _WORKER_TARGET_TYPES:
+        raise ValueError("only worker targets accept first-script egress evaluation")
+    if not isinstance(call_frame_id, str) or not call_frame_id:
+        raise ValueError("worker first-script call-frame identity is malformed")
+    return (
+        "Debugger.evaluateOnCallFrame",
+        {
+            "callFrameId": call_frame_id,
+            "expression": target_egress_shim_source(target_type),
+            "returnByValue": True,
+        },
+    )
+
+
+def _egress_new_document_command(target_type: str) -> tuple[str, dict[str, Any]]:
+    if target_type not in _PAGE_TARGET_TYPES:
+        raise ValueError("only page targets accept pre-document egress shims")
+    return (
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": target_egress_shim_source(target_type)},
+    )
+
+
+def _popup_guard_evaluate_command() -> tuple[str, dict[str, Any]]:
+    return (
+        "Runtime.evaluate",
+        {
+            "expression": f"globalThis[{json.dumps(POPUP_GUARD_MARKER)}] === true",
+            "returnByValue": True,
+            "awaitPromise": False,
+        },
+    )
+
+
+def _iframe_breakpoint_condition() -> str:
+    """Install both iframe guards synchronously before the paused script runs."""
+
+    binding = json.dumps(TARGET_EGRESS_BINDING)
+    policy = json.dumps(NON_REPLAYABLE_EGRESS_POLICY)
+    kind = json.dumps(_IFRAME_INSTALLATION_KIND)
+    return f"""
+(() => {{
+  const egressShim = ({target_egress_shim_source("iframe")});
+  const popupGuardInstalled = ({popup_navigation_guard_source()});
+  globalThis[{binding}](JSON.stringify({{
+    schema_version: {TARGET_EGRESS_SHIM_SCHEMA_VERSION},
+    policy: {policy},
+    kind: {kind},
+    target_type: 'iframe',
+    egress_shim: egressShim,
+    popup_guard_installed: popupGuardInstalled,
+  }}));
+  return false;
+}})()
+""".strip()
+
+
+def _iframe_synthetic_trigger_command(unique_context_id: str) -> tuple[str, dict[str, Any]]:
+    """Force the armed before-script barrier even when a frame has no author script."""
+
+    if not isinstance(unique_context_id, str) or not unique_context_id:
+        raise ValueError("iframe synthetic trigger requires an exact execution context")
+    return (
+        "Runtime.evaluate",
+        {
+            "expression": _IFRAME_SYNTHETIC_EXPRESSION,
+            "uniqueContextId": unique_context_id,
+            "returnByValue": True,
+            "awaitPromise": False,
+        },
+    )
+
+
+def _sanitised_protocol_error(error: object) -> str:
+    """Return bounded CDP error evidence without reflecting arbitrary payload data."""
+
+    if not isinstance(error, Mapping) or not {"code", "message"}.issubset(error):
+        raise CdpTargetIntegrityError("nested CDP command returned a malformed error")
+    code = error.get("code")
+    message = error.get("message")
+    if (
+        type(code) is not int
+        or not _CDP_PROTOCOL_ERROR_CODE_MIN <= code <= _CDP_PROTOCOL_ERROR_CODE_MAX
+        or not isinstance(message, str)
+    ):
+        raise CdpTargetIntegrityError("nested CDP command returned a malformed error")
+    message = " ".join(message.split())
+    message = "".join(character if character.isprintable() else "?" for character in message)
+    if not message:
+        raise CdpTargetIntegrityError("nested CDP command returned a malformed error")
+    return f"code={code}, message={message[:_CDP_PROTOCOL_ERROR_MESSAGE_MAX_CHARS]}"
+
+
+def _exception_fingerprint(error: Exception) -> str:
+    """Hash a transport exception without retaining its potentially sensitive text."""
+
+    identity = {
+        "module": type(error).__module__,
+        "qualname": type(error).__qualname__,
+        "name": getattr(error, "name", None),
+        "message": str(error),
+    }
+    encoded = json.dumps(
+        identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=lambda value: f"<{type(value).__name__}>",
+    ).encode("utf-8")
+    return f"exception_sha256={hashlib.sha256(encoded).hexdigest()}"
+
+
+def _is_exact_root_continue_invalid_interception(
+    error: Exception,
+    *,
+    expected_type: type[Exception] | None,
+) -> bool:
+    """Match only the pinned Playwright error observed for a stale Fetch ID."""
+
+    return (
+        expected_type is not None
+        and type(error) is expected_type
+        and getattr(error, "name", None) == "Error"
+        and getattr(error, "message", None)
+        == _ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE
+        and str(error) == _ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE
+        and error.args == (_ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE,)
+    )
+
+
+def _is_exact_root_fail_invalid_interception(
+    error: Exception,
+    *,
+    expected_type: type[Exception] | None,
+) -> bool:
+    """Match only the pinned Playwright error for a stale root Fetch denial."""
+
+    return (
+        expected_type is not None
+        and type(error) is expected_type
+        and getattr(error, "name", None) == "Error"
+        and getattr(error, "message", None) == _ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE
+        and str(error) == _ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE
+        and error.args == (_ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE,)
+    )
+
+
+def _is_exact_root_send_no_session(
+    error: BaseException | None,
+    *,
+    expected_type: type[Exception] | None,
+) -> bool:
+    """Match only the pinned Playwright error for an absent child session."""
+
+    return (
+        expected_type is not None
+        and type(error) is expected_type
+        and getattr(error, "name", None) == "Error"
+        and getattr(error, "message", None) == _ROOT_SEND_NO_SESSION_MESSAGE
+        and str(error) == _ROOT_SEND_NO_SESSION_MESSAGE
+        and error.args == (_ROOT_SEND_NO_SESSION_MESSAGE,)
+    )
+
+
+_SHARED_WORKER_GUARD_FILTER = [
+    {"type": "shared_worker", "exclude": False},
+    # Browser-scope ``tab`` targets expose a paused creation tripwire for a
+    # newly created popup before its page target is resumed. Packet tests show
+    # that target creation itself may already perform transport I/O, so this is
+    # defence-in-depth and lifecycle evidence, never a pre-I/O claim.
+    # Do not select ``page`` here: the recursive non-flat page transport owns
+    # page/OOPIF instrumentation and every resume decision inside the root tab.
+    {"type": "tab", "exclude": False},
+    {"exclude": True},
+]
+_SHARED_WORKER_GUARD_COMMAND = (
+    "Target.setAutoAttach",
+    {
+        "autoAttach": True,
+        "waitForDebuggerOnStart": True,
+        "flatten": True,
+        "filter": _SHARED_WORKER_GUARD_FILTER,
+    },
+)
+_SHARED_WORKER_GUARD_BARRIER = ("Target.getTargets", {})
+_BROWSER_TARGET_LIFECYCLE_BARRIER_LIMIT = 3
+_PAGE_DISCOVERY_FILTER = [
+    {"type": "page", "exclude": False},
+    {"type": "service_worker", "exclude": False},
+    {"exclude": True},
+]
+_PAGE_DISCOVERY_COMMAND = (
+    "Target.setDiscoverTargets",
+    {"discover": True, "filter": _PAGE_DISCOVERY_FILTER},
+)
+_PAGE_DISCOVERY_DISABLE_COMMAND = (
+    "Target.setDiscoverTargets",
+    {"discover": False},
+)
+
+
+class CdpTargetIntegrityError(RuntimeError):
+    """A malformed, incomplete, or uninstrumented related-target event stream."""
+
+
+class _RootInvalidInterception(CdpTargetIntegrityError):
+    """The one pinned Playwright/Chromium invalid-interception transport error."""
+
+    def __init__(
+        self,
+        *,
+        fingerprint: str,
+        policy_context: str | None = None,
+    ) -> None:
+        context = f", {policy_context}" if policy_context is not None else ""
+        super().__init__(
+            "root CDP Fetch.continueRequest encountered InvalidInterceptionId "
+            f"({fingerprint}{context})"
+        )
+        self.fingerprint = fingerprint
+
+
+class _RootFailInvalidInterception(CdpTargetIntegrityError):
+    """The pinned stale-interception error from an unacknowledged root denial."""
+
+    def __init__(self, *, fingerprint: str) -> None:
+        super().__init__(
+            "root CDP Fetch.failRequest encountered InvalidInterceptionId "
+            f"({fingerprint})"
+        )
+        self.fingerprint = fingerprint
+
+
+class _RootLateNetworkInvalidInterception(CdpTargetIntegrityError):
+    """A failed root continue whose matching Network start arrived after Fetch.
+
+    This authorizes discarding and retrying the whole navigation only after a
+    complete exceptional browser disposal. It never acknowledges the Fetch
+    decision or makes the current navigation acceptable evidence.
+    """
+
+    def __init__(self, *, fingerprint: str, resource_type: str) -> None:
+        super().__init__(
+            "root CDP Fetch.continueRequest raced its exact late Network start "
+            f"for root GET {resource_type}; the navigation must be discarded "
+            f"({fingerprint})"
+        )
+        self.cleanup_verified = False
+
+
+class _RootUnpairedFetchInvalidInterception(CdpTargetIntegrityError):
+    """An exact early root Fetch failed before its Network start was observed.
+
+    This permits only discarding the entire browser attempt after verified
+    disposal. An unpaired Fetch never proves a Network request, successful
+    continuation, or acceptable navigation evidence.
+    """
+
+    def __init__(self, *, fingerprint: str, resource_type: str) -> None:
+        super().__init__(
+            "root CDP Fetch.continueRequest failed for an exact unpaired early "
+            f"root GET {resource_type}; the navigation must be discarded "
+            f"({fingerprint})"
+        )
+        self.cleanup_verified = False
+
+
+class _RootCanceledNetworkInvalidInterception(CdpTargetIntegrityError):
+    """Exact canceled root request; only a complete abort may permit retry."""
+
+    def __init__(self, *, fingerprint: str, resource_type: str) -> None:
+        super().__init__(
+            "root CDP Fetch.continueRequest raced an exact canceled root "
+            "Network.loadingFailed "
+            f"(resource_type={resource_type}, {fingerprint})"
+        )
+        self.cleanup_verified = False
+
+
+class _RootRequestStageInvalidInterception(CdpTargetIntegrityError):
+    """A failed exact catalogue continue that permits only full-attempt discard."""
+
+    def __init__(self, *, fingerprint: str, resource_type: str) -> None:
+        super().__init__(
+            "root CDP Fetch.continueRequest failed for a bound catalogue "
+            f"request-stage {resource_type}; the navigation must be discarded "
+            f"({fingerprint})"
+        )
+        self.cleanup_verified = False
+
+
+class _RootRequestStageFailedInterception(CdpTargetIntegrityError):
+    """An exact failed catalogue denial permits only full-attempt discard."""
+
+    def __init__(self, *, fingerprint: str, resource_type: str) -> None:
+        super().__init__(
+            "root CDP Fetch.failRequest failed for a bound catalogue "
+            f"request-stage {resource_type}; the navigation must be discarded "
+            f"({fingerprint})"
+        )
+        self.cleanup_verified = False
+
+
+def validate_normal_shutdown_disposal_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+    allow_historical: bool = False,
+) -> dict[str, Any]:
+    """Validate identifier-free accounting for the normal context-close drain."""
+
+    if type(allow_historical) is not bool:
+        raise ValueError("normal shutdown historical switch is invalid")
+    historical_v2 = (
+        isinstance(value, Mapping)
+        and value.get("schema_version")
+        == _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        and value.get("policy") == _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
+    historical_v3 = (
+        isinstance(value, Mapping)
+        and value.get("schema_version")
+        == _OLDER_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        and value.get("policy") == _OLDER_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
+    historical_v4 = (
+        isinstance(value, Mapping)
+        and value.get("schema_version")
+        == _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        and value.get("policy") == _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
+    historical = historical_v2 or historical_v3 or historical_v4
+    fields = {
+        "schema_version",
+        "policy",
+        "started",
+        "terminal",
+        "network_total",
+        "fetch_total",
+        "matched_total",
+        "network_only_synthetic_total",
+        "fetch_only_context_disposal_total",
+        "pending_network_total",
+        "pending_fetch_total",
+        "terminal_outcomes",
+    }
+    if historical_v2:
+        fields.remove("fetch_only_context_disposal_total")
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("normal shutdown disposal summary fields are invalid")
+    expected_schema_version = (
+        _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        if historical_v2
+        else (
+            _OLDER_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+            if historical_v3
+            else (
+                _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+                if historical_v4
+                else NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+            )
+        )
+    )
+    expected_policy = (
+        _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+        if historical_v2
+        else (
+            _OLDER_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+            if historical_v3
+            else (
+                _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+                if historical_v4
+                else NORMAL_SHUTDOWN_DISPOSAL_POLICY
+            )
+        )
+    )
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"] != expected_schema_version
+        or value.get("policy") != expected_policy
+        or (historical and not allow_historical)
+        or type(value.get("started")) is not bool
+        or type(value.get("terminal")) is not bool
+    ):
+        raise ValueError("normal shutdown disposal summary contract is invalid")
+    count_fields = (
+        "network_total",
+        "fetch_total",
+        "matched_total",
+        "network_only_synthetic_total",
+        "fetch_only_context_disposal_total",
+        "pending_network_total",
+        "pending_fetch_total",
+    )
+    if historical_v2:
+        count_fields = tuple(
+            field
+            for field in count_fields
+            if field != "fetch_only_context_disposal_total"
+        )
+    if any(
+        type(value.get(field)) is not int or value[field] < 0
+        for field in count_fields
+    ):
+        raise ValueError("normal shutdown disposal summary counts are invalid")
+    terminal_outcomes = value.get("terminal_outcomes")
+    outcome_names = {
+        "Network.loadingFinished",
+        "Network.loadingFailed",
+        "Network.redirectResponse",
+        "qcsd-shutdown",
+    }
+    if (
+        not isinstance(terminal_outcomes, Mapping)
+        or set(terminal_outcomes) != outcome_names
+        or any(
+            type(terminal_outcomes.get(outcome)) is not int
+            or terminal_outcomes[outcome] < 0
+            for outcome in outcome_names
+        )
+    ):
+        raise ValueError("normal shutdown disposal terminal outcomes are invalid")
+    network_total = value["network_total"]
+    fetch_total = value["fetch_total"]
+    matched_total = value["matched_total"]
+    network_only_synthetic = value["network_only_synthetic_total"]
+    fetch_only_context_disposal = (
+        0 if historical_v2 else value["fetch_only_context_disposal_total"]
+    )
+    pending_network = value["pending_network_total"]
+    pending_fetch = value["pending_fetch_total"]
+    if (
+        matched_total > network_total
+        or matched_total > fetch_total
+        or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+        or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+        or matched_total + fetch_only_context_disposal > fetch_total
+        or (not value["terminal"] and fetch_only_context_disposal)
+        or (
+            historical
+            and fetch_only_context_disposal > 2
+        )
+        or (
+            historical
+            and fetch_only_context_disposal == 1
+            and not (
+                (fetch_total == 1 and matched_total == 0)
+                or (
+                    historical_v4
+                    and network_total >= 1
+                    and matched_total == network_total
+                    and network_only_synthetic == 0
+                    and fetch_total == network_total + 1
+                )
+            )
+        )
+        or (
+            historical
+            and fetch_only_context_disposal == 2
+            and (fetch_total != 2 or matched_total != 0 or network_total != 0)
+        )
+        or pending_fetch
+        != fetch_total - matched_total - fetch_only_context_disposal
+        or sum(terminal_outcomes.values()) + pending_network != network_total
+        or network_only_synthetic > network_total - matched_total
+        or network_only_synthetic > terminal_outcomes["qcsd-shutdown"]
+        or (
+            not value["started"]
+            and (value["terminal"] or any(value[field] for field in count_fields))
+        )
+        or (not value["started"] and any(terminal_outcomes.values()))
+        or (value["terminal"] and not value["started"])
+        or (
+            value["terminal"]
+            and (
+                pending_network
+                or pending_fetch
+                or fetch_total != matched_total + fetch_only_context_disposal
+                or network_total != matched_total + network_only_synthetic
+            )
+        )
+        or (require_terminal and not value["terminal"])
+    ):
+        raise ValueError("normal shutdown disposal summary counts are inconsistent")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def validate_bootstrap_prearm_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+) -> dict[str, Any]:
+    """Validate the content-minimised shared-worker bootstrap diagnostic.
+
+    Dedicated-worker bootstraps deliberately retain their immediate-policy
+    path, so every held prearm belongs to a guarded shared worker.  Successful
+    evidence boundaries additionally require every held continue to have been
+    released after all initial setup envelopes were issued.
+    """
+
+    fields = {
+        "schema_version",
+        "held_total",
+        "released_total",
+        "pending_total",
+        "release_before_setup_envelopes_total",
+        "by_worker_type",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("worker-bootstrap prearm summary fields are invalid")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"] != BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION
+    ):
+        raise ValueError("worker-bootstrap prearm summary schema is invalid")
+    for field_name in (
+        "held_total",
+        "released_total",
+        "pending_total",
+        "release_before_setup_envelopes_total",
+    ):
+        if type(value.get(field_name)) is not int or value[field_name] < 0:
+            raise ValueError("worker-bootstrap prearm totals are invalid")
+    by_worker_type = value.get("by_worker_type")
+    if not isinstance(by_worker_type, Mapping) or set(by_worker_type) != set(
+        _BOOTSTRAP_WORKER_TYPES
+    ):
+        raise ValueError("worker-bootstrap prearm worker inventory is invalid")
+
+    held_total = 0
+    released_total = 0
+    pending_total = 0
+    released_after_total = 0
+    for worker_type in _BOOTSTRAP_WORKER_TYPES:
+        summary = by_worker_type.get(worker_type)
+        if not isinstance(summary, Mapping) or set(summary) != {
+            "held",
+            "released",
+            "pending",
+            "released_after_setup_envelopes",
+            "owner_target_types",
+        }:
+            raise ValueError("worker-bootstrap prearm per-type fields are invalid")
+        for field_name in (
+            "held",
+            "released",
+            "pending",
+            "released_after_setup_envelopes",
+        ):
+            if type(summary.get(field_name)) is not int or summary[field_name] < 0:
+                raise ValueError("worker-bootstrap prearm per-type counts are invalid")
+        owner_types = summary.get("owner_target_types")
+        if (
+            not isinstance(owner_types, Mapping)
+            or set(owner_types) != set(_BOOTSTRAP_OWNER_TYPES)
+            or any(
+                type(owner_types.get(owner_type)) is not int or owner_types[owner_type] < 0
+                for owner_type in _BOOTSTRAP_OWNER_TYPES
+            )
+        ):
+            raise ValueError("worker-bootstrap prearm owner counts are invalid")
+        held = summary["held"]
+        released = summary["released"]
+        pending = summary["pending"]
+        released_after = summary["released_after_setup_envelopes"]
+        if (
+            released > held
+            or pending != held - released
+            or released_after > released
+            or sum(owner_types.values()) != held
+        ):
+            raise ValueError("worker-bootstrap prearm counts are inconsistent")
+        if worker_type == "worker" and any(
+            (held, released, pending, released_after, *owner_types.values())
+        ):
+            raise ValueError("dedicated workers cannot use the shared-worker prearm")
+        if require_terminal and (pending or released_after != released):
+            raise ValueError("worker-bootstrap prearm did not reach a valid terminal state")
+        held_total += held
+        released_total += released
+        pending_total += pending
+        released_after_total += released_after
+    if (
+        value["held_total"] != held_total
+        or value["released_total"] != released_total
+        or value["pending_total"] != pending_total
+        or value["release_before_setup_envelopes_total"] != 0
+        or released_after_total != released_total
+    ):
+        raise ValueError("worker-bootstrap prearm aggregate is inconsistent")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def validate_egress_prearm_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+) -> dict[str, Any]:
+    """Validate aggregate proof that every runnable target received its shim."""
+
+    fields = {
+        "schema_version",
+        "policy",
+        "target_total",
+        "installed_total",
+        "pending_total",
+        "popup_guard_required_total",
+        "popup_guard_installed_total",
+        "by_target_type",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("target egress prearm summary fields are invalid")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
+        or value["policy"] != NON_REPLAYABLE_EGRESS_POLICY
+    ):
+        raise ValueError("target egress prearm summary identity is invalid")
+    for field_name in (
+        "target_total",
+        "installed_total",
+        "pending_total",
+        "popup_guard_required_total",
+        "popup_guard_installed_total",
+    ):
+        if type(value[field_name]) is not int or value[field_name] < 0:
+            raise ValueError("target egress prearm totals are invalid")
+    by_target_type = value["by_target_type"]
+    target_types = {"page", "iframe", "worker", "shared_worker"}
+    if not isinstance(by_target_type, Mapping) or set(by_target_type) != target_types:
+        raise ValueError("target egress prearm type inventory is invalid")
+    target_total = installed_total = pending_total = 0
+    for target_type in sorted(target_types):
+        item = by_target_type[target_type]
+        if not isinstance(item, Mapping) or set(item) != {
+            "target_count",
+            "installed_count",
+            "pending_count",
+            "protected_api_observations",
+            "unavailable_api_observations",
+            "popup_guard_required_count",
+            "popup_guard_installed_count",
+        }:
+            raise ValueError("target egress prearm per-type fields are invalid")
+        for field_name in (
+            "target_count",
+            "installed_count",
+            "pending_count",
+            "protected_api_observations",
+            "unavailable_api_observations",
+            "popup_guard_required_count",
+            "popup_guard_installed_count",
+        ):
+            if type(item[field_name]) is not int or item[field_name] < 0:
+                raise ValueError("target egress prearm per-type counts are invalid")
+        if (
+            item["installed_count"] > item["target_count"]
+            or item["pending_count"] != item["target_count"] - item["installed_count"]
+            or item["protected_api_observations"] + item["unavailable_api_observations"]
+            != item["installed_count"] * len(target_egress_apis(target_type))
+            or item["popup_guard_required_count"]
+            != (item["target_count"] if target_type in _PAGE_TARGET_TYPES else 0)
+            or item["popup_guard_installed_count"] > item["popup_guard_required_count"]
+        ):
+            raise ValueError("target egress prearm per-type counts are inconsistent")
+        target_total += item["target_count"]
+        installed_total += item["installed_count"]
+        pending_total += item["pending_count"]
+    if (
+        target_total != value["target_total"]
+        or installed_total != value["installed_total"]
+        or pending_total != value["pending_total"]
+        or value["popup_guard_required_total"]
+        != sum(
+            by_target_type[target_type]["popup_guard_required_count"]
+            for target_type in target_types
+        )
+        or value["popup_guard_installed_total"]
+        != sum(
+            by_target_type[target_type]["popup_guard_installed_count"]
+            for target_type in target_types
+        )
+    ):
+        raise ValueError("target egress prearm aggregate is inconsistent")
+    if require_terminal and (
+        pending_total
+        or installed_total != target_total
+        or value["popup_guard_installed_total"] != value["popup_guard_required_total"]
+    ):
+        raise ValueError("target egress prearm did not reach a terminal state")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def validate_srcdoc_pseudo_document_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+) -> dict[str, Any]:
+    """Validate the identifier-minimised root ``about:srcdoc`` exception receipt.
+
+    Chromium 143 can report either of two pseudo-Document terminals for an
+    in-process ``srcdoc`` frame without a Network request occurrence: an exact
+    Document abort or an exact loading finish.  This receipt never turns either
+    terminal into a request: it proves the bracketing Page lifecycle and
+    ``frameStartedNavigating.loaderId`` equality that authorised the router to
+    consume it.
+
+    Schema 4 additionally records an exact attached-iframe CSP denial before
+    any Network/Fetch occurrence. Its distinct diagnostic remains a browser
+    denial and supplies no request, response or graph-coverage credit.
+    """
+
+    if isinstance(value, Mapping) and value.get("schema_version") == _PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION:
+        return _validate_pre_request_csp_summary(value, require_terminal=require_terminal)
+    fields = {
+        "schema_version",
+        "policy",
+        "enabled",
+        "total",
+        "resolved",
+        "pending",
+        "aborted",
+        "open_candidates",
+        "network_history_saturated",
+        "fetch_history_saturated",
+        "candidate_limit_saturated",
+        "terminal_outcome_counts",
+        "diagnostics",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("srcdoc pseudo-Document summary fields are invalid")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+        or type(value["policy"]) is not str
+        or value["policy"]
+        not in {SRCDOC_PSEUDO_DOCUMENT_POLICY, _PREVIOUS_SRCDOC_PSEUDO_DOCUMENT_POLICY}
+        or type(value["enabled"]) is not bool
+    ):
+        raise ValueError("srcdoc pseudo-Document summary identity is invalid")
+    for field_name in ("total", "resolved", "pending", "aborted", "open_candidates"):
+        if (
+            type(value[field_name]) is not int
+            or value[field_name] < 0
+            or value[field_name] > _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            raise ValueError("srcdoc pseudo-Document counts are invalid")
+    if value["pending"] + value["open_candidates"] > _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+        raise ValueError("srcdoc pseudo-Document candidate inventory is invalid")
+    for field_name in (
+        "network_history_saturated",
+        "fetch_history_saturated",
+        "candidate_limit_saturated",
+    ):
+        if type(value[field_name]) is not bool:
+            raise ValueError("srcdoc pseudo-Document saturation flag is invalid")
+    outcome_counts = value["terminal_outcome_counts"]
+    if (
+        not isinstance(outcome_counts, Mapping)
+        or set(outcome_counts) != set(_SRCDOC_TERMINAL_METHODS)
+        or any(
+            type(outcome_counts[method]) is not int
+            or outcome_counts[method] < 0
+            or outcome_counts[method] > _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+            for method in _SRCDOC_TERMINAL_METHODS
+        )
+        or sum(outcome_counts.values()) != value["total"]
+    ):
+        raise ValueError("srcdoc pseudo-Document terminal outcomes are invalid")
+    diagnostics = value["diagnostics"]
+    if type(diagnostics) is not list or len(diagnostics) != value["resolved"]:
+        raise ValueError("srcdoc pseudo-Document diagnostic inventory is invalid")
+    diagnostic_fields = {
+        "schema_version",
+        "source_role",
+        "frame_id_sha256",
+        "loader_id_sha256",
+        "request_id_sha256",
+        "requested_event_ordinal",
+        "started_navigating_event_ordinal",
+        "started_event_ordinal",
+        "terminal_event_ordinal",
+        "stopped_event_ordinal",
+        "navigation_reason",
+        "navigation_type",
+        "disposition",
+        "url_kind",
+        "loader_binding",
+        "request_id_matches_loader",
+        "terminal_variant",
+        "terminal_method",
+        "terminal_fields",
+        "resource_type",
+        "error_text",
+        "canceled",
+        "encoded_data_length",
+        "network_request_seen",
+        "fetch_pause_seen",
+        "frame_stopped_after_terminal",
+    }
+    frame_hashes: set[str] = set()
+    loader_hashes: set[str] = set()
+    request_hashes: set[str] = set()
+    all_ordinals: set[int] = set()
+    previous_stopped_ordinal = 0
+    resolved_outcome_counts = {method: 0 for method in _SRCDOC_TERMINAL_METHODS}
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, Mapping) or set(diagnostic) != diagnostic_fields:
+            raise ValueError("srcdoc pseudo-Document diagnostic fields are invalid")
+        frame_hash = diagnostic["frame_id_sha256"]
+        loader_hash = diagnostic["loader_id_sha256"]
+        request_hash = diagnostic["request_id_sha256"]
+        if any(
+            type(digest) is not str
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            for digest in (frame_hash, loader_hash, request_hash)
+        ):
+            raise ValueError("srcdoc pseudo-Document diagnostic hash is invalid")
+        ordinals = tuple(
+            diagnostic[field_name]
+            for field_name in (
+                "requested_event_ordinal",
+                "started_navigating_event_ordinal",
+                "started_event_ordinal",
+                "terminal_event_ordinal",
+                "stopped_event_ordinal",
+            )
+        )
+        if any(
+            type(ordinal) is not int
+            or ordinal < 1
+            or ordinal > _SRCDOC_EVENT_ORDINAL_LIMIT
+            for ordinal in ordinals
+        ) or not (
+            ordinals[0] < ordinals[1] < ordinals[2] < ordinals[3] < ordinals[4]
+        ):
+            raise ValueError("srcdoc pseudo-Document event ordering is invalid")
+        if any(ordinal in all_ordinals for ordinal in ordinals):
+            raise ValueError("srcdoc pseudo-Document event ordinals are not globally unique")
+        if ordinals[-1] <= previous_stopped_ordinal:
+            raise ValueError("srcdoc pseudo-Document diagnostics are not in emitted order")
+        all_ordinals.update(ordinals)
+        previous_stopped_ordinal = ordinals[-1]
+        exact_strings = {
+            "source_role": "root-page",
+            "navigation_reason": "initialFrameNavigation",
+            "navigation_type": "differentDocument",
+            "disposition": "currentTab",
+            "url_kind": "about:srcdoc",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+        }
+        if any(
+            type(diagnostic[field_name]) is not str
+            or diagnostic[field_name] != expected
+            for field_name, expected in exact_strings.items()
+        ):
+            raise ValueError("srcdoc pseudo-Document diagnostic strings are invalid")
+        terminal_variant = diagnostic["terminal_variant"]
+        terminal_method = diagnostic["terminal_method"]
+        terminal_fields = diagnostic["terminal_fields"]
+        if terminal_variant == "loading-failed-document-abort":
+            valid_terminal = (
+                terminal_method == "Network.loadingFailed"
+                and terminal_fields == sorted(_SRCDOC_ABORT_TERMINAL_FIELDS)
+                and diagnostic["resource_type"] == "Document"
+                and diagnostic["error_text"] == "net::ERR_ABORTED"
+                and diagnostic["canceled"] is True
+                and diagnostic["encoded_data_length"] is None
+            )
+        elif terminal_variant == "loading-finished":
+            encoded_data_length = diagnostic["encoded_data_length"]
+            valid_terminal = (
+                terminal_method == "Network.loadingFinished"
+                and terminal_fields == sorted(_SRCDOC_FINISH_TERMINAL_FIELDS)
+                and diagnostic["resource_type"] is None
+                and diagnostic["error_text"] is None
+                and diagnostic["canceled"] is None
+                and type(encoded_data_length) is int
+                and encoded_data_length
+                in (
+                    _SRCDOC_FINISH_ENCODED_DATA_LENGTHS
+                    if value["policy"] == SRCDOC_PSEUDO_DOCUMENT_POLICY
+                    else {33}
+                )
+            )
+        else:
+            valid_terminal = False
+        if (
+            type(diagnostic["schema_version"]) is not int
+            or diagnostic["schema_version"]
+            != SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+            or diagnostic["request_id_matches_loader"] is not True
+            or type(terminal_variant) is not str
+            or type(terminal_method) is not str
+            or type(terminal_fields) is not list
+            or any(
+                type(field_name) is not str
+                for field_name in terminal_fields
+            )
+            or not valid_terminal
+            or diagnostic["network_request_seen"] is not False
+            or diagnostic["fetch_pause_seen"] is not False
+            or diagnostic["frame_stopped_after_terminal"] is not True
+            or loader_hash != request_hash
+            or frame_hash in frame_hashes
+            or loader_hash in loader_hashes
+            or request_hash in request_hashes
+        ):
+            raise ValueError("srcdoc pseudo-Document diagnostic is inconsistent")
+        frame_hashes.add(frame_hash)
+        loader_hashes.add(loader_hash)
+        request_hashes.add(request_hash)
+        resolved_outcome_counts[terminal_method] += 1
+    if any(
+        resolved_outcome_counts[method] > outcome_counts[method]
+        for method in _SRCDOC_TERMINAL_METHODS
+    ):
+        raise ValueError("srcdoc pseudo-Document resolved outcomes are inconsistent")
+    if value["total"] != value["resolved"] + value["pending"] + value["aborted"]:
+        raise ValueError("srcdoc pseudo-Document aggregate is inconsistent")
+    if not value["enabled"] and any(
+        (
+            value["total"],
+            value["open_candidates"],
+            value["network_history_saturated"],
+            value["fetch_history_saturated"],
+            value["candidate_limit_saturated"],
+            sum(outcome_counts.values()),
+            len(diagnostics),
+        )
+    ):
+        raise ValueError("disabled srcdoc pseudo-Document evidence is non-empty")
+    if require_terminal and (
+        not value["enabled"]
+        or value["pending"]
+        or value["aborted"]
+        or value["open_candidates"]
+        or value["candidate_limit_saturated"]
+        or (
+            value["total"]
+            and (value["network_history_saturated"] or value["fetch_history_saturated"])
+        )
+    ):
+        raise ValueError("srcdoc pseudo-Document lifecycle is not terminal")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def _validate_pre_request_csp_summary(
+    value: Mapping[str, Any], *, require_terminal: bool
+) -> dict[str, Any]:
+    """Extend the existing summary with actual denials, never request credit."""
+
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("policy") != _PRE_REQUEST_CSP_POLICY
+        or value.get("enabled") is not True
+        or type(value.get("diagnostics")) is not list
+    ):
+        raise ValueError("pre-request CSP summary identity is invalid")
+    csp = [item for item in value["diagnostics"] if isinstance(item, Mapping) and item.get("policy") == _PRE_REQUEST_CSP_POLICY]
+    if not csp or len(csp) > _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+        raise ValueError("pre-request CSP diagnostic inventory is invalid")
+    fields = {
+        "schema_version", "policy", "source_role", "disposition",
+        "frame_id_sha256", "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256",
+        "attached_event_ordinal", "requested_event_ordinal",
+        "started_navigating_event_ordinal", "started_event_ordinal", "terminal_event_ordinal",
+        "navigation_reason", "navigation_type", "navigation_disposition", "url_kind",
+        "loader_binding", "terminal_method", "terminal_fields", "terminal_timestamp",
+        "resource_type", "error_text", "canceled", "network_request_seen", "fetch_pause_seen",
+    }
+    frames: set[str] = set()
+    loaders: set[str] = set()
+    ordinals_seen: set[int] = set()
+    previous_terminal = 0
+    denials: dict[str, Mapping[str, Any]] = {}
+    finished_loaders: set[str] = set()
+    canceled_loaders: set[str] = set()
+    for item in csp:
+        if item.get("disposition") == "browser-internal-error-document-finished":
+            _validate_csp_internal_finish_diagnostic(item, denials, finished_loaders | canceled_loaders, ordinals_seen, previous_terminal)
+            finished_loaders.add(item["loader_id_sha256"])
+            ordinals_seen.update((item["frame_navigated_event_ordinal"], item["terminal_event_ordinal"]))
+            previous_terminal = item["terminal_event_ordinal"]
+            continue
+        if item.get("disposition") == "browser-canceled-denied-navigation":
+            _validate_csp_canceled_diagnostic(item, denials, finished_loaders | canceled_loaders, ordinals_seen, previous_terminal)
+            canceled_loaders.add(item["loader_id_sha256"])
+            ordinals_seen.add(item["terminal_event_ordinal"])
+            previous_terminal = item["terminal_event_ordinal"]
+            continue
+        if set(item) != fields:
+            raise ValueError("pre-request CSP diagnostic fields are invalid")
+        exact = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "denied-before-network",
+            "navigation_reason": "initialFrameNavigation", "navigation_type": "differentDocument",
+            "navigation_disposition": "currentTab", "url_kind": "https",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "terminal_method": "Network.loadingFailed", "resource_type": "Document",
+            "error_text": "net::ERR_BLOCKED_BY_CSP", "canceled": False,
+            "network_request_seen": False, "fetch_pause_seen": False,
+        }
+        if any(type(item[key]) is not type(expected) or item[key] != expected for key, expected in exact.items()):
+            raise ValueError("pre-request CSP diagnostic identity is invalid")
+        hashes = [item[key] for key in ("frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256")]
+        if any(type(digest) is not str or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) for digest in [*hashes, item["parent_frame_id_sha256"]]):
+            raise ValueError("pre-request CSP diagnostic hash is invalid")
+        ordinals = [item[key] for key in ("attached_event_ordinal", "requested_event_ordinal", "started_navigating_event_ordinal", "started_event_ordinal", "terminal_event_ordinal")]
+        if (
+            any(type(n) is not int or not 1 <= n <= _SRCDOC_EVENT_ORDINAL_LIMIT for n in ordinals)
+            or any(a >= b for a, b in zip(ordinals, ordinals[1:]))
+            or any(n in ordinals_seen for n in ordinals)
+            or ordinals[-1] <= previous_terminal
+            or hashes[1] != hashes[2] or hashes[0] == hashes[1]
+            or hashes[0] in frames or hashes[1] in loaders
+            or item["parent_frame_id_sha256"] == hashes[0]
+            or item["terminal_fields"] != sorted(_SRCDOC_ABORT_TERMINAL_FIELDS)
+            or not _is_finite_protocol_number(item["terminal_timestamp"])
+            or item["terminal_timestamp"] < 0
+        ):
+            raise ValueError("pre-request CSP diagnostic evidence is inconsistent")
+        ordinals_seen.update(ordinals)
+        previous_terminal = ordinals[-1]
+        frames.add(hashes[0])
+        loaders.add(hashes[1])
+        denials[hashes[1]] = item
+    # Reopen the original schema unchanged, subtracting only the explicitly
+    # validated CSP diagnostics. Mixed records retain emit order.
+    legacy = deepcopy(dict(value))
+    for name in ("total", "resolved"):
+        if type(legacy.get(name)) is not int or not len(csp) <= legacy[name] <= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+            raise ValueError("pre-request CSP summary counts are invalid")
+        legacy[name] -= len(csp)
+    legacy["schema_version"] = SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+    legacy["policy"] = SRCDOC_PSEUDO_DOCUMENT_POLICY
+    legacy["diagnostics"] = [item for item in value["diagnostics"] if item not in csp]
+    outcomes = legacy.get("terminal_outcome_counts")
+    failed_count = len(denials) + len(canceled_loaders)
+    if not isinstance(outcomes, Mapping) or type(outcomes.get("Network.loadingFailed")) is not int or outcomes["Network.loadingFailed"] < failed_count:
+        raise ValueError("pre-request CSP terminal count is invalid")
+    legacy["terminal_outcome_counts"] = dict(outcomes)
+    legacy["terminal_outcome_counts"]["Network.loadingFailed"] -= failed_count
+    if type(outcomes.get("Network.loadingFinished")) is not int or outcomes["Network.loadingFinished"] < len(finished_loaders):
+        raise ValueError("pre-request CSP internal-finish count is invalid")
+    legacy["terminal_outcome_counts"]["Network.loadingFinished"] -= len(finished_loaders)
+    validate_srcdoc_pseudo_document_summary(legacy, require_terminal=require_terminal)
+    if any(item["frame_id_sha256"] in frames or item["loader_id_sha256"] in loaders for item in legacy["diagnostics"]):
+        raise ValueError("pre-request CSP and srcdoc identities overlap")
+    if require_terminal and (value["network_history_saturated"] or value["fetch_history_saturated"]):
+        raise ValueError("pre-request CSP identity history is not complete")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def _validate_csp_internal_finish_diagnostic(
+    item: Mapping[str, Any], denials: Mapping[str, Mapping[str, Any]],
+    finished_loaders: set[str], ordinals_seen: set[int], previous_terminal: int,
+) -> None:
+    fields = {
+        "schema_version", "policy", "source_role", "disposition", "frame_id_sha256",
+        "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256",
+        "denied_terminal_event_ordinal", "frame_navigated_event_ordinal", "terminal_event_ordinal",
+        "frame_navigated_method", "frame_navigated_fields", "frame_fields", "navigation_type",
+        "error_document_url", "mime_type", "unreachable_url_matches_denied_url",
+        "terminal_method", "terminal_fields", "terminal_timestamp", "reported_encoded_data_length",
+        "encoded_data_length_use", "network_request_seen", "fetch_pause_seen", "remote_response_body_credit",
+    }
+    if set(item) != fields:
+        raise ValueError("CSP internal-finish diagnostic fields are invalid")
+    exact = {
+        "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY, "source_role": "root-page",
+        "disposition": "browser-internal-error-document-finished",
+        "frame_navigated_method": "Page.frameNavigated", "frame_navigated_fields": ["frame", "type"],
+        "frame_fields": sorted(_CSP_ERROR_NAVIGATED_FRAME_FIELDS), "navigation_type": "Navigation",
+        "error_document_url": _ERROR_DOCUMENT_URL, "mime_type": "text/html",
+        "unreachable_url_matches_denied_url": True, "terminal_method": "Network.loadingFinished",
+        "terminal_fields": sorted(_ERROR_DOCUMENT_FINISH_FIELDS), "encoded_data_length_use": "diagnostic-only",
+        "network_request_seen": False, "fetch_pause_seen": False, "remote_response_body_credit": False,
+    }
+    if any(type(item[key]) is not type(expected) or item[key] != expected for key, expected in exact.items()):
+        raise ValueError("CSP internal-finish diagnostic identity is invalid")
+    loader = item["loader_id_sha256"]
+    denied = denials.get(loader) if type(loader) is str else None
+    if denied is None or loader in finished_loaders:
+        raise ValueError("CSP internal-finish diagnostic lacks a unique preceding denial")
+    for key in ("frame_id_sha256", "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256"):
+        if item[key] != denied[key]:
+            raise ValueError("CSP internal-finish diagnostic differs from its denied navigation")
+    ordinals = [item[key] for key in ("denied_terminal_event_ordinal", "frame_navigated_event_ordinal", "terminal_event_ordinal")]
+    if (
+        any(type(n) is not int or not 1 <= n <= _SRCDOC_EVENT_ORDINAL_LIMIT for n in ordinals)
+        or ordinals[0] != denied["terminal_event_ordinal"]
+        or not ordinals[0] < ordinals[1] < ordinals[2]
+        or any(n in ordinals_seen for n in ordinals[1:]) or ordinals[2] <= previous_terminal
+        or not _is_finite_protocol_number(item["terminal_timestamp"])
+        or item["terminal_timestamp"] <= denied["terminal_timestamp"]
+        or not _is_finite_protocol_number(item["reported_encoded_data_length"])
+        or item["reported_encoded_data_length"] <= 0
+    ):
+        raise ValueError("CSP internal-finish diagnostic evidence is inconsistent")
+
+
+def _validate_csp_canceled_diagnostic(
+    item: Mapping[str, Any], denials: Mapping[str, Mapping[str, Any]],
+    successor_loaders: set[str], ordinals_seen: set[int], previous_terminal: int,
+) -> None:
+    fields = {
+        "schema_version", "policy", "source_role", "disposition", "frame_id_sha256",
+        "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256",
+        "denied_terminal_event_ordinal", "terminal_event_ordinal", "terminal_method",
+        "terminal_fields", "terminal_timestamp", "resource_type", "error_text", "canceled",
+        "network_request_seen", "fetch_pause_seen", "remote_response_body_credit",
+    }
+    if set(item) != fields:
+        raise ValueError("CSP canceled diagnostic fields are invalid")
+    exact = {
+        "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY, "source_role": "root-page",
+        "disposition": "browser-canceled-denied-navigation", "terminal_method": "Network.loadingFailed",
+        "terminal_fields": sorted(_SRCDOC_ABORT_TERMINAL_FIELDS), "resource_type": "Document",
+        "error_text": "net::ERR_ABORTED", "canceled": True,
+        "network_request_seen": False, "fetch_pause_seen": False, "remote_response_body_credit": False,
+    }
+    if any(type(item[key]) is not type(expected) or item[key] != expected for key, expected in exact.items()):
+        raise ValueError("CSP canceled diagnostic identity is invalid")
+    loader = item["loader_id_sha256"]
+    denied = denials.get(loader) if type(loader) is str else None
+    if denied is None or loader in successor_loaders:
+        raise ValueError("CSP canceled diagnostic lacks a unique preceding denial")
+    for key in ("frame_id_sha256", "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256"):
+        if item[key] != denied[key]:
+            raise ValueError("CSP canceled diagnostic differs from its denied navigation")
+    denied_ordinal, terminal_ordinal = item["denied_terminal_event_ordinal"], item["terminal_event_ordinal"]
+    if (
+        any(type(n) is not int or not 1 <= n <= _SRCDOC_EVENT_ORDINAL_LIMIT for n in (denied_ordinal, terminal_ordinal))
+        or denied_ordinal != denied["terminal_event_ordinal"]
+        or terminal_ordinal <= denied_ordinal or terminal_ordinal <= previous_terminal
+        or terminal_ordinal in ordinals_seen
+        or not _is_finite_protocol_number(item["terminal_timestamp"])
+        or item["terminal_timestamp"] <= denied["terminal_timestamp"]
+    ):
+        raise ValueError("CSP canceled diagnostic evidence is inconsistent")
+
+
+class _CdpSession(Protocol):
+    def on(self, event: str, handler: Callable[[dict[str, Any]], None]) -> None: ...
+
+    def send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]: ...
+
+    def detach(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class CdpTargetSource:
+    """Globally collision-safe identity for one target session."""
+
+    session_path: tuple[str, ...]
+    target_id: str
+    target_type: str = "page"
+    generation: int = 0
+    parent_session_path: tuple[str, ...] | None = None
+    parent_frame_id: str | None = None
+
+    @property
+    def session_id(self) -> str:
+        return self.session_path[-1] if self.session_path else "root"
+
+    def request_chain_key(self, request_id: str) -> tuple[tuple[str, ...], str, int, str]:
+        if not isinstance(request_id, str) or not request_id:
+            raise CdpTargetIntegrityError("CDP request identity is empty or malformed")
+        return (self.session_path, self.target_id, self.generation, request_id)
+
+
+@dataclass
+class _RetiredIframeCleanup:
+    """An issued cleanup command cancelled by its authenticated frame removal."""
+
+    source: CdpTargetSource
+    command_id: int
+    method: str
+    label: str
+    frame_detach_reason: str = "remove"
+    late_acknowledged: bool = False
+    transport_absence_observed: bool = False
+    transport_absence_fingerprint: str | None = None
+
+
+@dataclass
+class _TargetState:
+    source: CdpTargetSource
+    target_type: str
+    phase: str
+    setup_pending: set[str] = field(default_factory=set)
+    active_request_ids: set[str] = field(default_factory=set)
+    iframe_instrumentation_breakpoint_id: str | None = None
+    iframe_regular_breakpoint_id: str | None = None
+    iframe_pause_location: dict[str, Any] | None = None
+    iframe_default_context_id: int | None = None
+    iframe_default_context_unique_id: str | None = None
+    iframe_initial_resume_acknowledged: bool = False
+    iframe_synthetic_issued: bool = False
+    iframe_synthetic_completed: bool = False
+    iframe_pause_seen: bool = False
+    iframe_debugger_paused: bool = False
+    iframe_instrumentation_removed: bool = False
+    iframe_debugger_resume_acknowledged: bool = False
+    iframe_installation_received: bool = False
+    iframe_regular_remove_issued: bool = False
+    iframe_regular_removed: bool = False
+    iframe_page_remove_seen: bool = False
+    iframe_retired_cleanup: _RetiredIframeCleanup | None = None
+    worker_instrumentation_breakpoint_id: str | None = None
+    worker_parsed_script_urls: dict[str, str] = field(default_factory=dict)
+    worker_bootstrap_script_id: str | None = None
+    worker_pause_call_frame_id: str | None = None
+    worker_initial_resume_acknowledged: bool = False
+    worker_pause_seen: bool = False
+    worker_debugger_paused: bool = False
+    worker_egress_evaluation_issued: bool = False
+    worker_egress_evaluation_acknowledged: bool = False
+    worker_instrumentation_removed: bool = False
+    worker_debugger_resume_acknowledged: bool = False
+
+
+@dataclass(frozen=True)
+class _ActiveRequest:
+    source: CdpTargetSource
+    request_id: str
+    loader_id: str | None
+    frame_id: str | None
+    resource_type: str | None
+    method: str | None
+    url: str | None
+    redirected: bool = False
+
+
+@dataclass(frozen=True)
+class _RootTerminalRequest:
+    """One exact root Network occurrence and its real terminal event."""
+
+    active: _ActiveRequest
+    terminal_method: str
+
+
+@dataclass
+class _RootFetchDecision:
+    """One callback-scoped request-stage policy decision on the root session."""
+
+    policy_source: CdpTargetSource
+    fetch_request_id: str
+    network_id: str
+    frame_id: str
+    resource_type: str
+    method: str
+    url: str
+    active: _ActiveRequest | None
+    terminal: _RootTerminalRequest | None
+    decided: bool = False
+    continue_issued: bool = False
+    provisional: bool = False
+    abort_owned: bool = False
+    transport_fingerprint: str | None = None
+
+
+@dataclass
+class _RootRequestStageFetch:
+    """One synchronous root Fetch callback, without a Network success claim."""
+
+    source: CdpTargetSource
+    fetch_request_id: str
+    resource_type: str
+    method: str
+    scheme: str
+    correlated_recovery_owner: bool
+    policy_issued: bool = False
+
+
+@dataclass
+class _NormalShutdownNetwork:
+    """One Network occurrence created after the normal-disposal boundary."""
+
+    active: _ActiveRequest
+    predecessor: _NormalShutdownNetwork | None = None
+    successor: _NormalShutdownNetwork | None = None
+    leg_index: int = 0
+    matched_fetch: _NormalShutdownFetch | None = None
+    terminal_outcome: str | None = None
+
+
+@dataclass
+class _NormalShutdownFetch:
+    """One request-stage pause held while the accepted context is closing."""
+
+    source: CdpTargetSource
+    fetch_request_id: str
+    network_id: str
+    frame_id: str | None
+    resource_type: str
+    method: str
+    url: str
+    predecessor: _NormalShutdownFetch | None = None
+    successor: _NormalShutdownFetch | None = None
+    leg_index: int = 0
+    matched_network: _NormalShutdownNetwork | None = None
+    pre_shutdown_network_id_seen: bool = False
+    pre_shutdown_fetch_request_id_seen: bool = False
+    root_page_context_disposal_candidate: bool = False
+    context_disposal_held: bool = False
+
+
+@dataclass
+class _SrcdocPseudoDocument:
+    """One exact root Page lifecycle awaiting its loader-bound Chromium terminal."""
+
+    frame_id: str
+    requested_event_ordinal: int
+    phase: str = "armed"
+    loader_id: str | None = None
+    started_navigating_event_ordinal: int | None = None
+    started_event_ordinal: int | None = None
+    terminal_event_ordinal: int | None = None
+    stopped_event_ordinal: int | None = None
+    terminal_request_id: str | None = None
+    terminal_variant: str | None = None
+    terminal_method: str | None = None
+    terminal_fields: tuple[str, ...] | None = None
+    terminal_resource_type: str | None = None
+    terminal_error_text: str | None = None
+    terminal_canceled: bool | None = None
+    terminal_encoded_data_length: int | None = None
+    abort_owned: bool = False
+
+
+@dataclass
+class _PreRequestCspNavigation:
+    """An attached iframe's actual Page witnesses, before any network request."""
+
+    frame_id: str
+    parent_frame_id: str
+    url: str
+    attached_event_ordinal: int
+    requested_event_ordinal: int
+    loader_id: str | None = None
+    started_navigating_event_ordinal: int | None = None
+    started_event_ordinal: int | None = None
+    terminal_event_ordinal: int | None = None
+    failed_timestamp: int | float | None = None
+    error_navigated_event_ordinal: int | None = None
+    internal_finish_seen: bool = False
+    canceled_successor_seen: bool = False
+    denied_source: CdpTargetSource | None = None
+    denied_target_generation: int | None = None
+
+
+@dataclass
+class _DocumentFetchDecision:
+    """One callback-scoped policy decision for an exact root Document."""
+
+    policy_source: CdpTargetSource
+    active: _ActiveRequest
+    fetch_request_id: str
+    network_id: str
+    frame_id: str
+    method: str
+    url: str
+    decided: bool = False
+    blocked_by_client_acknowledged: bool = False
+
+
+@dataclass(frozen=True)
+class _ErrorDocumentFinish:
+    """One Chromium error-document finish expected after an inspector block."""
+
+    canonical_source: CdpTargetSource
+    terminal_source: CdpTargetSource
+    request_id: str
+    frame_id: str
+    failed_timestamp: float
+
+
+@dataclass
+class _ErrorDocumentResource:
+    """One in-progress built-in PNG chain from Chromium's error document."""
+
+    request_id: str
+    url: str
+    signature_index: int
+    request_timestamp: float
+    phase: str = "awaiting-cache"
+    response_timestamp: float | None = None
+
+
+@dataclass
+class _ErrorDocumentResources:
+    """Strict, document-bound lifecycle for Chromium's three internal PNGs."""
+
+    source: CdpTargetSource
+    loader_id: str
+    frame_id: str
+    latest_timestamp: float
+    next_signature_index: int = 0
+    initiator_line_base: int | None = None
+    initiator_column_base: int | None = None
+    active: _ErrorDocumentResource | None = None
+    started: bool = False
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.next_signature_index == len(_ERROR_DOCUMENT_RESOURCE_SIGNATURES)
+            and self.active is None
+        )
+
+
+@dataclass
+class _WorkerBootstrap:
+    source: CdpTargetSource | None
+    url: str
+    parent_route: tuple[str, ...]
+    parent_frame_id: str | None
+    browser_context_id: str
+    guardian_session_id: str | None = None
+    owner_source: CdpTargetSource | None = None
+    attach_requested: bool = False
+    attach_session_id: str | None = None
+    attach_command_session_id: str | None = None
+    attach_command_resolved: bool = False
+    guardian_detached: bool = False
+    initial_setup_envelopes_expected: int = 0
+    initial_setup_envelopes_issued: int = 0
+    fetch_source: CdpTargetSource | None = None
+    fetch_request_id: str | None = None
+    fetch_network_id: str | None = None
+    fetch_policy_outcome: str | None = None
+    fetch_release_issued: bool = False
+    fetch_released: bool = False
+    fetch_release_after_setup_envelopes: bool | None = None
+
+
+@dataclass
+class _PendingCommand:
+    label: str
+    on_success: Callable[[Mapping[str, Any]], None] | None = None
+    policy_decision: bool = False
+
+
+@dataclass
+class _BootstrapFetchDecision:
+    bootstrap: _WorkerBootstrap
+    prearm: bool
+    decided: bool = False
+
+
+class _NormalShutdownDisposalLedger:
+    """Reconcile request callbacks observed during deliberate normal shutdown.
+
+    Chromium may start a final root or descendant request while
+    ``BrowserContext.close()`` is disposing an already quiescent page.  Fetch
+    pauses from that interval must stay held: attempting a policy command on
+    the closing root session can race with target destruction.  This ledger is
+    deliberately separate from accepted render evidence.  It permits a
+    missing Fetch pause only when the still-live Network occurrence is retired
+    by the router's exact local shutdown cancellation. Request-stage root-page
+    Fetch pauses without a Network occurrence stay held, receive no policy
+    callback or scientific credit, and become terminal only after the caller's
+    successful context-close barrier. Their individual provenance and a global
+    identity bound matter; their resource labels and count do not.
+    """
+
+    def __init__(self) -> None:
+        self._started = False
+        self._terminal = False
+        self._networks: dict[str, list[_NormalShutdownNetwork]] = {}
+        self._fetches: dict[str, list[_NormalShutdownFetch]] = {}
+        self._network_by_active_identity: dict[int, _NormalShutdownNetwork] = {}
+        self._network_roots: dict[
+            tuple[CdpTargetSource, str], _NormalShutdownNetwork
+        ] = {}
+        self._network_total = 0
+        self._fetch_identities: set[tuple[CdpTargetSource, str]] = set()
+        self._fetches_by_request_id: dict[str, list[_NormalShutdownFetch]] = {}
+        self._worker_bootstrap_network_ids: frozenset[str] = frozenset()
+
+    def begin(self) -> None:
+        if self._started or self._terminal:
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal ledger started more than once"
+            )
+        self._started = True
+
+    @staticmethod
+    def _sources_compatible(
+        network: CdpTargetSource,
+        fetch: CdpTargetSource,
+        frame_id: str | None,
+    ) -> bool:
+        if network == fetch:
+            return True
+        if network.target_id == fetch.target_id and network.generation != fetch.generation:
+            return False
+        if network.target_type in {"page", "iframe"} and fetch.target_type in {
+            "page",
+            "iframe",
+        }:
+            return (
+                network.session_path == fetch.parent_session_path
+                or fetch.session_path == network.parent_session_path
+            )
+        if network.target_type not in {"worker", "shared_worker"}:
+            return False
+        if fetch.target_type not in {"page", "iframe"}:
+            return False
+        return network.parent_session_path == fetch.session_path or (
+            frame_id is not None
+            and network.parent_frame_id is not None
+            and network.parent_frame_id == frame_id
+        )
+
+    def _matches(
+        self,
+        network: _NormalShutdownNetwork,
+        fetch: _NormalShutdownFetch,
+    ) -> bool:
+        if network.leg_index != fetch.leg_index:
+            return False
+        network_leg: _NormalShutdownNetwork | None = network
+        fetch_leg: _NormalShutdownFetch | None = fetch
+        while network_leg is not None and fetch_leg is not None:
+            active = network_leg.active
+            # Resource labels can differ between Network and Fetch for one
+            # root request that remains paused until context disposal. This
+            # applies only to a single exact root leg with a local synthetic
+            # cancellation. Chromium's observed root OPTIONS/XHR callback
+            # may omit the Network frame; all other aliases require equality.
+            root_shutdown_type_alias = (
+                active.resource_type != fetch_leg.resource_type
+                and active.resource_type != "Document"
+                and fetch_leg.resource_type != "Document"
+                and active.request_id not in self._worker_bootstrap_network_ids
+                and active.source == fetch_leg.source
+                and active.source.target_type == "page"
+                and network_leg.predecessor is None
+                and network_leg.successor is None
+                and network_leg.terminal_outcome == "qcsd-shutdown"
+                and fetch_leg.predecessor is None
+                and fetch_leg.successor is None
+                and not fetch_leg.pre_shutdown_network_id_seen
+                and not fetch_leg.pre_shutdown_fetch_request_id_seen
+                and fetch_leg.root_page_context_disposal_candidate
+            )
+            missing_root_options_network_frame = (
+                root_shutdown_type_alias
+                and active.resource_type == "Other"
+                and fetch_leg.resource_type == "XHR"
+                and active.method == "OPTIONS"
+                and active.frame_id is None
+                and fetch_leg.frame_id is not None
+            )
+            frames_match = active.frame_id == fetch_leg.frame_id or (
+                active.source.target_type in {"worker", "shared_worker"}
+                and fetch_leg.source.target_type in {"page", "iframe"}
+                and active.frame_id is None
+                and fetch_leg.frame_id is not None
+                and active.source.parent_frame_id == fetch_leg.frame_id
+            ) or missing_root_options_network_frame
+            if not (
+                active.request_id == fetch_leg.network_id
+                and frames_match
+                and (active.resource_type == fetch_leg.resource_type or root_shutdown_type_alias)
+                and active.method == fetch_leg.method
+                and active.url == fetch_leg.url
+                and self._sources_compatible(
+                    active.source,
+                    fetch_leg.source,
+                    fetch_leg.frame_id,
+                )
+            ):
+                return False
+            network_leg = network_leg.predecessor
+            fetch_leg = fetch_leg.predecessor
+        return network_leg is None and fetch_leg is None
+
+    def _require_open(self) -> None:
+        if not self._started or self._terminal:
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal ledger is outside its live boundary"
+            )
+
+    def add_network(
+        self,
+        active: _ActiveRequest,
+        *,
+        redirected: bool = False,
+        predecessor_active: _ActiveRequest | None = None,
+    ) -> None:
+        self._require_open()
+        if (
+            not isinstance(active.request_id, str)
+            or not active.request_id
+            or not isinstance(active.resource_type, str)
+            or not active.resource_type
+            or not isinstance(active.method, str)
+            or not active.method
+            or not isinstance(active.url, str)
+            or not active.url
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network occurrence is malformed"
+            )
+        identity = (active.source, active.request_id)
+        predecessor: _NormalShutdownNetwork | None = None
+        if redirected:
+            if predecessor_active is None:
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network redirect omitted its predecessor"
+                )
+            predecessor = self._network_by_active_identity.get(
+                id(predecessor_active)
+            )
+            if (
+                predecessor is None
+                or predecessor.active is not predecessor_active
+                or predecessor.active.source != active.source
+                or predecessor.active.request_id != active.request_id
+                or predecessor.successor is not None
+                or predecessor.terminal_outcome is not None
+                or self._network_roots.get(identity) is None
+            ):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network redirect predecessor is invalid"
+                )
+        elif predecessor_active is not None or identity in self._network_roots:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network identity was duplicated or reused"
+            )
+        if self._network_total >= _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network identity bound was exceeded"
+            )
+        occurrence = _NormalShutdownNetwork(
+            active=active,
+            predecessor=predecessor,
+            leg_index=0 if predecessor is None else predecessor.leg_index + 1,
+        )
+        if predecessor is None:
+            self._network_roots[identity] = occurrence
+        else:
+            predecessor.successor = occurrence
+            predecessor.terminal_outcome = "Network.redirectResponse"
+        self._networks.setdefault(active.request_id, []).append(occurrence)
+        active_identity = id(active)
+        if active_identity in self._network_by_active_identity:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network object identity was reused"
+            )
+        self._network_by_active_identity[active_identity] = occurrence
+        self._network_total += 1
+        self._reconcile(active.request_id)
+
+    def add_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        *,
+        pre_shutdown_network_id_seen: bool,
+        pre_shutdown_fetch_request_id_seen: bool,
+        root_page_context_disposal_candidate: bool,
+    ) -> None:
+        self._require_open()
+        request = event.get("request")
+        fetch_request_id = event.get("requestId")
+        network_id = event.get("networkId")
+        frame_id = event.get("frameId")
+        resource_type = event.get("resourceType")
+        has_redirect_predecessor = "redirectedRequestId" in event
+        redirected_request_id = event.get("redirectedRequestId")
+        if (
+            type(pre_shutdown_network_id_seen) is not bool
+            or type(pre_shutdown_fetch_request_id_seen) is not bool
+            or type(root_page_context_disposal_candidate) is not bool
+            or not isinstance(fetch_request_id, str)
+            or not fetch_request_id
+            or not isinstance(network_id, str)
+            or not network_id
+            or fetch_request_id == network_id
+            or not isinstance(request, Mapping)
+            or not isinstance(request.get("method"), str)
+            or not request["method"]
+            or not isinstance(request.get("url"), str)
+            or not request["url"]
+            or (frame_id is not None and (not isinstance(frame_id, str) or not frame_id))
+            or not isinstance(resource_type, str)
+            or not resource_type
+            or (
+                has_redirect_predecessor
+                and (
+                    not isinstance(redirected_request_id, str)
+                    or not redirected_request_id
+                    or redirected_request_id == fetch_request_id
+                )
+            )
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown request-stage Fetch pause is malformed"
+            )
+        identity = (source, fetch_request_id)
+        if identity in self._fetch_identities:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch identity was duplicated or reused"
+            )
+        if len(self._fetch_identities) >= _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch identity bound was exceeded"
+            )
+        predecessor: _NormalShutdownFetch | None = None
+        if has_redirect_predecessor:
+            predecessor_candidates = [
+                candidate
+                for candidate in self._fetches_by_request_id.get(
+                    redirected_request_id,
+                    (),
+                )
+                if self._sources_compatible(
+                    candidate.source,
+                    source,
+                    frame_id,
+                )
+            ]
+            if len(predecessor_candidates) != 1:
+                raise CdpTargetIntegrityError(
+                    "normal shutdown request-stage Fetch pause is malformed: "
+                    "redirect predecessor is missing or ambiguous"
+                )
+            predecessor = predecessor_candidates[0]
+            if (
+                predecessor.network_id != network_id
+                or predecessor.successor is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown request-stage Fetch pause is malformed: "
+                    "redirect predecessor is invalid"
+                )
+        fetch = _NormalShutdownFetch(
+            source=source,
+            fetch_request_id=fetch_request_id,
+            network_id=network_id,
+            frame_id=frame_id,
+            resource_type=resource_type,
+            method=request["method"],
+            url=request["url"],
+            predecessor=predecessor,
+            leg_index=0 if predecessor is None else predecessor.leg_index + 1,
+            pre_shutdown_network_id_seen=pre_shutdown_network_id_seen,
+            pre_shutdown_fetch_request_id_seen=(
+                pre_shutdown_fetch_request_id_seen
+            ),
+            root_page_context_disposal_candidate=(
+                root_page_context_disposal_candidate
+            ),
+        )
+        if predecessor is not None:
+            predecessor.successor = fetch
+        self._fetch_identities.add(identity)
+        self._fetches.setdefault(network_id, []).append(fetch)
+        self._fetches_by_request_id.setdefault(fetch_request_id, []).append(fetch)
+        self._reconcile(network_id)
+
+    def _reconcile(self, network_id: str) -> None:
+        networks = self._networks.get(network_id, ())
+        fetches = self._fetches.get(network_id, ())
+        candidates_by_fetch = {
+            id(fetch): [network for network in networks if self._matches(network, fetch)]
+            for fetch in fetches
+        }
+        candidates_by_network = {
+            id(network): [fetch for fetch in fetches if self._matches(network, fetch)]
+            for network in networks
+        }
+        if any(len(candidates) > 1 for candidates in candidates_by_fetch.values()) or any(
+            len(candidates) > 1 for candidates in candidates_by_network.values()
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network/Fetch assignment is ambiguous"
+            )
+        for network in networks:
+            network.matched_fetch = None
+        for fetch in fetches:
+            fetch.matched_network = None
+        for fetch in fetches:
+            candidates = candidates_by_fetch[id(fetch)]
+            if candidates:
+                network = candidates[0]
+                network_candidates = candidates_by_network[id(network)]
+                if len(network_candidates) != 1 or network_candidates[0] is not fetch:
+                    # The degree checks above make this unreachable unless a
+                    # caller mutates an occurrence during reconciliation.
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Network/Fetch assignment changed unexpectedly"
+                    )
+                if network.matched_fetch is not None:
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Network/Fetch assignment is ambiguous"
+                    )
+                network.matched_fetch = fetch
+                fetch.matched_network = network
+
+    def owned_source(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+    ) -> CdpTargetSource | None:
+        """Return the one canonical disposal owner for a later Network event."""
+
+        candidates = [
+            occurrence.active.source
+            for occurrence in self._networks.get(request_id, ())
+            if occurrence.active.source == source
+            or self._sources_compatible(occurrence.active.source, source, None)
+        ]
+        unique = set(candidates)
+        if len(unique) > 1:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network event has ambiguous disposal ownership"
+            )
+        return next(iter(unique)) if unique else None
+
+    def owns(self, active: _ActiveRequest) -> bool:
+        occurrence = self._network_by_active_identity.get(id(active))
+        if occurrence is None:
+            return False
+        if occurrence.active is not active:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network object identity changed unexpectedly"
+            )
+        return True
+
+    def add_terminal(
+        self,
+        active: _ActiveRequest,
+        *,
+        terminal_method: str,
+        synthetic_shutdown: bool,
+    ) -> None:
+        self._require_open()
+        occurrence = self._network_by_active_identity.get(id(active))
+        if occurrence is None or occurrence.active is not active:
+            raise CdpTargetIntegrityError(
+                "normal shutdown terminal has no disposal Network occurrence"
+            )
+        if occurrence.successor is not None:
+            raise CdpTargetIntegrityError(
+                "normal shutdown terminal targeted a redirected Network leg"
+            )
+        if occurrence.terminal_outcome is not None:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network occurrence terminated more than once"
+            )
+        if terminal_method not in {"Network.loadingFinished", "Network.loadingFailed"}:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network terminal method is invalid"
+            )
+        if synthetic_shutdown and terminal_method != "Network.loadingFailed":
+            raise CdpTargetIntegrityError(
+                "normal shutdown synthetic terminal is not a loading failure"
+            )
+        occurrence.terminal_outcome = (
+            "qcsd-shutdown" if synthetic_shutdown else terminal_method
+        )
+
+    def _network_chains(self) -> list[list[_NormalShutdownNetwork]]:
+        chains: list[list[_NormalShutdownNetwork]] = []
+        seen: set[int] = set()
+        for root in self._network_roots.values():
+            chain: list[_NormalShutdownNetwork] = []
+            current: _NormalShutdownNetwork | None = root
+            predecessor: _NormalShutdownNetwork | None = None
+            while current is not None:
+                identity = id(current)
+                if (
+                    identity in seen
+                    or current.predecessor is not predecessor
+                    or current.leg_index != len(chain)
+                ):
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Network redirect chain is invalid"
+                    )
+                seen.add(identity)
+                chain.append(current)
+                predecessor = current
+                current = current.successor
+            chains.append(chain)
+        if len(seen) != self._network_total or self._network_total != sum(
+            len(values) for values in self._networks.values()
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network redirect accounting is invalid"
+            )
+        return chains
+
+    def _fetch_chains(self) -> list[list[_NormalShutdownFetch]]:
+        fetches = [item for values in self._fetches.values() for item in values]
+        roots = [item for item in fetches if item.predecessor is None]
+        chains: list[list[_NormalShutdownFetch]] = []
+        seen: set[int] = set()
+        for root in roots:
+            chain: list[_NormalShutdownFetch] = []
+            current: _NormalShutdownFetch | None = root
+            predecessor: _NormalShutdownFetch | None = None
+            while current is not None:
+                identity = id(current)
+                if (
+                    identity in seen
+                    or current.predecessor is not predecessor
+                    or current.leg_index != len(chain)
+                ):
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Fetch redirect chain is invalid"
+                    )
+                seen.add(identity)
+                chain.append(current)
+                predecessor = current
+                current = current.successor
+            chains.append(chain)
+        if len(seen) != len(fetches):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch redirect accounting is invalid"
+            )
+        return chains
+
+    @staticmethod
+    def _network_chain_is_fully_matched(
+        chain: list[_NormalShutdownNetwork],
+    ) -> bool:
+        return bool(chain) and all(item.matched_fetch is not None for item in chain) and (
+            chain[-1].matched_fetch is not None
+            and chain[-1].matched_fetch.successor is None
+        )
+
+    @staticmethod
+    def _fetch_chain_is_fully_matched(
+        chain: list[_NormalShutdownFetch],
+    ) -> bool:
+        return bool(chain) and all(item.matched_network is not None for item in chain) and (
+            chain[-1].matched_network is not None
+            and chain[-1].matched_network.successor is None
+        )
+
+    def _is_exact_fetch_only_context_disposal(
+        self,
+        fetch: _NormalShutdownFetch,
+    ) -> bool:
+        """Whether one held root pause is terminal at context disposal."""
+
+        try:
+            parsed_url = urlsplit(fetch.url)
+            # Accessing ``port`` forces urllib to reject malformed or
+            # out-of-range ports instead of leaving them hidden in ``netloc``.
+            parsed_port = parsed_url.port
+            has_unsafe_codepoint = any(
+                character.isspace()
+                or ord(character) < 0x20
+                or 0x7F <= ord(character) <= 0x9F
+                for character in fetch.url
+            )
+            absolute_https_url = (
+                parsed_url.scheme == "https"
+                and parsed_url.hostname is not None
+                and parsed_url.username is None
+                and parsed_url.password is None
+                and (parsed_port is None or 0 < parsed_port <= 65_535)
+                and not has_unsafe_codepoint
+            )
+        except ValueError:
+            absolute_https_url = False
+        same_id_fetches = self._fetches.get(fetch.network_id, ())
+        near_match_network = any(
+            network.active.source == fetch.source
+            and network.active.method == fetch.method
+            and network.active.url == fetch.url
+            and network.active.frame_id in {None, fetch.frame_id}
+            for values in self._networks.values()
+            for network in values
+        )
+        return (
+            len(same_id_fetches) == 1
+            and same_id_fetches[0] is fetch
+            and not self._networks.get(fetch.network_id)
+            and not near_match_network
+            and fetch.predecessor is None
+            and fetch.successor is None
+            and fetch.leg_index == 0
+            and fetch.matched_network is None
+            and not fetch.pre_shutdown_network_id_seen
+            and not fetch.pre_shutdown_fetch_request_id_seen
+            and fetch.root_page_context_disposal_candidate
+            and fetch.source.target_type == "page"
+            and fetch.resource_type != "Document"
+            and fetch.network_id not in self._worker_bootstrap_network_ids
+            and absolute_https_url
+        )
+
+    def finish(
+        self,
+        *,
+        worker_bootstrap_network_ids: frozenset[str] = frozenset(),
+    ) -> None:
+        self._require_open()
+        if not isinstance(worker_bootstrap_network_ids, frozenset) or any(
+            not isinstance(request_id, str) or not request_id
+            for request_id in worker_bootstrap_network_ids
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown worker-bootstrap identity set is invalid"
+            )
+        self._worker_bootstrap_network_ids = worker_bootstrap_network_ids
+        for request_id in set(self._networks) | set(self._fetches):
+            self._reconcile(request_id)
+        unmatched_fetches = [
+            fetch
+            for values in self._fetches.values()
+            for fetch in values
+            if fetch.matched_network is None
+        ]
+        if any(
+            not self._is_exact_fetch_only_context_disposal(fetch)
+            for fetch in unmatched_fetches
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch pause has no exact Network occurrence"
+            )
+        network_chains = self._network_chains()
+        fetch_chains = self._fetch_chains()
+        if any(
+            item.terminal_outcome != "Network.redirectResponse"
+            for chain in network_chains
+            for item in chain[:-1]
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown redirected Network leg lacked its exact outcome"
+            )
+        if any(
+            chain[-1].terminal_outcome in {None, "Network.redirectResponse"}
+            for chain in network_chains
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network occurrence omitted its terminal"
+            )
+        for chain in network_chains:
+            matched = [item.matched_fetch is not None for item in chain]
+            if any(matched) and not self._network_chain_is_fully_matched(chain):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network redirect chain was only partially matched"
+                )
+            if not any(matched) and (
+                len(chain) != 1
+                or chain[-1].terminal_outcome != "qcsd-shutdown"
+            ):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network-only occurrence lacked exact local cancellation"
+                )
+        if any(
+            not self._fetch_chain_is_fully_matched(chain)
+            and not (
+                len(chain) == 1
+                and chain[0].matched_network is None
+                and self._is_exact_fetch_only_context_disposal(chain[0])
+            )
+            for chain in fetch_chains
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch redirect chain was only partially matched"
+            )
+        for fetch in unmatched_fetches:
+            fetch.context_disposal_held = True
+        self._terminal = True
+
+    @property
+    def summary(self) -> dict[str, Any]:
+        networks = [item for values in self._networks.values() for item in values]
+        fetches = [item for values in self._fetches.values() for item in values]
+        network_chains = self._network_chains()
+        fetch_chains = self._fetch_chains()
+        matched = sum(item.matched_fetch is not None for item in networks)
+        matched_fetches = sum(item.matched_network is not None for item in fetches)
+        terminal_outcomes = {
+            outcome: sum(item.terminal_outcome == outcome for item in networks)
+            for outcome in (
+                "Network.loadingFinished",
+                "Network.loadingFailed",
+                "Network.redirectResponse",
+                "qcsd-shutdown",
+            )
+        }
+        network_only_synthetic = sum(
+            item.matched_fetch is None and item.terminal_outcome == "qcsd-shutdown"
+            for item in networks
+        )
+        fetch_only_context_disposal = sum(
+            item.context_disposal_held for item in fetches
+        )
+        pending_network = sum(item.terminal_outcome is None for item in networks)
+        pending_fetch = len(fetches) - matched_fetches - fetch_only_context_disposal
+        if any(
+            item.matched_fetch is not None
+            and item.matched_fetch.matched_network is not item
+            for item in networks
+        ) or any(
+            item.matched_network is not None
+            and item.matched_network.matched_fetch is not item
+            for item in fetches
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal accounting invariant was violated"
+            )
+        if matched != matched_fetches:
+            raise CdpTargetIntegrityError(
+                "normal shutdown redirect matching invariant was violated"
+            )
+        summary = {
+            "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+            "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+            "started": self._started,
+            "terminal": self._terminal,
+            "network_total": len(networks),
+            "fetch_total": len(fetches),
+            "matched_total": matched,
+            "network_only_synthetic_total": network_only_synthetic,
+            "fetch_only_context_disposal_total": fetch_only_context_disposal,
+            "pending_network_total": pending_network,
+            "pending_fetch_total": pending_fetch,
+            "terminal_outcomes": terminal_outcomes,
+        }
+        try:
+            return validate_normal_shutdown_disposal_summary(
+                summary,
+                require_terminal=self._terminal,
+            )
+        except ValueError as error:
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal accounting invariant was violated"
+            ) from error
+
+
+class RecursiveCdpTargetRouter:
+    """Instrument a root page plus every recursively related iframe/worker target."""
+
+    def __init__(
+        self,
+        session: _CdpSession,
+        *,
+        on_event: Callable[[CdpTargetSource, str, Mapping[str, Any]], None],
+        root_frame_id: str | None = None,
+        root_continue_error_type: type[Exception] | None = None,
+        track_root_srcdoc_lifecycle: bool = False,
+        on_internal_document_lifecycle: (
+            Callable[[CdpTargetSource, Mapping[str, Any]], None] | None
+        ) = None,
+        on_target_activity: Callable[[CdpTargetSource, str], None] | None = None,
+        on_non_replayable_egress: (
+            Callable[[CdpTargetSource | None, str, str, object | None], None] | None
+        ) = None,
+    ) -> None:
+        if root_frame_id is not None and (
+            not isinstance(root_frame_id, str) or not root_frame_id
+        ):
+            raise ValueError("root frame identity must be a non-empty string")
+        if root_continue_error_type is not None and (
+            not isinstance(root_continue_error_type, type)
+            or not issubclass(root_continue_error_type, Exception)
+        ):
+            raise ValueError("root continue error type must be an Exception type")
+        if type(track_root_srcdoc_lifecycle) is not bool:
+            raise ValueError("root srcdoc lifecycle switch must be boolean")
+        if on_internal_document_lifecycle is not None and (
+            not track_root_srcdoc_lifecycle
+            or not callable(on_internal_document_lifecycle)
+        ):
+            raise ValueError(
+                "internal Document lifecycle callback requires enabled srcdoc tracking"
+            )
+        self._session = session
+        self._on_event = on_event
+        self._on_target_activity = on_target_activity
+        self._on_non_replayable_egress = on_non_replayable_egress
+        self._root_frame_id = root_frame_id
+        self._root_continue_error_type = root_continue_error_type
+        self._track_root_srcdoc_lifecycle = track_root_srcdoc_lifecycle
+        self._on_internal_document_lifecycle = on_internal_document_lifecycle
+        self._root_source: CdpTargetSource | None = None
+        self._states: dict[tuple[str, ...], _TargetState] = {}
+        self._target_routes: dict[str, tuple[str, ...]] = {}
+        self._session_routes: dict[str, tuple[str, ...]] = {}
+        self._pending: dict[tuple[tuple[str, ...], int], _PendingCommand] = {}
+        self._next_command_id = 1
+        self._failure: CdpTargetIntegrityError | None = None
+        self._secondary_integrity_failures: list[CdpTargetIntegrityError] = []
+        self._secondary_integrity_saturated = False
+        self._shutting_down = False
+        self._aborting = False
+        self._abort_finished = False
+        self._normal_shutdown_disposal = _NormalShutdownDisposalLedger()
+        self._target_generations: dict[str, int] = {}
+        self._active_requests: dict[str, list[_ActiveRequest]] = {}
+        self._pre_shutdown_network_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_network_occurrence_counts: dict[
+            tuple[CdpTargetSource, str], int
+        ] = {}
+        self._pre_shutdown_network_occurrence_total = 0
+        self._pre_shutdown_reused_network_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_worker_extra_info_claims: dict[
+            tuple[CdpTargetSource, str], int
+        ] = {}
+        self._pre_shutdown_network_identity_saturated = False
+        self._pre_shutdown_fetch_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_reused_fetch_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_fetch_identity_saturated = False
+        self._root_fetch_by_policy_identity: dict[
+            tuple[CdpTargetSource, str], _RootFetchDecision
+        ] = {}
+        self._seen_root_fetch_policy_identities: set[tuple[CdpTargetSource, str]] = set()
+        self._root_fetch_callback_stack: list[_RootRequestStageFetch | None] = []
+        self._seen_root_request_stage_policies: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._root_request_stage_policy_saturated = False
+        self._early_root_fetch_by_network: dict[tuple[CdpTargetSource, str], str] = {}
+        self._root_fetch_identity_saturated = False
+        self._eligible_root_network_occurrences: dict[
+            tuple[CdpTargetSource, str], list[_ActiveRequest]
+        ] = {}
+        self._eligible_root_network_occurrence_count = 0
+        self._root_network_identity_saturated = False
+        self._root_terminal_requests: dict[
+            tuple[CdpTargetSource, str], _RootTerminalRequest
+        ] = {}
+        self._root_terminal_history_saturated = False
+        self._pending_root_invalid_interceptions: dict[
+            tuple[CdpTargetSource, str], _RootFetchDecision
+        ] = {}
+        self._claimed_root_invalid_interception_occurrences: dict[
+            int, _ActiveRequest
+        ] = {}
+        self._disabled_root_invalid_interception_networks: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._root_invalid_interception_total = 0
+        self._root_invalid_interception_aborted = 0
+        self._root_invalid_interception_outcomes = {"Network.loadingFinished": 0}
+        self._root_invalid_interception_diagnostics: list[dict[str, Any]] = []
+        self._page_frame_parents: dict[str, str | None] = {}
+        self._seen_page_frame_ids: set[str] = set()
+        self._page_frame_pending_swap_removals: set[str] = set()
+        self._srcdoc_ineligible_frame_ids: set[str] = set()
+        self._srcdoc_candidates: dict[str, _SrcdocPseudoDocument] = {}
+        self._srcdoc_seen_page_loader_ids: set[str] = set()
+        self._srcdoc_accepted_frame_loaders: dict[str, str] = {}
+        self._srcdoc_terminal_request_ids: set[str] = set()
+        self._srcdoc_seen_network_request_ids: set[str] = set()
+        self._srcdoc_seen_fetch_network_ids: set[str] = set()
+        self._srcdoc_network_history_saturated = False
+        self._srcdoc_fetch_history_saturated = False
+        self._srcdoc_candidate_limit_saturated = False
+        self._srcdoc_event_ordinal = 0
+        self._srcdoc_total = 0
+        self._srcdoc_aborted = 0
+        self._srcdoc_terminal_outcomes = {
+            method: 0 for method in _SRCDOC_TERMINAL_METHODS
+        }
+        self._srcdoc_diagnostics: list[dict[str, Any]] = []
+        self._csp_attachment_ordinals: dict[str, int] = {}
+        self._csp_candidates: dict[str, _PreRequestCspNavigation] = {}
+        self._csp_seen_loader_ids: set[str] = set()
+        self._csp_denied_loader_ids: set[str] = set()
+        self._csp_denied_navigations: dict[str, _PreRequestCspNavigation] = {}
+        self._csp_ineligible_frame_ids: set[str] = set()
+        self._csp_event_ordinal = 0
+        self._csp_total = 0
+        self._csp_internal_finish_total = 0
+        self._csp_canceled_total = 0
+        self._document_fetch_by_policy_identity: dict[
+            tuple[CdpTargetSource, str], _DocumentFetchDecision
+        ] = {}
+        self._seen_document_fetch_policy_identities: set[tuple[CdpTargetSource, str]] = set()
+        self._pending_blocked_documents: dict[
+            tuple[tuple[str, ...], str, int, str], _DocumentFetchDecision
+        ] = {}
+        self._error_document_finishes: dict[
+            tuple[tuple[str, ...], str, int, str], _ErrorDocumentFinish
+        ] = {}
+        self._retired_error_document_chains: set[tuple[tuple[str, ...], str, int, str]] = set()
+        self._cached_inline_data_requests: set[tuple[tuple[str, ...], str, int, str]] = set()
+        self._error_document_resources: dict[
+            tuple[tuple[str, ...], str, int, str], _ErrorDocumentResources
+        ] = {}
+        self._error_resource_by_request_id: dict[
+            tuple[tuple[str, ...], str, int, str], _ErrorDocumentResources
+        ] = {}
+        self._retired_error_resource_request_ids: set[tuple[tuple[str, ...], str, int, str]] = set()
+        self._claimed_worker_bootstraps: set[tuple[CdpTargetSource, str]] = set()
+        self._root_browser_context_id: str | None = None
+        self._worker_bootstraps: dict[CdpTargetSource, _WorkerBootstrap] = {}
+        self._pending_worker_sources: set[CdpTargetSource] = set()
+        self._guarded_shared_workers: dict[str, _WorkerBootstrap] = {}
+        self._guardian_target_by_session: dict[str, str] = {}
+        self._bootstrap_fetch_by_policy_identity: dict[
+            tuple[CdpTargetSource, str], _BootstrapFetchDecision
+        ] = {}
+        self._shared_guard_registered = False
+        self._shared_guard_shutdown = False
+        self._shared_guard_finished = False
+        self._egress_shim_receipts: dict[CdpTargetSource, dict[str, Any]] = {}
+        self._popup_guard_receipts: set[CdpTargetSource] = set()
+
+    @property
+    def active_request_identities(self) -> tuple[tuple[CdpTargetSource, str], ...]:
+        """Return every request live at the current observation boundary."""
+
+        return tuple(
+            sorted(
+                (
+                    (request.source, request.request_id)
+                    for values in self._active_requests.values()
+                    for request in values
+                ),
+                key=lambda item: (
+                    item[0].session_path,
+                    item[0].target_id,
+                    item[0].generation,
+                    item[1],
+                ),
+            )
+        )
+
+    @property
+    def has_unapproved_secondary_integrity_failure(self) -> bool:
+        """Whether a second fault prevents a discard-only navigation retry."""
+
+        return self._secondary_integrity_saturated or any(
+            not isinstance(
+                error,
+                (
+                    _RootLateNetworkInvalidInterception,
+                    _RootUnpairedFetchInvalidInterception,
+                    _RootCanceledNetworkInvalidInterception,
+                    _RootRequestStageInvalidInterception,
+                ),
+            )
+            for error in self._secondary_integrity_failures
+        )
+
+    @property
+    def normal_shutdown_disposal_summary(self) -> dict[str, Any]:
+        """Return identifier-free proof for requests born during context disposal."""
+
+        return self._normal_shutdown_disposal.summary
+
+    @property
+    def root_invalid_interception_summary(self) -> dict[str, Any]:
+        """Return bounded, identifier-free evidence for recovered root continues."""
+
+        resolved = sum(self._root_invalid_interception_outcomes.values())
+        pending = len(self._pending_root_invalid_interceptions)
+        if self._root_invalid_interception_total != (
+            resolved + pending + self._root_invalid_interception_aborted
+        ):
+            raise CdpTargetIntegrityError(
+                "root InvalidInterceptionId accounting invariant was violated"
+            )
+        return {
+            "schema_version": 1,
+            "total": self._root_invalid_interception_total,
+            "resolved": resolved,
+            "pending": pending,
+            "aborted": self._root_invalid_interception_aborted,
+            "fetch_identity_saturated": self._root_fetch_identity_saturated,
+            "network_identity_saturated": self._root_network_identity_saturated,
+            "terminal_history_saturated": self._root_terminal_history_saturated,
+            "terminal_outcomes": dict(self._root_invalid_interception_outcomes),
+            "diagnostics_truncated": max(
+                0,
+                resolved - len(self._root_invalid_interception_diagnostics),
+            ),
+            "diagnostics": [dict(item) for item in self._root_invalid_interception_diagnostics],
+        }
+
+    @property
+    def srcdoc_pseudo_document_summary(self) -> dict[str, Any]:
+        """Return exact, identifier-minimised evidence for the Page exception."""
+
+        pending = sum(
+            candidate.terminal_request_id is not None
+            for candidate in self._srcdoc_candidates.values()
+        )
+        open_candidates = sum(
+            candidate.terminal_request_id is None
+            for candidate in self._srcdoc_candidates.values()
+        )
+        summary = {
+            "schema_version": (
+                _PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION if self._csp_total
+                else SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+            ),
+            "policy": _PRE_REQUEST_CSP_POLICY if self._csp_total else SRCDOC_PSEUDO_DOCUMENT_POLICY,
+            "enabled": self._track_root_srcdoc_lifecycle,
+            "total": self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total,
+            "resolved": len(self._srcdoc_diagnostics),
+            "pending": pending,
+            "aborted": self._srcdoc_aborted,
+            "open_candidates": open_candidates,
+            "network_history_saturated": self._srcdoc_network_history_saturated,
+            "fetch_history_saturated": self._srcdoc_fetch_history_saturated,
+            "candidate_limit_saturated": self._srcdoc_candidate_limit_saturated,
+            "terminal_outcome_counts": {
+                method: count + (
+                    self._csp_total + self._csp_canceled_total if method == "Network.loadingFailed"
+                    else self._csp_internal_finish_total
+                )
+                for method, count in self._srcdoc_terminal_outcomes.items()
+            },
+            "diagnostics": [dict(item) for item in self._srcdoc_diagnostics],
+        }
+        try:
+            return validate_srcdoc_pseudo_document_summary(
+                summary,
+                require_terminal=False,
+            )
+        except ValueError as error:
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document accounting invariant was violated"
+            ) from error
+
+    @property
+    def root_source(self) -> CdpTargetSource:
+        if self._root_source is None:
+            raise CdpTargetIntegrityError("CDP target instrumentation has not started")
+        return self._root_source
+
+    @property
+    def root_browser_context_id(self) -> str:
+        """Return the exact incognito context containing the observed page."""
+
+        if self._root_browser_context_id is None:
+            raise CdpTargetIntegrityError("root CDP browser-context identity is unavailable")
+        return self._root_browser_context_id
+
+    @property
+    def bootstrap_prearm_summary(self) -> dict[str, Any]:
+        """Return aggregate evidence for race-free worker-bootstrap release.
+
+        The diagnostic deliberately excludes URLs and protocol identities.  A
+        fresh mapping is returned on every access so callers cannot mutate the
+        router's state.
+        """
+
+        by_worker_type: dict[str, dict[str, Any]] = {}
+        bootstraps = {
+            "worker": [
+                bootstrap
+                for source, bootstrap in self._worker_bootstraps.items()
+                if source.target_type == "worker"
+            ],
+            "shared_worker": list(self._guarded_shared_workers.values()),
+        }
+        for worker_type in _BOOTSTRAP_WORKER_TYPES:
+            held = [
+                bootstrap
+                for bootstrap in bootstraps[worker_type]
+                if bootstrap.fetch_policy_outcome == "continue"
+            ]
+            released = [bootstrap for bootstrap in held if bootstrap.fetch_released]
+            by_worker_type[worker_type] = {
+                "held": len(held),
+                "released": len(released),
+                "pending": len(held) - len(released),
+                "released_after_setup_envelopes": sum(
+                    bootstrap.fetch_release_after_setup_envelopes is True for bootstrap in released
+                ),
+                "owner_target_types": {
+                    owner_type: sum(
+                        bootstrap.fetch_source is not None
+                        and bootstrap.fetch_source.target_type == owner_type
+                        for bootstrap in held
+                    )
+                    for owner_type in _BOOTSTRAP_OWNER_TYPES
+                },
+            }
+        held_total = sum(value["held"] for value in by_worker_type.values())
+        released_total = sum(value["released"] for value in by_worker_type.values())
+        return {
+            "schema_version": BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION,
+            "held_total": held_total,
+            "released_total": released_total,
+            "pending_total": held_total - released_total,
+            "release_before_setup_envelopes_total": sum(
+                bootstrap.fetch_release_after_setup_envelopes is False
+                for values in bootstraps.values()
+                for bootstrap in values
+                if bootstrap.fetch_released
+            ),
+            "by_worker_type": by_worker_type,
+        }
+
+    @property
+    def egress_prearm_summary(self) -> dict[str, Any]:
+        """Return aggregate proof that each observed target was shimmed before resume."""
+
+        by_target_type: dict[str, dict[str, int]] = {}
+        # Targets that detached or were positively resumed only for disposal
+        # before completing setup never ran accepted author code.  Retain every
+        # target that produced a receipt, plus every still-live target whose
+        # prearm remains an obligation.
+        states = tuple(
+            state
+            for state in self._states.values()
+            if state.source in self._egress_shim_receipts
+            or state.phase not in {"closing", "destroyed", "detached"}
+        )
+        for target_type in ("page", "iframe", "worker", "shared_worker"):
+            sources = [state.source for state in states if state.target_type == target_type]
+            receipts = [
+                self._egress_shim_receipts[source]
+                for source in sources
+                if source in self._egress_shim_receipts
+            ]
+            by_target_type[target_type] = {
+                "target_count": len(sources),
+                "installed_count": len(receipts),
+                "pending_count": len(sources) - len(receipts),
+                "protected_api_observations": sum(
+                    len(receipt["protected_apis"]) for receipt in receipts
+                ),
+                "unavailable_api_observations": sum(
+                    len(receipt["unavailable_apis"]) for receipt in receipts
+                ),
+                "popup_guard_required_count": (
+                    len(sources) if target_type in _PAGE_TARGET_TYPES else 0
+                ),
+                "popup_guard_installed_count": sum(
+                    source in self._popup_guard_receipts for source in sources
+                ),
+            }
+        target_total = sum(item["target_count"] for item in by_target_type.values())
+        installed_total = sum(item["installed_count"] for item in by_target_type.values())
+        popup_guard_required_total = sum(
+            item["popup_guard_required_count"] for item in by_target_type.values()
+        )
+        popup_guard_installed_total = sum(
+            item["popup_guard_installed_count"] for item in by_target_type.values()
+        )
+        return {
+            "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+            "policy": NON_REPLAYABLE_EGRESS_POLICY,
+            "target_total": target_total,
+            "installed_total": installed_total,
+            "pending_total": target_total - installed_total,
+            "popup_guard_required_total": popup_guard_required_total,
+            "popup_guard_installed_total": popup_guard_installed_total,
+            "by_target_type": by_target_type,
+        }
+
+    @property
+    def shutdown_ready(self) -> bool:
+        """Whether the router can enter its fail-closed context-disposal boundary."""
+
+        self.raise_if_failed()
+        egress = self.egress_prearm_summary
+        return (
+            self._root_source is not None
+            and self._shared_guard_registered
+            and not self._shutting_down
+            and egress["pending_total"] == 0
+            and not self._has_pending_shutdown_work()
+        )
+
+    def start(self) -> CdpTargetSource:
+        """Install root handlers and finish root setup before page navigation."""
+
+        if self._root_source is not None:
+            raise CdpTargetIntegrityError("CDP target instrumentation started more than once")
+        for method in _FORWARDED_METHODS:
+            self._session.on(
+                method,
+                self._guard(
+                    lambda event, forwarded=method: self._handle_root_event(forwarded, event)
+                ),
+            )
+        if self._track_root_srcdoc_lifecycle:
+            for method in _ROOT_PAGE_LIFECYCLE_METHODS:
+                self._session.on(
+                    method,
+                    self._guard(
+                        lambda event, lifecycle=method: self._handle_root_page_lifecycle(
+                            lifecycle, event
+                        )
+                    ),
+                )
+        for method in _NON_REPLAYABLE_EGRESS_EVENTS:
+            self._session.on(
+                method,
+                self._guard(
+                    lambda event, egress_method=method: self._handle_non_replayable_egress(
+                        self.root_source, egress_method, event
+                    )
+                ),
+            )
+        for method in _TARGET_LIFECYCLE_METHODS:
+            self._session.on(
+                method,
+                self._guard(
+                    lambda event, lifecycle=method: self._target_lifecycle_event(lifecycle, event)
+                ),
+            )
+        self._session.on(
+            "Target.attachedToTarget",
+            self._guard(lambda event: self._attached((), event)),
+        )
+        self._session.on(
+            "Target.detachedFromTarget",
+            self._guard(lambda event: self._detached((), event)),
+        )
+        self._session.on(
+            "Target.receivedMessageFromTarget",
+            self._guard(lambda event: self._received((), event)),
+        )
+
+        target_info = self._root_send("Target.getTargetInfo", {}).get("targetInfo")
+        if not isinstance(target_info, Mapping):
+            raise CdpTargetIntegrityError("root CDP target identity response is malformed")
+        target_id = target_info.get("targetId")
+        target_type = target_info.get("type")
+        browser_context_id = target_info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or target_type != "page"
+            or not isinstance(browser_context_id, str)
+            or not browser_context_id
+        ):
+            raise CdpTargetIntegrityError("root CDP target is not an identified page")
+        source = CdpTargetSource((), target_id, "page", 0, None, None)
+        self._root_source = source
+        self._root_browser_context_id = browser_context_id
+        self._states[()] = _TargetState(source, "page", "ready")
+        self._target_routes[target_id] = ()
+
+        if self._track_root_srcdoc_lifecycle:
+            # Page.getFrameTree works before Page.enable.  Taking the snapshot
+            # first establishes the exact root/ancestry against which every
+            # subsequently enabled lifecycle event is checked, without an
+            # event-enabled interval in which the root identity is unknown.
+            self._install_root_page_frame_tree(self._root_send("Page.getFrameTree", {}))
+            page_enable = self._root_send("Page.enable", {})
+            if page_enable != {}:
+                raise CdpTargetIntegrityError(
+                    "root Page.enable did not return an exact empty result"
+                )
+
+        for method, params in _BASE_SETUP_COMMANDS:
+            self._root_send(method, dict(params))
+        page_init = self._root_send(*_egress_new_document_command("page"))
+        self._validate_page_init_result(page_init)
+        evaluation = self._root_send(*_egress_evaluate_command("page"))
+        self._record_egress_evaluation(source, evaluation)
+        popup_evaluation = self._root_send(*_popup_guard_evaluate_command())
+        self._record_popup_guard_evaluation(source, popup_evaluation)
+        self._root_send(*_FETCH_SETUP_COMMAND)
+        self._root_send(*_AUTO_ATTACH_COMMAND)
+        # Chromium's auto-attach command has historically returned before all
+        # existing related targets were reported. A following target query is
+        # the explicit protocol barrier used by Playwright itself.
+        barrier = self._root_send(*_TARGET_BARRIER_COMMAND)
+        barrier_info = barrier.get("targetInfo")
+        if (
+            not isinstance(barrier_info, Mapping)
+            or barrier_info.get("targetId") != target_id
+            or barrier_info.get("type") != "page"
+            or barrier_info.get("browserContextId") != browser_context_id
+        ):
+            raise CdpTargetIntegrityError("root CDP auto-attach barrier changed target identity")
+        self.raise_if_failed()
+        return source
+
+    def register_shared_worker_guard(self) -> None:
+        """Bind the one browser-level shared-worker guard to this router."""
+
+        self.raise_if_failed()
+        if self._root_source is None:
+            raise CdpTargetIntegrityError("shared-worker guard started before root instrumentation")
+        if self._shared_guard_registered:
+            raise CdpTargetIntegrityError("shared-worker guard was registered more than once")
+        if self._shutting_down:
+            raise CdpTargetIntegrityError("shared-worker guard started during shutdown")
+        self._shared_guard_registered = True
+
+    @staticmethod
+    def _validate_page_init_result(result: Mapping[str, Any]) -> None:
+        identifier = result.get("identifier")
+        if not isinstance(identifier, str) or not identifier:
+            raise CdpTargetIntegrityError(
+                "CDP pre-document egress shim returned no script identifier"
+            )
+
+    def _record_egress_evaluation(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+        *,
+        expected_already_installed: bool | None = None,
+    ) -> None:
+        if result.get("exceptionDetails") is not None:
+            raise CdpTargetIntegrityError("CDP target egress shim evaluation threw")
+        remote = result.get("result")
+        if not isinstance(remote, Mapping) or remote.get("type") != "object":
+            raise CdpTargetIntegrityError("CDP target egress shim result is malformed")
+        try:
+            receipt = validate_target_egress_shim_result(
+                remote.get("value"), target_type=source.target_type
+            )
+        except ValueError as error:
+            raise CdpTargetIntegrityError("CDP target egress shim receipt is invalid") from error
+        # Page/frame realms are protected first by the context init script so
+        # sibling popups cannot execute before browser-target rejection.  The
+        # CDP evaluation must therefore observe that exact idempotent receipt;
+        # workers have no context init script and must be first-installed in
+        # their fully initialised first-script call frame while it is paused.
+        if expected_already_installed is None:
+            expected_already_installed = source.target_type in _PAGE_TARGET_TYPES
+        if receipt["already_installed"] is not expected_already_installed:
+            raise CdpTargetIntegrityError(
+                "CDP target egress shim installation order differs from policy"
+            )
+        if source in self._egress_shim_receipts:
+            raise CdpTargetIntegrityError("CDP target egress shim receipt was reused")
+        self._egress_shim_receipts[source] = receipt
+
+    def _record_popup_guard_evaluation(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        if source.target_type not in _PAGE_TARGET_TYPES:
+            raise CdpTargetIntegrityError("non-page target reported a popup guard")
+        if result.get("exceptionDetails") is not None:
+            raise CdpTargetIntegrityError("CDP popup-guard marker evaluation threw")
+        remote = result.get("result")
+        if (
+            not isinstance(remote, Mapping)
+            or remote.get("type") != "boolean"
+            or remote.get("value") is not True
+            or source in self._popup_guard_receipts
+        ):
+            raise CdpTargetIntegrityError("CDP target did not prove its context-init popup guard")
+        self._popup_guard_receipts.add(source)
+
+    def _record_iframe_installation_receipt(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        decoded: Mapping[str, Any],
+    ) -> None:
+        """Bind the conditional-breakpoint receipt to its exact iframe realm."""
+
+        state = self._state(source.session_path)
+        expected_fields = {
+            "schema_version",
+            "policy",
+            "kind",
+            "target_type",
+            "egress_shim",
+            "popup_guard_installed",
+        }
+        execution_context_id = event.get("executionContextId")
+        if (
+            source.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_pause_seen
+            or state.iframe_installation_received
+            or set(decoded) != expected_fields
+            or type(decoded.get("schema_version")) is not int
+            or decoded.get("schema_version") != TARGET_EGRESS_SHIM_SCHEMA_VERSION
+            or decoded.get("policy") != NON_REPLAYABLE_EGRESS_POLICY
+            or decoded.get("kind") != _IFRAME_INSTALLATION_KIND
+            or decoded.get("target_type") != "iframe"
+            or type(execution_context_id) is not int
+            or execution_context_id != state.iframe_default_context_id
+            or decoded.get("popup_guard_installed") is not True
+        ):
+            raise CdpTargetIntegrityError("CDP iframe pre-author installation receipt is invalid")
+        self._record_egress_evaluation(
+            source,
+            {
+                "result": {
+                    "type": "object",
+                    "value": decoded.get("egress_shim"),
+                }
+            },
+            expected_already_installed=False,
+        )
+        if source in self._popup_guard_receipts:
+            raise CdpTargetIntegrityError("CDP iframe popup-guard receipt was reused")
+        self._popup_guard_receipts.add(source)
+        state.iframe_installation_received = True
+        self._maybe_remove_iframe_regular_breakpoint(source)
+        self._maybe_finish_iframe_prearm(source)
+
+    def _handle_non_replayable_egress(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Consume a constructor binding or a post-construction Network tripwire."""
+
+        if method == "Runtime.bindingCalled":
+            if event.get("name") != TARGET_EGRESS_BINDING:
+                raise CdpTargetIntegrityError("CDP Runtime binding event changed identity")
+            payload = event.get("payload")
+            if not isinstance(payload, str):
+                raise CdpTargetIntegrityError("CDP egress binding payload is malformed")
+            try:
+                decoded = json.loads(payload)
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise CdpTargetIntegrityError("CDP egress binding payload is not JSON") from error
+            if not isinstance(decoded, Mapping):
+                raise CdpTargetIntegrityError("CDP egress binding payload fields are invalid")
+            if decoded.get("kind") == _IFRAME_INSTALLATION_KIND:
+                self._record_iframe_installation_receipt(source, event, decoded)
+                return
+            if set(decoded) != {
+                "schema_version",
+                "policy",
+                "kind",
+                "api",
+            }:
+                raise CdpTargetIntegrityError("CDP egress binding payload fields are invalid")
+            api = decoded.get("api")
+            if (
+                type(decoded.get("schema_version")) is not int
+                or decoded.get("schema_version") != TARGET_EGRESS_SHIM_SCHEMA_VERSION
+                or decoded.get("policy") != NON_REPLAYABLE_EGRESS_POLICY
+                or decoded.get("kind") != "attempt"
+                or api
+                not in (
+                    {*target_egress_apis(source.target_type), POPUP_NAVIGATION_API}
+                    if source.target_type in _PAGE_TARGET_TYPES
+                    else set(target_egress_apis(source.target_type))
+                )
+            ):
+                raise CdpTargetIntegrityError("CDP egress binding payload is invalid")
+            mechanism = (
+                "context-init-popup-guard"
+                if api == POPUP_NAVIGATION_API
+                else "paused-target-runtime-shim"
+            )
+            url: object | None = None
+        elif method in _NON_REPLAYABLE_NETWORK_EVENTS:
+            api_by_method = {
+                "Network.webSocketCreated": "WebSocket",
+                "Network.webSocketWillSendHandshakeRequest": "WebSocket",
+                "Network.webSocketHandshakeResponseReceived": "WebSocket",
+                "Network.webSocketFrameSent": "WebSocket",
+                "Network.webTransportCreated": "WebTransport",
+                "Network.webTransportConnectionEstablished": "WebTransport",
+                "Network.directTCPSocketCreated": "TCPSocket",
+                "Network.directTCPSocketOpened": "TCPSocket",
+                "Network.directTCPSocketChunkSent": "TCPSocket",
+                "Network.directUDPSocketCreated": "UDPSocket",
+                "Network.directUDPSocketOpened": "UDPSocket",
+                "Network.directUDPSocketChunkSent": "UDPSocket",
+            }
+            api = api_by_method[method]
+            mechanism = "cdp-network-tripwire"
+            url = event.get("url") if method.endswith("Created") else None
+        else:
+            raise CdpTargetIntegrityError("unsupported non-replayable CDP egress event")
+        if self._on_non_replayable_egress is None:
+            raise CdpTargetIntegrityError(
+                f"non-replayable browser egress reached an unguarded router: {api}"
+            )
+        self._on_non_replayable_egress(source, str(api), mechanism, url)
+
+    def browser_service_worker_attempt(self, url: object) -> None:
+        """Record browser-scope service-worker creation as typed egress."""
+
+        if self._on_non_replayable_egress is None:
+            raise CdpTargetIntegrityError(
+                "service-worker target reached an unguarded browser context"
+            )
+        self._on_non_replayable_egress(
+            None,
+            "ServiceWorker",
+            "browser-service-worker-tripwire",
+            url,
+        )
+
+    def browser_popup_tab_attempt(self, url: object) -> None:
+        """Send a popup-tab tripwire through the content-minimising callback."""
+
+        if self._on_non_replayable_egress is None:
+            raise CdpTargetIntegrityError("popup tab reached an unguarded browser context")
+        self._on_non_replayable_egress(
+            None,
+            POPUP_NAVIGATION_API,
+            "browser-popup-tab-tripwire",
+            url,
+        )
+
+    def browser_target_info_changed(self, info: Mapping[str, Any]) -> None:
+        """Record a browser-session root-page info change in the quiet ledger."""
+
+        root = self.root_source
+        if (
+            info.get("targetId") != root.target_id
+            or info.get("type") != "page"
+            or info.get("browserContextId") != self.root_browser_context_id
+        ):
+            raise CdpTargetIntegrityError("browser root target-info update changed identity")
+        self._notify_target_activity(root, "target-info-changed")
+
+    def adopt_guarded_shared_worker(self, event: Mapping[str, Any]) -> None:
+        """Validate a paused browser attachment and adopt it on the page transport.
+
+        Chromium exposes shared workers only at browser scope.  The browser
+        guard owns the flattened debugger hold, while this method creates the
+        independently routable non-flat page session used for all policy and
+        evidence commands.  The worker is not resumed until its exact root
+        Script occurrence has also been bound.
+        """
+
+        self.raise_if_failed()
+        if not self._shared_guard_registered or self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "shared-worker attachment arrived without an active browser guard"
+            )
+        guardian_session_id = event.get("sessionId")
+        target_info = event.get("targetInfo")
+        if (
+            not isinstance(guardian_session_id, str)
+            or not guardian_session_id
+            or not isinstance(target_info, Mapping)
+            or event.get("waitingForDebugger") is not True
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker attachment is malformed or unpaused"
+            )
+        target_id = target_info.get("targetId")
+        target_type = target_info.get("type")
+        url = target_info.get("url")
+        browser_context_id = target_info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or target_type != "shared_worker"
+            or not isinstance(url, str)
+            or not url
+            or not isinstance(browser_context_id, str)
+            or browser_context_id != self.root_browser_context_id
+            or target_info.get("attached") is not True
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker target identity, URL, or context is invalid"
+            )
+        if (
+            guardian_session_id in self._guardian_target_by_session
+            or target_id in self._guarded_shared_workers
+            or target_id in self._target_routes
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker target/session identity was reused"
+            )
+        bootstrap = _WorkerBootstrap(
+            source=None,
+            url=url,
+            parent_route=(),
+            parent_frame_id=None,
+            browser_context_id=browser_context_id,
+            guardian_session_id=guardian_session_id,
+        )
+        self._guarded_shared_workers[target_id] = bootstrap
+        self._guardian_target_by_session[guardian_session_id] = target_id
+        self._bind_bootstrap_owner(target_id, bootstrap, shared=True)
+        if bootstrap.owner_source is not None or self._shutting_down:
+            self._request_guarded_shared_worker_attach(target_id, bootstrap)
+
+    def guarded_shared_worker_detached(self, event: Mapping[str, Any]) -> None:
+        """Validate termination of the browser-level flattened guardian session."""
+
+        if not self._aborting:
+            self.raise_if_failed()
+        session_id = event.get("sessionId")
+        target_id = event.get("targetId")
+        if not isinstance(session_id, str) or not session_id:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker detach omitted its guardian session"
+            )
+        expected_target = self._guardian_target_by_session.get(session_id)
+        if (
+            expected_target is None
+            or not isinstance(target_id, str)
+            or target_id != expected_target
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker detach changed or reused target identity"
+            )
+        bootstrap = self._guarded_shared_workers[target_id]
+        if bootstrap.guardian_detached:
+            raise CdpTargetIntegrityError("browser shared-worker guardian detached more than once")
+        bootstrap.guardian_detached = True
+        self._guardian_target_by_session.pop(session_id, None)
+        if (
+            bootstrap.fetch_policy_outcome == "continue"
+            and not bootstrap.fetch_released
+            and not self._aborting
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared worker detached with a held bootstrap request"
+            )
+        if (
+            bootstrap.source is None
+            and bootstrap.fetch_policy_outcome != "fail"
+            and not self._shutting_down
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared worker detached before guarded adoption completed"
+            )
+
+    def begin_shared_worker_guard_shutdown(self) -> None:
+        """Bind the guard's shutdown boundary to the router shutdown boundary."""
+
+        self.raise_if_failed()
+        if not self._shared_guard_registered or self._shared_guard_shutdown:
+            raise CdpTargetIntegrityError("shared-worker guard shutdown is missing or repeated")
+        if not self._shutting_down:
+            raise CdpTargetIntegrityError("shared-worker guard shut down before the target router")
+        self._shared_guard_shutdown = True
+
+    def begin_shared_worker_guard_abort(self) -> None:
+        """Bind exceptional guard cleanup to an already-declared router abort."""
+
+        if not self._shared_guard_registered or self._shared_guard_shutdown:
+            raise CdpTargetIntegrityError("shared-worker guard abort is missing or repeated")
+        if not self._shutting_down or not self._aborting:
+            raise CdpTargetIntegrityError("shared-worker guard aborted before the target router")
+        self._shared_guard_shutdown = True
+
+    def finish_shared_worker_guard(self) -> None:
+        """Prove every browser-level guardian reached a terminal detach."""
+
+        self.raise_if_failed()
+        if self._aborting:
+            raise CdpTargetIntegrityError("normal shared-worker guard finish was used during abort")
+        if not self._shared_guard_shutdown or self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "shared-worker guard finished without one deliberate shutdown"
+            )
+        unresolved = [
+            target_id
+            for target_id, bootstrap in self._guarded_shared_workers.items()
+            if not bootstrap.guardian_detached
+        ]
+        if unresolved or self._guardian_target_by_session:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guardian sessions remain unresolved"
+            )
+        self._shared_guard_finished = True
+
+    def shared_worker_guard_lifecycle_state(
+        self,
+    ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+        """Return the strict internal guardian state for ordered shutdown barriers."""
+
+        self.raise_if_failed()
+        if not self._shared_guard_shutdown or self._shared_guard_finished or self._aborting:
+            raise CdpTargetIntegrityError(
+                "shared-worker guardian lifecycle was queried outside normal shutdown"
+            )
+        guarded = tuple(sorted(self._guarded_shared_workers))
+        unresolved = tuple(
+            sorted(
+                target_id
+                for target_id, bootstrap in self._guarded_shared_workers.items()
+                if not bootstrap.guardian_detached
+            )
+        )
+        return guarded, unresolved, len(self._guardian_target_by_session)
+
+    def finish_shared_worker_guard_abort(self) -> None:
+        """Retire guardian sessions after the complete context was disposed.
+
+        ``BrowserContext.close()`` is the exceptional-disposal barrier. CDP is
+        not required to report every target detach before it returns, so an
+        abort locally retires remaining guardian identities. This deliberately
+        cannot satisfy the strict successful finish above.
+        """
+
+        if not self._aborting or not self._shared_guard_shutdown or self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "shared-worker guard abort finished without context disposal"
+            )
+        for bootstrap in self._guarded_shared_workers.values():
+            bootstrap.guardian_detached = True
+        self._guardian_target_by_session.clear()
+        self._shared_guard_finished = True
+
+    def send(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        params: Mapping[str, Any],
+        *,
+        label: str,
+    ) -> None:
+        """Send an empty-result policy decision to its exact target session.
+
+        Result-bearing commands (for example ``Network.getResponseBody``) are
+        deliberately rejected because this transport validates their eventual
+        response asynchronously. Browser bodies are not discovery evidence;
+        the separately executed Neqo probe retrieves and hash-binds every body.
+        """
+
+        self.raise_if_failed()
+        if self._aborting:
+            raise CdpTargetIntegrityError("CDP policy commands are forbidden during abort")
+        if method not in _EMPTY_RESULT_POLICY_COMMANDS:
+            raise CdpTargetIntegrityError(
+                f"result-bearing or unsupported routed CDP command was rejected: {method}"
+            )
+        state = self._state(source.session_path)
+        if state.source != source or state.phase not in {"ready", "resuming"}:
+            raise CdpTargetIntegrityError(
+                f"cannot send {label} to an unready or detached CDP target"
+            )
+        parameters = dict(params)
+        request_id = parameters.get("requestId")
+        root_fetch_decision = (
+            self._root_fetch_by_policy_identity.get((source, request_id))
+            if isinstance(request_id, str)
+            else None
+        )
+        if root_fetch_decision is not None:
+            if root_fetch_decision.decided:
+                raise CdpTargetIntegrityError("root Fetch policy was decided more than once")
+            root_fetch_decision.decided = True
+        document_decision = (
+            self._document_fetch_by_policy_identity.get((source, request_id))
+            if isinstance(request_id, str)
+            else None
+        )
+        if document_decision is not None:
+            if document_decision.decided:
+                raise CdpTargetIntegrityError("Document Fetch policy was decided more than once")
+            document_decision.decided = True
+            if method == "Fetch.failRequest" and parameters == {
+                "requestId": document_decision.fetch_request_id,
+                "errorReason": "BlockedByClient",
+            }:
+                chain_key = document_decision.active.source.request_chain_key(
+                    document_decision.network_id
+                )
+                if (
+                    chain_key in self._pending_blocked_documents
+                    or chain_key in self._error_document_finishes
+                    or chain_key in self._retired_error_document_chains
+                ):
+                    raise CdpTargetIntegrityError(
+                        "blocked Document request chain was duplicated or reused"
+                    )
+                # A terminal event is exceptional only after Chromium has
+                # acknowledged this router's exact inspector-block decision.
+                self._send_policy_decision(
+                    source,
+                    method,
+                    parameters,
+                    label=label,
+                    on_success=lambda _result, decision=document_decision, key=chain_key: (
+                        self._acknowledge_blocked_document(decision, key)
+                    ),
+                    root_fetch_decision=root_fetch_decision,
+                )
+                return
+        bootstrap_decision = (
+            self._bootstrap_fetch_by_policy_identity.get((source, request_id))
+            if isinstance(request_id, str)
+            else None
+        )
+        if bootstrap_decision is not None:
+            if bootstrap_decision.decided:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap Fetch policy was decided more than once"
+                )
+            bootstrap_decision.decided = True
+            bootstrap = bootstrap_decision.bootstrap
+            if not bootstrap_decision.prearm:
+                self._send_policy_decision(source, method, parameters, label=label)
+                return
+            if bootstrap.fetch_policy_outcome is not None:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap prearm policy was decided more than once"
+                )
+            if method == "Fetch.failRequest":
+                bootstrap.fetch_policy_outcome = "fail"
+                self._send_policy_decision(source, method, parameters, label=label)
+                return
+            if set(parameters) != {"requestId"}:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap continue command changed its exact request"
+                )
+            bootstrap.fetch_policy_outcome = "continue"
+            self._maybe_release_bootstrap_continue(bootstrap)
+            return
+        self._send_policy_decision(
+            source,
+            method,
+            parameters,
+            label=label,
+            root_fetch_decision=root_fetch_decision,
+        )
+
+    def begin_shutdown(self) -> None:
+        """Freeze target creation after all setup/policy commands are acknowledged.
+
+        The caller then closes the complete browser context, which deliberately
+        terminates otherwise long-lived iframes/workers and lets their terminal
+        network and detach events drain before :meth:`finish` validates them.
+        """
+
+        self.raise_if_failed()
+        if self._shutting_down:
+            raise CdpTargetIntegrityError("CDP target shutdown started more than once")
+        if not self._shared_guard_registered:
+            raise CdpTargetIntegrityError(
+                "CDP target shutdown began without the browser shared-worker guard"
+            )
+        if self._has_pending_shutdown_work():
+            raise CdpTargetIntegrityError(
+                "CDP target shutdown began with setup, ownership, adoption, "
+                "bootstrap prearm, or policy commands pending"
+            )
+        if self._pre_shutdown_network_identity_saturated:
+            raise CdpTargetIntegrityError(
+                "CDP target shutdown cannot prove Network identity separation"
+            )
+        if self._pre_shutdown_fetch_identity_saturated:
+            raise CdpTargetIntegrityError(
+                "CDP target shutdown cannot prove Fetch identity separation"
+            )
+        self._normal_shutdown_disposal.begin()
+        self._shutting_down = True
+
+    def begin_abort(self) -> None:
+        """Begin exceptional disposal after an acquisition was rejected.
+
+        Unlike normal shutdown this permits setup, policy, ownership, and
+        shared-worker prearm work to remain pending. It is usable only with the
+        separate abort finish after the browser context has been disposed.
+        """
+
+        if self._shutting_down or self._abort_finished:
+            raise CdpTargetIntegrityError("CDP target abort started more than once")
+        if self._root_source is None or not self._shared_guard_registered:
+            raise CdpTargetIntegrityError("CDP target abort began before complete root/guard setup")
+        for decision in self._pending_root_invalid_interceptions.values():
+            if decision.abort_owned:
+                raise CdpTargetIntegrityError(
+                    "root InvalidInterceptionId provisional was abort-owned twice"
+                )
+            decision.abort_owned = True
+        for candidate in self._srcdoc_candidates.values():
+            candidate.abort_owned = True
+        self._aborting = True
+        self._shutting_down = True
+
+    def raise_if_failed(self) -> None:
+        if self._failure is not None:
+            raise self._failure
+
+    def finish(self) -> None:
+        """Prove no child escaped setup and no target/protocol work remains pending."""
+
+        self.raise_if_failed()
+        validate_egress_prearm_summary(self.egress_prearm_summary, require_terminal=True)
+        if self._aborting:
+            raise CdpTargetIntegrityError("normal CDP target finish was used during abort")
+        if not self._shutting_down:
+            raise CdpTargetIntegrityError(
+                "CDP target instrumentation finished without a deliberate context shutdown"
+            )
+        if not self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "CDP target instrumentation finished before its shared-worker guard"
+            )
+        if self._pending:
+            labels = ", ".join(sorted(command.label for command in self._pending.values()))
+            raise CdpTargetIntegrityError(f"CDP shutdown commands remain unresolved: {labels}")
+        # BrowserContext.close() is the disposal barrier. Chromium is not
+        # required to deliver every descendant detach or loadingFailed event
+        # before the root CDP session closes, so close any observation that was
+        # live at the explicit evidence cutoff as a local shutdown cancellation.
+        for state in self._states.values():
+            for request_id in tuple(state.active_request_ids):
+                self._terminalise_request(
+                    state.source,
+                    request_id,
+                    synthetic_shutdown=True,
+                )
+        worker_bootstrap_network_ids = frozenset(
+            {*self._guarded_shared_workers}
+            | {
+                state.source.target_id
+                for state in self._states.values()
+                if state.source.target_type in {"worker", "shared_worker"}
+            }
+        )
+        self._normal_shutdown_disposal.finish(
+            worker_bootstrap_network_ids=worker_bootstrap_network_ids
+        )
+        for route, state in self._states.items():
+            if state.active_request_ids:
+                raise CdpTargetIntegrityError("CDP target finished with active requests")
+            if route and state.phase not in {"destroyed", "detached", "ready", "closing"}:
+                raise CdpTargetIntegrityError("related CDP target did not reach a terminal state")
+            if not route and state.phase != "ready":
+                raise CdpTargetIntegrityError("root CDP target did not remain instrumented")
+        if (
+            self._root_fetch_by_policy_identity
+            or self._root_fetch_callback_stack
+            or self._pending_root_invalid_interceptions
+            or self._document_fetch_by_policy_identity
+            or self._pending_blocked_documents
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP target finished with an unresolved Fetch policy lifecycle"
+            )
+        if self._srcdoc_candidates:
+            raise CdpTargetIntegrityError(
+                "CDP target finished with an unresolved srcdoc Page lifecycle"
+            )
+        if self._track_root_srcdoc_lifecycle:
+            try:
+                validate_srcdoc_pseudo_document_summary(
+                    self.srcdoc_pseudo_document_summary,
+                    require_terminal=True,
+                )
+            except ValueError as error:
+                raise CdpTargetIntegrityError(
+                    "CDP target finished with non-terminal srcdoc evidence"
+                ) from error
+        if self._error_resource_by_request_id or any(
+            lifecycle.active is not None
+            for lifecycle in self._error_document_resources.values()
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP target finished with an unresolved Chromium error-document resource"
+            )
+        # A failed navigation is already terminal evidence. Chromium is not
+        # required to emit its internal error-document finish or every pinned
+        # inline PNG before context disposal. All actually observed resources
+        # are terminal here; an unobserved suffix supplies no synthetic event.
+        # Optional one-use tombstones end at this boundary.
+        self._error_document_finishes.clear()
+        self._error_document_resources.clear()
+        self._retired_error_resource_request_ids.clear()
+        self._root_terminal_requests.clear()
+        self._early_root_fetch_by_network.clear()
+        self._claimed_root_invalid_interception_occurrences.clear()
+        self._disabled_root_invalid_interception_networks.clear()
+        self._eligible_root_network_occurrences.clear()
+        self._eligible_root_network_occurrence_count = 0
+        self._pre_shutdown_network_identities.clear()
+        self._pre_shutdown_network_occurrence_counts.clear()
+        self._pre_shutdown_network_occurrence_total = 0
+        self._pre_shutdown_reused_network_identities.clear()
+        self._pre_shutdown_worker_extra_info_claims.clear()
+        self._page_frame_pending_swap_removals.clear()
+
+    def finish_abort(self) -> None:
+        """Retire rejected observations after ``BrowserContext.close()``.
+
+        No graph can be built from this state. Outstanding commands and target
+        identities are cancelled only at that explicit disposal boundary; the
+        original failure remains recorded and this path cannot become a normal
+        successful :meth:`finish`.
+        """
+
+        if (
+            not self._aborting
+            or not self._shutting_down
+            or not self._shared_guard_finished
+            or self._abort_finished
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP target abort finished without complete context disposal"
+            )
+        if self._root_fetch_callback_stack:
+            raise CdpTargetIntegrityError(
+                "root Fetch callback remained active at abort disposal"
+            )
+        for state in self._states.values():
+            for request_id in tuple(state.active_request_ids):
+                self._terminalise_request(
+                    state.source,
+                    request_id,
+                    # The rejected audit is already frozen. Abort retirement
+                    # cannot publish synthetic evidence into it.
+                    synthetic_shutdown=False,
+                )
+            state.setup_pending.clear()
+            if state.source.session_path and state.phase != "destroyed":
+                state.phase = "detached"
+        self._pending.clear()
+        self._root_fetch_by_policy_identity.clear()
+        self._seen_root_request_stage_policies.clear()
+        if any(
+            not decision.abort_owned
+            for decision in self._pending_root_invalid_interceptions.values()
+        ):
+            raise CdpTargetIntegrityError(
+                "root InvalidInterceptionId provisional escaped abort ownership"
+            )
+        self._root_invalid_interception_aborted += len(
+            self._pending_root_invalid_interceptions
+        )
+        self._pending_root_invalid_interceptions.clear()
+        self._srcdoc_aborted += sum(
+            candidate.terminal_request_id is not None
+            for candidate in self._srcdoc_candidates.values()
+        )
+        self._srcdoc_candidates.clear()
+        self._page_frame_pending_swap_removals.clear()
+        self._root_terminal_requests.clear()
+        self._early_root_fetch_by_network.clear()
+        self._claimed_root_invalid_interception_occurrences.clear()
+        self._disabled_root_invalid_interception_networks.clear()
+        self._eligible_root_network_occurrences.clear()
+        self._eligible_root_network_occurrence_count = 0
+        self._pre_shutdown_network_identities.clear()
+        self._pre_shutdown_network_occurrence_counts.clear()
+        self._pre_shutdown_network_occurrence_total = 0
+        self._pre_shutdown_reused_network_identities.clear()
+        self._pre_shutdown_worker_extra_info_claims.clear()
+        self._document_fetch_by_policy_identity.clear()
+        self._pending_blocked_documents.clear()
+        self._error_document_finishes.clear()
+        self._error_document_resources.clear()
+        self._error_resource_by_request_id.clear()
+        self._retired_error_resource_request_ids.clear()
+        self._pending_worker_sources.clear()
+        self._session_routes.clear()
+        self._target_routes = {
+            self.root_source.target_id: self.root_source.session_path,
+        }
+        self._abort_finished = True
+
+    def _guard(self, handler: Callable[[dict[str, Any]], None]) -> Callable[[dict[str, Any]], None]:
+        def dispatch(event: dict[str, Any]) -> None:
+            if self._failure is not None and not self._aborting:
+                return
+            try:
+                handler(event)
+            except Exception as error:  # noqa: BLE001 - retained for fail-closed finish
+                self._record_failure(error)
+
+        return dispatch
+
+    def _record_failure(self, error: Exception) -> None:
+        if isinstance(error, CdpTargetIntegrityError):
+            recorded = error
+        else:
+            recorded = CdpTargetIntegrityError(
+                f"CDP target instrumentation failed: {type(error).__name__}"
+            )
+        if self._failure is not None:
+            if len(self._secondary_integrity_failures) < _ROOT_DISCARD_SECONDARY_LIMIT:
+                self._secondary_integrity_failures.append(recorded)
+            else:
+                self._secondary_integrity_saturated = True
+            return
+        self._failure = recorded
+
+    def _root_send(self, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            result = self._session.send(method, dict(params))
+        except Exception as error:
+            fingerprint = _exception_fingerprint(error)
+            if method == "Fetch.continueRequest" and (
+                _is_exact_root_continue_invalid_interception(
+                    error,
+                    expected_type=self._root_continue_error_type,
+                )
+            ):
+                raise _RootInvalidInterception(fingerprint=fingerprint) from error
+            if method == "Fetch.failRequest" and _is_exact_root_fail_invalid_interception(
+                error,
+                expected_type=self._root_continue_error_type,
+            ):
+                raise _RootFailInvalidInterception(fingerprint=fingerprint) from error
+            raise CdpTargetIntegrityError(
+                f"root CDP command {method} failed ({fingerprint})"
+            ) from error
+        if not isinstance(result, dict):
+            raise CdpTargetIntegrityError(f"root CDP command {method} returned malformed data")
+        return result
+
+    def _state(self, route: tuple[str, ...]) -> _TargetState:
+        state = self._states.get(route)
+        if state is None:
+            raise CdpTargetIntegrityError("CDP event named an unknown child-session route")
+        return state
+
+    def _has_pending_shutdown_work(self) -> bool:
+        unresolved_guarded = any(
+            not (bootstrap.fetch_policy_outcome == "fail" and bootstrap.guardian_detached)
+            and (
+                bootstrap.source is None
+                or not bootstrap.attach_command_resolved
+                or bootstrap.attach_session_id != bootstrap.attach_command_session_id
+            )
+            for bootstrap in self._guarded_shared_workers.values()
+        )
+        unresolved_prearms = any(
+            bootstrap.fetch_policy_outcome is None
+            or (bootstrap.fetch_policy_outcome == "continue" and not bootstrap.fetch_released)
+            for bootstrap in self._guarded_shared_workers.values()
+        )
+        return (
+            any(command.policy_decision for command in self._pending.values())
+            or bool(self._pending_root_invalid_interceptions)
+            or bool(self._srcdoc_candidates)
+            or any(
+                state.phase not in {"ready", "detached", "destroyed"}
+                for state in self._states.values()
+            )
+            or bool(self._pending_worker_sources)
+            or unresolved_guarded
+            or unresolved_prearms
+            # Wait for observed internal requests, not an optional future PNG.
+            # Keep the full signature sequence for order and duplicate checks.
+            or bool(self._error_resource_by_request_id)
+            or any(
+                lifecycle.active is not None
+                for lifecycle in self._error_document_resources.values()
+            )
+        )
+
+    def _send_policy_decision(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        params: dict[str, Any],
+        *,
+        label: str,
+        on_success: Callable[[Mapping[str, Any]], None] | None = None,
+        root_fetch_decision: _RootFetchDecision | None = None,
+    ) -> None:
+        if not source.session_path:
+            recoverable_root_continue = (
+                self._root_continue_error_type is not None
+                and root_fetch_decision is not None
+                and on_success is None
+                and method == "Fetch.continueRequest"
+                and label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
+                and params == {"requestId": root_fetch_decision.fetch_request_id}
+            )
+            callback_token = (
+                self._root_fetch_callback_stack[-1]
+                if self._root_fetch_callback_stack
+                else None
+            )
+            discardable_root_continue = (
+                not recoverable_root_continue
+                and root_fetch_decision is None
+                and self._root_continue_error_type is not None
+                and not self._shutting_down
+                and not self._aborting
+                and source == self.root_source
+                and on_success is None
+                and method == "Fetch.continueRequest"
+                and label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
+                and callback_token is not None
+                and callback_token.source == source
+                and callback_token.method == "GET"
+                and callback_token.scheme == "https"
+                and not callback_token.correlated_recovery_owner
+                and params == {"requestId": callback_token.fetch_request_id}
+                and not self._pre_shutdown_fetch_identity_saturated
+                and (source, callback_token.fetch_request_id)
+                not in self._pre_shutdown_reused_fetch_identities
+            )
+            discardable_root_fail = (
+                self._root_continue_error_type is not None
+                and not self._shutting_down
+                and not self._aborting
+                and source == self.root_source
+                and on_success is None
+                and method == "Fetch.failRequest"
+                and label == _ROOT_FAIL_INVALID_INTERCEPTION_POLICY_LABEL
+                and callback_token is not None
+                and callback_token.source == source
+                and (
+                    not callback_token.correlated_recovery_owner
+                    or root_fetch_decision is not None
+                )
+                and params == {
+                    "requestId": callback_token.fetch_request_id,
+                    "errorReason": "BlockedByClient",
+                }
+                and not self._pre_shutdown_fetch_identity_saturated
+                and (source, callback_token.fetch_request_id)
+                not in self._pre_shutdown_reused_fetch_identities
+            )
+            if recoverable_root_continue:
+                if root_fetch_decision.continue_issued:
+                    raise CdpTargetIntegrityError(
+                        "root Fetch continue was issued more than once"
+                    )
+                # This transition is deliberately immediately before the
+                # synchronous transport call. A re-entrant Network terminal
+                # can then be attributed to this exact issued command.
+                root_fetch_decision.continue_issued = True
+            if discardable_root_continue or discardable_root_fail:
+                assert callback_token is not None
+                identity = (source, callback_token.fetch_request_id)
+                if (
+                    callback_token.policy_issued
+                    or (
+                        root_fetch_decision is None
+                        and identity in self._seen_root_fetch_policy_identities
+                    )
+                    or identity in self._seen_root_request_stage_policies
+                ):
+                    raise CdpTargetIntegrityError(
+                        "root catalogue Fetch policy was duplicated or reused"
+                    )
+                if (
+                    self._root_fetch_identity_saturated
+                    or self._root_request_stage_policy_saturated
+                    or len(self._seen_root_request_stage_policies)
+                    >= _ROOT_FETCH_IDENTITY_LIMIT
+                ):
+                    self._root_request_stage_policy_saturated = True
+                    discardable_root_continue = False
+                    discardable_root_fail = False
+                else:
+                    callback_token.policy_issued = True
+                    self._seen_root_request_stage_policies.add(identity)
+            try:
+                result = self._root_send(method, params)
+            except _RootInvalidInterception as error:
+                if not recoverable_root_continue:
+                    if discardable_root_continue:
+                        assert callback_token is not None
+                        raise _RootRequestStageInvalidInterception(
+                            fingerprint=error.fingerprint,
+                            resource_type=callback_token.resource_type,
+                        ) from error
+                    policy = (
+                        "catalogue-navigation"
+                        if label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
+                        else "worker-bootstrap-prearmed"
+                        if label == "worker-bootstrap-prearmed:Fetch.continueRequest"
+                        else "request-stage"
+                        if label == "request-stage-policy:Fetch.continueRequest"
+                        else "other"
+                    )
+                    resource_type = (
+                        root_fetch_decision.resource_type
+                        if root_fetch_decision is not None
+                        else "unregistered"
+                    )
+                    raise _RootInvalidInterception(
+                        fingerprint=error.fingerprint,
+                        policy_context=(
+                            f"policy={policy}, root_fetch_type={resource_type}, "
+                            f"callback={str(on_success is not None).lower()}"
+                        ),
+                    ) from error
+                assert root_fetch_decision is not None
+                self._provision_root_invalid_interception(
+                    root_fetch_decision,
+                    fingerprint=error.fingerprint,
+                )
+                return
+            except _RootFailInvalidInterception as error:
+                if not discardable_root_fail:
+                    raise
+                assert callback_token is not None
+                raise _RootRequestStageFailedInterception(
+                    fingerprint=error.fingerprint,
+                    resource_type=callback_token.resource_type,
+                ) from error
+            if type(result) is not dict or result != {}:
+                raise CdpTargetIntegrityError(
+                    f"root CDP policy command {label} did not return an exact empty result"
+                )
+            if on_success is not None:
+                on_success(result)
+            return
+        self._queue_command(
+            source,
+            method,
+            params,
+            label=label,
+            on_success=on_success,
+            policy_decision=True,
+        )
+
+    @staticmethod
+    def _root_fetch_matches_active(
+        decision: _RootFetchDecision,
+        active: _ActiveRequest,
+    ) -> bool:
+        return (
+            active.source == decision.policy_source
+            and active.request_id == decision.network_id
+            and active.frame_id == decision.frame_id
+            and active.resource_type == decision.resource_type
+            and active.method == decision.method
+            and active.url == decision.url
+        )
+
+    def _root_occurrence_is_recovery_eligible(self, active: _ActiveRequest) -> bool:
+        return (
+            active.source == self.root_source
+            and self._root_frame_id is not None
+            and active.frame_id == self._root_frame_id
+            and active.resource_type
+            in (
+                _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+                | _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES
+            )
+            and active.method == "GET"
+            and isinstance(active.url, str)
+            and bool(active.url)
+        )
+
+    @staticmethod
+    def _root_occurrences_are_fetch_indistinguishable(
+        left: _ActiveRequest,
+        right: _ActiveRequest,
+    ) -> bool:
+        return (
+            left.source == right.source
+            and left.request_id == right.request_id
+            and left.frame_id == right.frame_id
+            and left.resource_type == right.resource_type
+            and left.method == right.method
+            and left.url == right.url
+        )
+
+    def _track_root_network_occurrence(
+        self,
+        active: _ActiveRequest,
+        *,
+        replaced: _ActiveRequest | None,
+    ) -> None:
+        """Bound root Network identity history used by exact Fetch correlation."""
+
+        if not self._root_occurrence_is_recovery_eligible(active):
+            return
+        key = (active.source, active.request_id)
+        history = self._eligible_root_network_occurrences.get(key, ())
+        if replaced is None and history:
+            # This is a fresh occurrence rather than a redirect leg. A late
+            # Fetch pause from the prior occurrence would be indistinguishable
+            # whenever its visible fields match, so recovery stays disabled.
+            self._disabled_root_invalid_interception_networks.add(key)
+            return
+        if any(
+            self._root_occurrences_are_fetch_indistinguishable(previous, active)
+            for previous in history
+        ):
+            # Fetch carries no redirect-leg serial. Repeating any visible
+            # signature in A->B->A (not merely the immediately replaced leg)
+            # makes a delayed pause occurrence-ambiguous.
+            self._disabled_root_invalid_interception_networks.add(key)
+            return
+        if self._root_network_identity_saturated:
+            return
+        if (
+            self._eligible_root_network_occurrence_count
+            >= _ROOT_NETWORK_IDENTITY_LIMIT
+        ):
+            self._root_network_identity_saturated = True
+            return
+        self._eligible_root_network_occurrences.setdefault(key, []).append(active)
+        self._eligible_root_network_occurrence_count += 1
+
+    def _claim_root_fetch_occurrence(
+        self,
+        active: _ActiveRequest,
+    ) -> None:
+        """Claim one exact Network occurrence for one eligible Fetch pause."""
+
+        identity = id(active)
+        claimed = self._claimed_root_invalid_interception_occurrences.get(identity)
+        if claimed is not None:
+            if claimed is not active:
+                raise CdpTargetIntegrityError(
+                    "root Network occurrence identity was unexpectedly reused"
+                )
+            raise CdpTargetIntegrityError(
+                "root Network occurrence was claimed by more than one Fetch decision"
+            )
+        self._claimed_root_invalid_interception_occurrences[identity] = active
+
+    def _require_claimed_root_fetch_occurrence(self, active: _ActiveRequest) -> None:
+        """Require the exact occurrence claim made when the Fetch pause arrived."""
+
+        if self._claimed_root_invalid_interception_occurrences.get(id(active)) is not active:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId named an unclaimed root Network occurrence"
+            )
+
+    def _provision_root_invalid_interception(
+        self,
+        decision: _RootFetchDecision,
+        *,
+        fingerprint: str,
+    ) -> None:
+        """Accept the exact Chromium race only while its Network occurrence proves terminal."""
+
+        if (
+            decision.policy_source != self.root_source
+            or self._root_frame_id is None
+            or decision.frame_id != self._root_frame_id
+            or decision.resource_type
+            not in (
+                _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+                | _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES
+            )
+            or decision.method != "GET"
+            or decision.provisional
+            or not decision.decided
+            or not decision.continue_issued
+            or decision.abort_owned
+        ):
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId did not name one undecorated root Fetch decision"
+            )
+        network_key = (decision.policy_source, decision.network_id)
+        if (
+            self._root_fetch_identity_saturated
+            or self._root_network_identity_saturated
+            or self._root_terminal_history_saturated
+            or network_key in self._disabled_root_invalid_interception_networks
+        ):
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId recovery was disabled by ambiguous or saturated state"
+            )
+        if network_key in self._pending_root_invalid_interceptions:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId duplicated a pending root Network occurrence"
+            )
+        active = self._resolve_active_request(
+            decision.policy_source,
+            decision.network_id,
+            allow_target_migration=False,
+        )
+        terminal = self._root_terminal_requests.get(network_key)
+        if active is not None and terminal is not None:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId matched both active and terminal Network occurrences"
+            )
+        if (
+            decision.active is None
+            and decision.terminal is None
+            and (
+                active is not None
+                or decision.resource_type
+                in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+            )
+        ):
+            # Fetch was observed before Network.requestWillBeSent. The latter
+            # can arrive reentrantly while Playwright sends this exact continue.
+            # Its identity can justify discarding this attempt, never treating
+            # an unacknowledged continuation as a successful page load.
+            history = self._eligible_root_network_occurrences.get(network_key, ())
+            if (
+                decision.resource_type
+                in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+                and active is None
+                and terminal is None
+                and self._root_fetch_by_policy_identity.get(
+                    (decision.policy_source, decision.fetch_request_id)
+                ) is decision
+                and self._early_root_fetch_by_network.get(network_key)
+                == decision.fetch_request_id
+                and network_key not in self._pre_shutdown_network_identities
+                and network_key not in self._pre_shutdown_network_occurrence_counts
+                and network_key not in self._pre_shutdown_reused_network_identities
+                and not self._pre_shutdown_network_identity_saturated
+                and not self._active_requests.get(decision.network_id)
+                and not history
+            ):
+                # The pinned transport failure arrived before any Network
+                # observation for this identity. No correlation can be
+                # claimed: the only permitted outcome is a complete abort
+                # and a bounded retry of a fresh navigation attempt.
+                raise _RootUnpairedFetchInvalidInterception(
+                    fingerprint=fingerprint, resource_type=decision.resource_type
+                )
+            if (
+                active is None
+                or terminal is not None
+                or self._early_root_fetch_by_network.get(network_key)
+                != decision.fetch_request_id
+                or self._pre_shutdown_network_identity_saturated
+                or self._pre_shutdown_network_occurrence_counts.get(network_key) != 1
+                or network_key in self._pre_shutdown_reused_network_identities
+                or len(self._active_requests.get(decision.network_id, ())) != 1
+                or len(history) != 1
+                or history[0] is not active
+                or active.redirected
+                or not self._root_fetch_matches_active(decision, active)
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId late Network start was not uniquely correlated"
+                )
+            self._claim_root_fetch_occurrence(active)
+            raise _RootLateNetworkInvalidInterception(
+                fingerprint=fingerprint, resource_type=decision.resource_type
+            )
+        if decision.resource_type in _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES:
+            # A failed subresource is never a successful Fetch continuation.
+            # Its exact canceled Network terminal only permits discarding the
+            # complete browser attempt after verified exceptional disposal.
+            if (
+                active is not None
+                or terminal is None
+                or terminal.terminal_method != "Network.loadingFailed"
+                or terminal.active.redirected
+                or not (
+                    decision.terminal is terminal
+                    or (decision.active is terminal.active and decision.continue_issued)
+                )
+                or not self._root_fetch_matches_active(decision, terminal.active)
+                or len(self._eligible_root_network_occurrences.get(network_key, ())) != 1
+                or self._eligible_root_network_occurrences[network_key][0]
+                is not terminal.active
+                or self._pre_shutdown_network_occurrence_counts.get(network_key) != 1
+                or network_key in self._pre_shutdown_reused_network_identities
+                or self._pre_shutdown_network_identity_saturated
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId canceled root Network terminal was not uniquely correlated"
+                )
+            self._require_claimed_root_fetch_occurrence(terminal.active)
+            raise _RootCanceledNetworkInvalidInterception(
+                fingerprint=fingerprint, resource_type=decision.resource_type
+            )
+        if active is not None:
+            if decision.active is not active or not self._root_fetch_matches_active(
+                decision, active
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId Fetch did not match its active Network occurrence"
+                )
+            self._require_claimed_root_fetch_occurrence(active)
+            decision.provisional = True
+            decision.transport_fingerprint = fingerprint
+            self._root_invalid_interception_total += 1
+            self._pending_root_invalid_interceptions[network_key] = decision
+            return
+        if terminal is not None:
+            bound_before_callback = decision.terminal is terminal
+            terminated_during_send = (
+                decision.continue_issued and decision.active is terminal.active
+            )
+            if (
+                not (bound_before_callback or terminated_during_send)
+                or not self._root_fetch_matches_active(decision, terminal.active)
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId Fetch did not match its terminal Network occurrence"
+                )
+            self._require_claimed_root_fetch_occurrence(terminal.active)
+            decision.provisional = True
+            decision.transport_fingerprint = fingerprint
+            self._root_invalid_interception_total += 1
+            self._record_resolved_root_invalid_interception(
+                decision,
+                terminal_method=terminal.terminal_method,
+                terminal_before_policy=bound_before_callback,
+                fingerprint=fingerprint,
+            )
+            return
+        raise CdpTargetIntegrityError(
+            "InvalidInterceptionId Fetch has no exact root Network occurrence"
+        )
+
+    def _record_resolved_root_invalid_interception(
+        self,
+        decision: _RootFetchDecision,
+        *,
+        terminal_method: str,
+        terminal_before_policy: bool,
+        fingerprint: str | None = None,
+    ) -> None:
+        if terminal_method not in self._root_invalid_interception_outcomes:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId resolved with an unsupported Network terminal"
+            )
+        self._root_invalid_interception_outcomes[terminal_method] += 1
+        if len(self._root_invalid_interception_diagnostics) >= _ROOT_CONTINUE_DIAGNOSTIC_LIMIT:
+            return
+
+        def digest(value: str) -> str:
+            return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+        diagnostic = {
+            "fetch_request_id_sha256": digest(decision.fetch_request_id),
+            "network_id_sha256": digest(decision.network_id),
+            "frame_id_sha256": digest(decision.frame_id),
+            "url_sha256": digest(decision.url),
+            "resource_type": decision.resource_type,
+            "method": decision.method,
+            "terminal_method": terminal_method,
+            "terminal_before_policy": terminal_before_policy,
+        }
+        if fingerprint is not None:
+            diagnostic["transport_exception"] = fingerprint
+        self._root_invalid_interception_diagnostics.append(diagnostic)
+
+    def _acknowledge_blocked_document(
+        self,
+        decision: _DocumentFetchDecision,
+        chain_key: tuple[tuple[str, ...], str, int, str],
+    ) -> None:
+        if decision.blocked_by_client_acknowledged:
+            raise CdpTargetIntegrityError("Document denial acknowledgement was duplicated")
+        if (
+            chain_key in self._pending_blocked_documents
+            or chain_key in self._error_document_finishes
+            or chain_key in self._retired_error_document_chains
+        ):
+            raise CdpTargetIntegrityError(
+                "blocked Document request chain was duplicated or reused"
+            )
+        if (
+            self._resolve_active_request(
+                decision.policy_source,
+                decision.network_id,
+                allow_target_migration=False,
+            )
+            is not decision.active
+        ):
+            raise CdpTargetIntegrityError(
+                "Document request changed or terminated before its denial acknowledgement"
+            )
+        decision.blocked_by_client_acknowledged = True
+        self._pending_blocked_documents[chain_key] = decision
+
+    def _guarded_shared_bootstrap_for_target_id(self, target_id: str) -> _WorkerBootstrap | None:
+        return self._guarded_shared_workers.get(target_id)
+
+    def _root_request_stage_fetch_token(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> _RootRequestStageFetch | None:
+        """Bind a catalogue command to its current root Fetch callback only."""
+
+        request = event.get("request")
+        fetch_id = event.get("requestId")
+        resource_type = event.get("resourceType")
+        method = request.get("method") if isinstance(request, Mapping) else None
+        request_url = request.get("url") if isinstance(request, Mapping) else None
+        if (
+            source != self.root_source
+            or self._root_frame_id is None
+            or self._root_continue_error_type is None
+            or self._shutting_down
+            or self._aborting
+            or not isinstance(fetch_id, str)
+            or not fetch_id
+            or not isinstance(resource_type, str)
+            or not resource_type
+            or not isinstance(request, Mapping)
+            or not isinstance(method, str)
+            or not method
+            or any(character not in _HTTP_METHOD_TOKEN_CHARS for character in method)
+            or not isinstance(request_url, str)
+            or not request_url
+            or any(
+                ord(character) < 33 or ord(character) == 127
+                for character in request_url
+            )
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+        ):
+            return None
+        try:
+            url_parts = urlsplit(request_url)
+            hostname = url_parts.hostname
+        except ValueError:
+            return None
+        scheme = url_parts.scheme.lower()
+        if (
+            not scheme
+            or not (url_parts.netloc or url_parts.path)
+            or (scheme in {"http", "https"} and not hostname)
+        ):
+            return None
+        network_id = event.get("networkId")
+        if network_id is not None and (
+            not isinstance(network_id, str)
+            or not network_id
+            or network_id == fetch_id
+        ):
+            return None
+        correlated_recovery_owner = (
+            method == "GET"
+            and scheme == "https"
+            and event.get("frameId") == self._root_frame_id
+            and network_id is not None
+            and resource_type in (
+                _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+                | _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES
+            )
+        )
+        # A correlated continue remains owned by its exact Network decision.
+        # A denial can only be discarded if that decision is currently bound.
+        return _RootRequestStageFetch(
+            source, fetch_id, resource_type, method, scheme, correlated_recovery_owner
+        )
+
+    def _register_root_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> _RootFetchDecision | None:
+        """Bind a request-stage root Fetch pause to exact Network evidence when available."""
+
+        if (
+            source != self.root_source
+            or self._root_frame_id is None
+            or self._root_continue_error_type is None
+        ):
+            return None
+        frame_id = event.get("frameId")
+        resource_type = event.get("resourceType")
+        request = event.get("request")
+        if not isinstance(request, Mapping):
+            return None
+        method = request.get("method")
+        if (
+            frame_id != self._root_frame_id
+            or resource_type not in (
+                _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+                | _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES
+            )
+            or method != "GET"
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+        ):
+            return None
+        fetch_request_id = event.get("requestId")
+        network_id = event.get("networkId")
+        if (
+            not isinstance(fetch_request_id, str)
+            or not fetch_request_id
+            or not isinstance(network_id, str)
+            or not network_id
+            or fetch_request_id == network_id
+            or not isinstance(request.get("url"), str)
+            or not request.get("url")
+        ):
+            return None
+        identity = (source, fetch_request_id)
+        if (
+            identity in self._seen_root_fetch_policy_identities
+            or identity in self._seen_root_request_stage_policies
+        ):
+            raise CdpTargetIntegrityError("root Fetch interception was duplicated or reused")
+        if (
+            self._root_fetch_identity_saturated
+            or self._root_network_identity_saturated
+            or self._root_terminal_history_saturated
+        ):
+            return None
+        if len(self._seen_root_fetch_policy_identities) >= _ROOT_FETCH_IDENTITY_LIMIT:
+            self._root_fetch_identity_saturated = True
+            return None
+        network_key = (source, network_id)
+        if network_key in self._disabled_root_invalid_interception_networks:
+            return None
+        occurrences = list(self._active_requests.get(network_id, ()))
+        if len(occurrences) > 1:
+            raise CdpTargetIntegrityError(
+                "root Fetch has no unique active Network occurrence"
+            )
+        active = self._resolve_active_request(
+            source,
+            network_id,
+            allow_target_migration=False,
+        )
+        if active is None and occurrences:
+            raise CdpTargetIntegrityError(
+                "root Fetch collided with an unrelated Network occurrence"
+            )
+        terminal = self._root_terminal_requests.get((source, network_id))
+        if active is not None and terminal is not None:
+            raise CdpTargetIntegrityError(
+                "root Fetch matched both active and terminal Network occurrences"
+            )
+        if active is None and terminal is None:
+            # A prior terminal with this Network ID could have aged out of
+            # the success-only tombstones. Do not turn such a reused identity
+            # into a late-start retry candidate.
+            early_fetch_id = self._early_root_fetch_by_network.get(network_key)
+            if early_fetch_id is not None and early_fetch_id != fetch_request_id:
+                raise CdpTargetIntegrityError(
+                    "root Network identity was claimed by more than one early Fetch pause"
+                )
+            if self._eligible_root_network_occurrences.get(network_key):
+                return None
+            self._early_root_fetch_by_network[network_key] = fetch_request_id
+        decision = _RootFetchDecision(
+            policy_source=source,
+            fetch_request_id=fetch_request_id,
+            network_id=network_id,
+            frame_id=frame_id,
+            resource_type=resource_type,
+            method=method,
+            url=request["url"],
+            active=active,
+            terminal=terminal,
+        )
+        if active is not None and not self._root_fetch_matches_active(decision, active):
+            if resource_type in _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES:
+                # Worker bootstrap Script pauses are handled by their own
+                # ownership policy and need not match a root-page Network
+                # occurrence. A later invalid continue remains fatal here.
+                return None
+            raise CdpTargetIntegrityError(
+                "root Fetch does not exactly match its active Network occurrence"
+            )
+        if terminal is not None and not self._root_fetch_matches_active(
+            decision, terminal.active
+        ):
+            if resource_type in _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES:
+                return None
+            raise CdpTargetIntegrityError(
+                "root Fetch does not exactly match its terminal Network occurrence"
+            )
+        if active is not None or terminal is not None:
+            self._claim_root_fetch_occurrence(
+                active if active is not None else terminal.active
+            )
+        self._seen_root_fetch_policy_identities.add(identity)
+        self._root_fetch_by_policy_identity[identity] = decision
+        return decision
+
+    def _register_document_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> _DocumentFetchDecision | None:
+        """Bind an eligible pause to the exact root-page Network occurrence.
+
+        Chromium 143 may emit a second ``loadingFinished`` for the internal
+        error document created after an inspector-blocked named-frame
+        navigation.  No other target, method, redirect, or partially matched
+        pause is eligible for that narrowly observed lifecycle exception.
+        """
+
+        if event.get("resourceType") != "Document" or source != self.root_source:
+            return None
+        fetch_request_id = event.get("requestId")
+        network_id = event.get("networkId")
+        frame_id = event.get("frameId")
+        request = event.get("request")
+        if (
+            not isinstance(fetch_request_id, str)
+            or not fetch_request_id
+            or not isinstance(network_id, str)
+            or not network_id
+            or fetch_request_id == network_id
+            or not isinstance(frame_id, str)
+            or not frame_id
+            or not isinstance(request, Mapping)
+            or request.get("method") != "GET"
+            or not isinstance(request.get("url"), str)
+            or not request.get("url")
+        ):
+            return None
+        occurrences = list(self._active_requests.get(network_id, ()))
+        if len(occurrences) > 1:
+            raise CdpTargetIntegrityError("Document Fetch has no unique active Network occurrence")
+        active = self._resolve_active_request(
+            source,
+            network_id,
+            allow_target_migration=False,
+        )
+        if active is None:
+            if occurrences:
+                raise CdpTargetIntegrityError(
+                    "Document Fetch collided with an unrelated Network occurrence"
+                )
+            return None
+        url = request["url"]
+        if (
+            occurrences != [active]
+            or active.source != source
+            or active.resource_type != "Document"
+            or active.loader_id != network_id
+            or active.frame_id != frame_id
+            or active.method != "GET"
+            or active.url != url
+        ):
+            raise CdpTargetIntegrityError(
+                "Document Fetch does not exactly match its Network occurrence"
+            )
+        policy_identity = (source, fetch_request_id)
+        if policy_identity in self._seen_document_fetch_policy_identities:
+            raise CdpTargetIntegrityError("Document Fetch interception was duplicated or reused")
+        chain_key = source.request_chain_key(network_id)
+        if (
+            chain_key in self._pending_blocked_documents
+            or chain_key in self._error_document_finishes
+            or chain_key in self._retired_error_document_chains
+        ):
+            raise CdpTargetIntegrityError("Document Fetch named a pending or retired request chain")
+        decision = _DocumentFetchDecision(
+            policy_source=source,
+            active=active,
+            fetch_request_id=fetch_request_id,
+            network_id=network_id,
+            frame_id=frame_id,
+            method="GET",
+            url=url,
+        )
+        self._seen_document_fetch_policy_identities.add(policy_identity)
+        self._document_fetch_by_policy_identity[policy_identity] = decision
+        return decision
+
+    @staticmethod
+    def _is_exact_blocked_document_failure(
+        event: Mapping[str, Any],
+        request_id: str,
+    ) -> bool:
+        return (
+            frozenset(event) == _BLOCKED_DOCUMENT_FAILURE_FIELDS
+            and event.get("requestId") == request_id
+            and _is_finite_protocol_number(event.get("timestamp"))
+            and event.get("type") == "Document"
+            and event.get("errorText") == "net::ERR_BLOCKED_BY_CLIENT"
+            and event.get("canceled") is False
+            and event.get("blockedReason") == "inspector"
+        )
+
+    def _consume_error_document_finish(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> bool:
+        request_id = event.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            return False
+        chain_key = source.request_chain_key(request_id)
+        finish = self._error_document_finishes.get(chain_key)
+        if finish is None:
+            return False
+        timestamp = event.get("timestamp")
+        encoded_length = event.get("encodedDataLength")
+        if (
+            source != finish.canonical_source
+            or source != finish.terminal_source
+            or frozenset(event) != _ERROR_DOCUMENT_FINISH_FIELDS
+            or not _is_finite_protocol_number(timestamp)
+            or float(timestamp) <= finish.failed_timestamp
+            or not _is_finite_protocol_number(encoded_length)
+            or float(encoded_length) <= 0
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document finish did not match its exact terminal signature"
+            )
+        self._error_document_finishes.pop(chain_key)
+        if chain_key in self._error_document_resources:
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resource lifecycle was duplicated"
+            )
+        self._error_document_resources[chain_key] = _ErrorDocumentResources(
+            source=finish.canonical_source,
+            loader_id=finish.request_id,
+            frame_id=finish.frame_id,
+            latest_timestamp=float(timestamp),
+        )
+        return True
+
+    def _consume_error_document_abort(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Drain one cancelled internal error document during exceptional disposal.
+
+        Chromium can abort the error document while a rejected navigation pass
+        closes its context, after the acknowledged inspector failure but before
+        the optional error-document finish. This is not another application
+        request terminal and must not enter discovery evidence. Outside that
+        exact pending lifecycle and explicit abort boundary, duplicates remain
+        integrity failures.
+        """
+
+        if not self._aborting or not self._shutting_down:
+            return False
+        request_id = event.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            return False
+        chain_key = source.request_chain_key(request_id)
+        finish = self._error_document_finishes.get(chain_key)
+        if finish is None:
+            return False
+        timestamp = event.get("timestamp")
+        if (
+            source != self.root_source
+            or source != finish.canonical_source
+            or source != finish.terminal_source
+            or frozenset(event) != {"requestId", "timestamp", "type", "errorText", "canceled"}
+            or not _is_finite_protocol_number(timestamp)
+            or float(timestamp) <= finish.failed_timestamp
+            or event.get("type") != "Document"
+            or event.get("errorText") != "net::ERR_ABORTED"
+            or event.get("canceled") is not True
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document abort did not match its exact terminal signature"
+            )
+        # Retain the retired-chain marker: no further terminal, redirect or
+        # request-ID reuse is admitted, and no internal-resource owner is made.
+        self._error_document_finishes.pop(chain_key)
+        return True
+
+    @staticmethod
+    def _error_document_resource_signature(url: str) -> tuple[int, int] | None:
+        if not url.startswith("data:image/png;base64,"):
+            return None
+        for index, (length, expected_digest, _column) in enumerate(
+            _ERROR_DOCUMENT_RESOURCE_SIGNATURES
+        ):
+            if len(url) == length:
+                digest = hashlib.sha256(url.encode()).hexdigest()
+                if digest == expected_digest:
+                    return index, length
+        return None
+
+    def _error_document_resources_for_loader(
+        self,
+        source: CdpTargetSource,
+        loader_id: object,
+    ) -> _ErrorDocumentResources | None:
+        if not isinstance(loader_id, str) or not loader_id:
+            return None
+        return self._error_document_resources.get(source.request_chain_key(loader_id))
+
+    def _start_error_document_resource(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        lifecycle: _ErrorDocumentResources,
+    ) -> None:
+        request_id = event.get("requestId")
+        request = event.get("request")
+        initiator = event.get("initiator")
+        timestamp = event.get("timestamp")
+        wall_time = event.get("wallTime")
+        if (
+            source != self.root_source
+            or source != lifecycle.source
+            or frozenset(event) != _ERROR_DOCUMENT_RESOURCE_REQUEST_FIELDS
+            or not isinstance(request_id, str)
+            or not request_id
+            or request_id == lifecycle.loader_id
+            or event.get("loaderId") != lifecycle.loader_id
+            or event.get("frameId") != lifecycle.frame_id
+            or event.get("documentURL") != _ERROR_DOCUMENT_URL
+            or event.get("type") != "Image"
+            or event.get("redirectHasExtraInfo") is not False
+            or event.get("hasUserGesture") is not False
+            or not _is_finite_protocol_number(timestamp)
+            or float(timestamp) <= lifecycle.latest_timestamp
+            or not _is_finite_protocol_number(wall_time)
+            or float(wall_time) <= 0
+            or not isinstance(request, Mapping)
+            or frozenset(request) != _ERROR_DOCUMENT_RESOURCE_INNER_REQUEST_FIELDS
+            or request.get("method") != "GET"
+            or request.get("headers")
+            != {
+                "User-Agent": _PINNED_ERROR_DOCUMENT_USER_AGENT,
+                "Referer": "",
+            }
+            or request.get("mixedContentType") != "none"
+            or request.get("initialPriority") != "Low"
+            or request.get("referrerPolicy") != "strict-origin-when-cross-origin"
+            or request.get("isSameSite") is not False
+            or not isinstance(initiator, Mapping)
+            or frozenset(initiator) != _ERROR_DOCUMENT_RESOURCE_INITIATOR_FIELDS
+            or initiator.get("type") != "parser"
+            or initiator.get("url") != _ERROR_DOCUMENT_URL
+            or type(initiator.get("lineNumber")) is not int
+            or not 0 <= initiator.get("lineNumber") <= _ERROR_DOCUMENT_PARSER_LINE_MAX
+            or type(initiator.get("columnNumber")) is not int
+            or not 0 <= initiator.get("columnNumber") <= _ERROR_DOCUMENT_PARSER_COLUMN_MAX
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resource request signature was invalid"
+            )
+        url = request.get("url")
+        if not isinstance(url, str):
+            raise CdpTargetIntegrityError("Chromium error-document resource URL was invalid")
+        signature = self._error_document_resource_signature(url)
+        if signature is None:
+            raise CdpTargetIntegrityError("Chromium error-document resource URL was not pinned")
+        signature_index, _length = signature
+        parser_line = initiator["lineNumber"]
+        parser_column = initiator["columnNumber"]
+        if (
+            lifecycle.active is not None
+            or lifecycle.complete
+            or signature_index != lifecycle.next_signature_index
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resources were duplicated or reordered"
+            )
+        if signature_index == 0:
+            if (
+                lifecycle.initiator_line_base is not None
+                or lifecycle.initiator_column_base is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "Chromium error-document resource parser position state was invalid"
+                )
+        elif (
+            lifecycle.initiator_line_base is None
+            or lifecycle.initiator_column_base is None
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resource parser position state was invalid"
+            )
+        resource_key = source.request_chain_key(request_id)
+        if (
+            resource_key in self._error_resource_by_request_id
+            or resource_key in self._retired_error_resource_request_ids
+            or self._active_requests.get(request_id)
+            or resource_key in self._pending_blocked_documents
+            or resource_key in self._error_document_finishes
+            or resource_key in self._retired_error_document_chains
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resource request identity was reused"
+            )
+        resource = _ErrorDocumentResource(
+            request_id=request_id,
+            url=url,
+            signature_index=signature_index,
+            request_timestamp=float(timestamp),
+        )
+        lifecycle.active = resource
+        lifecycle.started = True
+        lifecycle.latest_timestamp = float(timestamp)
+        self._error_resource_by_request_id[resource_key] = lifecycle
+        if signature_index == 0:
+            lifecycle.initiator_line_base = parser_line
+            lifecycle.initiator_column_base = parser_column
+
+    @staticmethod
+    def _validate_error_document_resource_response(
+        event: Mapping[str, Any],
+        *,
+        lifecycle: _ErrorDocumentResources,
+        resource: _ErrorDocumentResource,
+    ) -> float:
+        response = event.get("response")
+        timestamp = event.get("timestamp")
+        if (
+            frozenset(event) != _ERROR_DOCUMENT_RESOURCE_RESPONSE_FIELDS
+            or event.get("requestId") != resource.request_id
+            or event.get("loaderId") != lifecycle.loader_id
+            or event.get("frameId") != lifecycle.frame_id
+            or event.get("type") != "Image"
+            or event.get("hasExtraInfo") is not False
+            or not _is_finite_protocol_number(timestamp)
+            or float(timestamp) <= lifecycle.latest_timestamp
+            or not isinstance(response, Mapping)
+            or frozenset(response) != _ERROR_DOCUMENT_RESOURCE_INNER_RESPONSE_FIELDS
+            or response.get("url") != resource.url
+            or type(response.get("status")) is not int
+            or response.get("status") != 200
+            or response.get("statusText") != "OK"
+            or response.get("headers") != {"Content-Type": "image/png"}
+            or response.get("mimeType") != "image/png"
+            or response.get("charset") != ""
+            or response.get("connectionReused") is not False
+            or type(response.get("connectionId")) is not int
+            or response.get("connectionId") != 0
+            or response.get("fromDiskCache") is not False
+            or response.get("fromServiceWorker") is not False
+            or response.get("fromPrefetchCache") is not False
+            or type(response.get("encodedDataLength")) is not int
+            or response.get("encodedDataLength") != 0
+            or response.get("protocol") != "data"
+            or response.get("securityState") != "unknown"
+            or response.get("isIpProtectionUsed") is not False
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resource response signature was invalid"
+            )
+        return float(timestamp)
+
+    def _consume_error_document_resource_event(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Suppress only Chromium 143's pinned, inline error-page resources."""
+
+        request_id = event.get("requestId")
+        resource_key = (
+            source.request_chain_key(request_id)
+            if isinstance(request_id, str) and request_id
+            else None
+        )
+        if (
+            isinstance(request_id, str)
+            and request_id
+            and (
+                any(
+                    key[-1] == request_id and key != resource_key
+                    for key in self._error_resource_by_request_id
+                )
+                or any(
+                    key[-1] == request_id and key != resource_key
+                    for key in self._retired_error_resource_request_ids
+                )
+            )
+        ):
+            raise CdpTargetIntegrityError("Chromium error-document resource crossed target sources")
+        if resource_key is not None and resource_key in self._retired_error_resource_request_ids:
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resource request identity was reused"
+            )
+        lifecycle = (
+            self._error_resource_by_request_id.get(resource_key)
+            if resource_key is not None
+            else None
+        )
+        loader_lifecycle = self._error_document_resources_for_loader(
+            source,
+            event.get("loaderId"),
+        )
+        loader_id = event.get("loaderId")
+        if (
+            isinstance(loader_id, str)
+            and loader_id
+            and loader_lifecycle is None
+            and any(
+                candidate.loader_id == loader_id and candidate.source != source
+                for candidate in self._error_document_resources.values()
+            )
+        ):
+            raise CdpTargetIntegrityError("Chromium error-document loader crossed target sources")
+
+        if method == "Network.requestWillBeSent":
+            initiator = event.get("initiator")
+            looks_internal = (
+                event.get("documentURL") == _ERROR_DOCUMENT_URL
+                or isinstance(initiator, Mapping)
+                and initiator.get("url") == _ERROR_DOCUMENT_URL
+            )
+            if loader_lifecycle is None:
+                if looks_internal:
+                    raise CdpTargetIntegrityError(
+                        "Chromium error-document resource had no denied Document owner"
+                    )
+                return False
+            self._start_error_document_resource(source, event, loader_lifecycle)
+            return True
+
+        fetch_network_id = event.get("networkId") if method == "Fetch.requestPaused" else None
+        if isinstance(fetch_network_id, str) and fetch_network_id:
+            fetch_resource_key = source.request_chain_key(fetch_network_id)
+            if fetch_resource_key in self._error_resource_by_request_id:
+                raise CdpTargetIntegrityError(
+                    "Chromium error-document inline resource entered Fetch policy"
+                )
+
+        if lifecycle is None:
+            # An event which still carries an armed error-document loader is an
+            # out-of-order or unrecognised part of the internal lifecycle.
+            if loader_lifecycle is not None:
+                raise CdpTargetIntegrityError(
+                    "Chromium error-document resource event was out of order"
+                )
+            return False
+        resource = lifecycle.active
+        if (
+            source != self.root_source
+            or source != lifecycle.source
+            or resource is None
+            or resource.request_id != request_id
+        ):
+            raise CdpTargetIntegrityError("Chromium error-document resource state was ambiguous")
+        if method == "Network.requestServedFromCache":
+            if resource.phase != "awaiting-cache" or frozenset(event) != {"requestId"}:
+                raise CdpTargetIntegrityError("Chromium error-document cache marker was invalid")
+            resource.phase = "awaiting-response"
+            return True
+        if method == "Network.responseReceived":
+            if resource.phase != "awaiting-response":
+                raise CdpTargetIntegrityError(
+                    "Chromium error-document resource response was out of order"
+                )
+            timestamp = self._validate_error_document_resource_response(
+                event,
+                lifecycle=lifecycle,
+                resource=resource,
+            )
+            resource.phase = "awaiting-terminal"
+            resource.response_timestamp = timestamp
+            lifecycle.latest_timestamp = timestamp
+            return True
+        if method == "Network.loadingFinished":
+            timestamp = event.get("timestamp")
+            encoded_length = event.get("encodedDataLength")
+            if (
+                resource.phase != "awaiting-terminal"
+                or frozenset(event) != _ERROR_DOCUMENT_FINISH_FIELDS
+                or not _is_finite_protocol_number(timestamp)
+                or float(timestamp) <= lifecycle.latest_timestamp
+                or type(encoded_length) not in {int, float}
+                or isinstance(encoded_length, bool)
+                or float(encoded_length) != 0
+            ):
+                raise CdpTargetIntegrityError(
+                    "Chromium error-document resource terminal was invalid"
+                )
+            self._error_resource_by_request_id.pop(resource_key)
+            self._retired_error_resource_request_ids.add(resource_key)
+            lifecycle.active = None
+            lifecycle.next_signature_index += 1
+            lifecycle.latest_timestamp = float(timestamp)
+            return True
+        raise CdpTargetIntegrityError(
+            f"Chromium error-document resource emitted unexpected {method}"
+        )
+
+    def _register_bootstrap_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> _BootstrapFetchDecision | None:
+        """Bind an owner-side Fetch pause only to a guarded shared worker.
+
+        Ordinary page scripts are never speculatively held: the Fetch
+        ``networkId`` must already name a guarded shared-worker bootstrap,
+        and its exact owner-side Network Script occurrence must already exist.
+        Dedicated-worker bootstrap Fetch can precede target attachment in
+        Chromium and therefore retains the normal immediate policy path.
+        """
+
+        network_id = event.get("networkId")
+        if not isinstance(network_id, str) or not network_id:
+            return None
+        bootstrap = self._guarded_shared_bootstrap_for_target_id(network_id)
+        if bootstrap is None:
+            return None
+        request_id = event.get("requestId")
+        request = event.get("request")
+        resource_type = event.get("resourceType")
+        frame_id = event.get("frameId")
+        if (
+            not isinstance(request_id, str)
+            or not request_id
+            or not isinstance(request, Mapping)
+            or resource_type != "Other"
+            or request.get("method") != "GET"
+            or bootstrap.owner_source != source
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch identity, type, method, URL, or owner is invalid"
+            )
+        owner_occurrences = [
+            active
+            for active in self._active_requests.get(network_id, ())
+            if active.source == source
+        ]
+        if len(owner_occurrences) != 1:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch has no unique owner Network occurrence"
+            )
+        owner = owner_occurrences[0]
+        if (
+            owner.resource_type != "Script"
+            or owner.method != "GET"
+            or request.get("url") != owner.url
+            or (frame_id is not None and frame_id != owner.frame_id)
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch does not match its owner Network Script"
+            )
+        identity = (source, request_id)
+        if identity in self._bootstrap_fetch_by_policy_identity:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch interception was duplicated or reused"
+            )
+        prearm = bootstrap.fetch_request_id is None
+        if prearm:
+            if owner.url != bootstrap.url:
+                raise CdpTargetIntegrityError(
+                    "initial worker-bootstrap Fetch changed its target URL"
+                )
+            bootstrap.fetch_source = source
+            bootstrap.fetch_request_id = request_id
+            bootstrap.fetch_network_id = network_id
+        elif (
+            bootstrap.fetch_policy_outcome != "continue"
+            or not bootstrap.fetch_released
+            or bootstrap.fetch_source != source
+            or bootstrap.fetch_network_id != network_id
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap redirect arrived before its exact prearm release"
+            )
+        decision = _BootstrapFetchDecision(bootstrap=bootstrap, prearm=prearm)
+        self._bootstrap_fetch_by_policy_identity[identity] = decision
+        return decision
+
+    def _maybe_release_bootstrap_continue(self, bootstrap: _WorkerBootstrap) -> None:
+        if (
+            bootstrap.fetch_policy_outcome != "continue"
+            or bootstrap.fetch_release_issued
+            or bootstrap.fetch_released
+        ):
+            return
+        if bootstrap.source is None:
+            return
+        if (
+            bootstrap.initial_setup_envelopes_expected <= 0
+            or bootstrap.initial_setup_envelopes_issued
+            != bootstrap.initial_setup_envelopes_expected
+        ):
+            return
+        source = bootstrap.fetch_source
+        request_id = bootstrap.fetch_request_id
+        if source is None or request_id is None:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue lost its owner policy identity"
+            )
+        state = self._state(source.session_path)
+        if state.source != source or state.phase not in {"ready", "resuming"}:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap owner detached before its held request was released"
+            )
+        bootstrap.fetch_release_issued = True
+        self._send_policy_decision(
+            source,
+            "Fetch.continueRequest",
+            {"requestId": request_id},
+            label="worker-bootstrap-prearmed:Fetch.continueRequest",
+            on_success=lambda _result, held=bootstrap: (
+                self._acknowledge_bootstrap_continue(held)
+            ),
+        )
+
+    def _acknowledge_bootstrap_continue(self, bootstrap: _WorkerBootstrap) -> None:
+        if (
+            bootstrap.fetch_policy_outcome != "continue"
+            or not bootstrap.fetch_release_issued
+            or bootstrap.fetch_released
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue acknowledgement was out of sequence"
+            )
+        bootstrap.fetch_released = True
+        bootstrap.fetch_release_after_setup_envelopes = True
+        if self._aborting:
+            return
+        source = bootstrap.fetch_source
+        if source is None:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue acknowledgement lost its owner identity"
+            )
+        state = self._state(source.session_path)
+        if state.source != source or state.phase not in {"ready", "resuming"}:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap owner detached before its continue acknowledgement"
+            )
+        if bootstrap.source is None:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue acknowledgement lost its child identity"
+            )
+        child_state = self._state(bootstrap.source.session_path)
+        if child_state.phase in {
+            "awaiting-bootstrap-policy",
+            "awaiting-bootstrap-release",
+        }:
+            self._resume_instrumented_child(bootstrap.source)
+
+    def _install_root_page_frame_tree(self, result: Mapping[str, Any]) -> None:
+        """Establish the pre-navigation root Page frame and descendant ancestry."""
+
+        tree = result.get("frameTree")
+        if not isinstance(tree, Mapping):
+            raise CdpTargetIntegrityError("root Page frame-tree response is malformed")
+
+        discovered: dict[str, str | None] = {}
+
+        def visit(node: object, parent_id: str | None) -> None:
+            if not isinstance(node, Mapping):
+                raise CdpTargetIntegrityError("root Page frame-tree node is malformed")
+            frame = node.get("frame")
+            if not isinstance(frame, Mapping):
+                raise CdpTargetIntegrityError("root Page frame-tree omitted a frame")
+            frame_id = frame.get("id")
+            if not isinstance(frame_id, str) or not frame_id or frame_id in discovered:
+                raise CdpTargetIntegrityError("root Page frame-tree identity is malformed")
+            reported_parent = frame.get("parentId")
+            if parent_id is None:
+                if reported_parent is not None:
+                    raise CdpTargetIntegrityError("root Page frame unexpectedly names a parent")
+            elif reported_parent != parent_id:
+                raise CdpTargetIntegrityError("root Page frame-tree ancestry is inconsistent")
+            if len(discovered) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError("root Page frame-tree exceeded its identity bound")
+            discovered[frame_id] = parent_id
+            children = node.get("childFrames", [])
+            if not isinstance(children, list):
+                raise CdpTargetIntegrityError("root Page frame-tree children are malformed")
+            for child in children:
+                visit(child, frame_id)
+
+        visit(tree, None)
+        roots = [frame_id for frame_id, parent_id in discovered.items() if parent_id is None]
+        if len(roots) != 1:
+            raise CdpTargetIntegrityError("root Page frame-tree has no unique root")
+        observed_root = roots[0]
+        if self._root_frame_id is not None and self._root_frame_id != observed_root:
+            raise CdpTargetIntegrityError("root Page frame identity changed before instrumentation")
+        self._root_frame_id = observed_root
+        self._page_frame_parents = discovered
+        self._seen_page_frame_ids = set(discovered)
+
+    def _next_srcdoc_event_ordinal(self) -> int:
+        if self._srcdoc_event_ordinal >= _SRCDOC_EVENT_ORDINAL_LIMIT:
+            raise CdpTargetIntegrityError("srcdoc Page event ordinal bound was exceeded")
+        self._srcdoc_event_ordinal += 1
+        return self._srcdoc_event_ordinal
+
+    def _handle_root_page_lifecycle(
+        self,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Track exact Page evidence for srcdoc terminals and pre-network CSP."""
+
+        if not self._track_root_srcdoc_lifecycle or self._root_source is None:
+            raise CdpTargetIntegrityError("root Page lifecycle arrived outside its policy")
+        if method == "Page.frameNavigated":
+            self._record_csp_error_navigation(event)
+            return
+        if method == "Page.frameAttached":
+            if not {"frameId", "parentFrameId"}.issubset(event) or not set(event).issubset(
+                {"frameId", "parentFrameId", "stack"}
+            ):
+                raise CdpTargetIntegrityError("root Page frame attachment is malformed")
+            frame_id = event.get("frameId")
+            parent_id = event.get("parentFrameId")
+            if (
+                not isinstance(frame_id, str)
+                or not frame_id
+                or not isinstance(parent_id, str)
+                or not parent_id
+                or parent_id not in self._page_frame_parents
+                or frame_id == self._root_frame_id
+                or frame_id in self._page_frame_parents
+                or ("stack" in event and not isinstance(event["stack"], Mapping))
+            ):
+                raise CdpTargetIntegrityError("root Page frame attachment identity is invalid")
+            if frame_id in self._seen_page_frame_ids:
+                # Frame identifiers can be reused across Chromium process
+                # swaps.  Keep ordinary browsing functional but permanently
+                # disqualify that ambiguous identity from this exception.
+                self._srcdoc_ineligible_frame_ids.add(frame_id)
+                self._csp_ineligible_frame_ids.add(frame_id)
+            elif len(self._seen_page_frame_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError("root Page frame identity history saturated")
+            self._seen_page_frame_ids.add(frame_id)
+            # A new attachment is a new live occurrence of this identity.  It
+            # must not inherit the one-use removal authority retained for the
+            # preceding swapped-out occurrence.
+            self._page_frame_pending_swap_removals.discard(frame_id)
+            self._page_frame_parents[frame_id] = parent_id
+            self._csp_candidates.pop(frame_id, None)
+            if frame_id not in self._csp_ineligible_frame_ids:
+                self._csp_attachment_ordinals[frame_id] = self._next_csp_event_ordinal()
+            for state in self._states.values():
+                if state.target_type == "iframe" and state.source.target_id == frame_id:
+                    state.iframe_page_remove_seen = False
+            return
+        if method == "Page.frameDetached":
+            if set(event) != {"frameId", "reason"}:
+                raise CdpTargetIntegrityError("root Page frame detachment is malformed")
+            frame_id = event.get("frameId")
+            reason = event.get("reason")
+            if (
+                not isinstance(frame_id, str)
+                or not frame_id
+                or frame_id == self._root_frame_id
+                or reason not in {"remove", "swap"}
+            ):
+                raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
+            if frame_id not in self._page_frame_parents:
+                if (
+                    reason == "remove"
+                    and frame_id in self._page_frame_pending_swap_removals
+                    and frame_id in self._seen_page_frame_ids
+                    and frame_id in self._srcdoc_ineligible_frame_ids
+                    and frame_id not in self._srcdoc_candidates
+                ):
+                    # Chromium 143 can first retire a cross-origin iframe with
+                    # reason=swap, then emit its final reason=remove either
+                    # during ordinary browsing or while the browser context is
+                    # closing, including disposal of an already rejected
+                    # render. Accept that exact causal successor once; no
+                    # unknown or reused frame gains generic absent-identity
+                    # detach authority.
+                    self._page_frame_pending_swap_removals.remove(frame_id)
+                    if not self._shutting_down and not self._aborting:
+                        for state in self._states.values():
+                            if (
+                                state.target_type == "iframe"
+                                and state.phase == "resuming"
+                                and state.source.target_id == frame_id
+                                and self._target_routes.get(frame_id)
+                                == state.source.session_path
+                            ):
+                                # The final remove carries the same cleanup
+                                # proof as a directly observed Page removal.
+                                # Prearm and pending-work checks remain below.
+                                state.iframe_page_remove_seen = True
+                    return
+                raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
+            if frame_id in self._page_frame_pending_swap_removals:
+                raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
+            descendants = {
+                candidate_id
+                for candidate_id in self._page_frame_parents
+                if self._page_frame_is_descendant(candidate_id, frame_id)
+            }
+            descendants.add(frame_id)
+            for candidate_id in descendants:
+                candidate = self._srcdoc_candidates.get(candidate_id)
+                if candidate is not None and candidate.terminal_request_id is not None:
+                    if not candidate.abort_owned:
+                        raise CdpTargetIntegrityError(
+                            "srcdoc pseudo-Document frame detached before its stop event"
+                        )
+                    # Context disposal may report the detach before a final
+                    # frameStoppedLoading (or omit that stop altogether).
+                    # Retire abort-owned evidence at the first terminal Page
+                    # event so either ordering has the same accounting and a
+                    # later stop is an idempotent event for an ineligible frame.
+                    self._srcdoc_aborted += 1
+                    self._srcdoc_candidates.pop(candidate_id)
+                elif candidate is not None:
+                    self._srcdoc_candidates.pop(candidate_id)
+                self._page_frame_parents.pop(candidate_id, None)
+                self._srcdoc_ineligible_frame_ids.add(candidate_id)
+                self._csp_candidates.pop(candidate_id, None)
+                self._csp_attachment_ordinals.pop(candidate_id, None)
+                self._csp_ineligible_frame_ids.add(candidate_id)
+            if reason == "swap" and not self._shutting_down and not self._aborting:
+                # The frame identity is already part of the bounded, permanent
+                # seen-frame history, so this optional one-use set cannot grow
+                # beyond the existing frame-identity limit.
+                self._page_frame_pending_swap_removals.add(frame_id)
+            elif reason == "remove" and not self._shutting_down and not self._aborting:
+                for state in self._states.values():
+                    if state.target_type == "iframe" and state.source.target_id == frame_id:
+                        state.iframe_page_remove_seen = True
+            return
+        if method == "Page.frameRequestedNavigation":
+            if event.get("url") != "about:srcdoc":
+                self._record_csp_page_lifecycle(method, event)
+                return
+            if isinstance(event.get("frameId"), str):
+                self._csp_candidates.pop(event["frameId"], None)
+            if set(event) != _SRCDOC_REQUEST_FIELDS:
+                raise CdpTargetIntegrityError("srcdoc Page navigation request is malformed")
+            frame_id = event.get("frameId")
+            if (
+                not isinstance(frame_id, str)
+                or not frame_id
+                or frame_id == self._root_frame_id
+                or frame_id not in self._page_frame_parents
+                or frame_id in self._srcdoc_ineligible_frame_ids
+                or event.get("reason") != "initialFrameNavigation"
+                or event.get("disposition") != "currentTab"
+                or frame_id in self._srcdoc_candidates
+                or (self._shutting_down and not self._aborting)
+            ):
+                raise CdpTargetIntegrityError("srcdoc Page navigation request is ineligible")
+            if len(self._srcdoc_candidates) >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+                self._srcdoc_candidate_limit_saturated = True
+                raise CdpTargetIntegrityError("srcdoc Page lifecycle candidate bound was exceeded")
+            self._srcdoc_candidates[frame_id] = _SrcdocPseudoDocument(
+                frame_id=frame_id,
+                requested_event_ordinal=self._next_srcdoc_event_ordinal(),
+                abort_owned=self._aborting,
+            )
+            return
+        if self._record_csp_page_lifecycle(method, event):
+            return
+        frame_id = event.get("frameId")
+        candidate = (
+            self._srcdoc_candidates.get(frame_id)
+            if isinstance(frame_id, str) and frame_id
+            else None
+        )
+        if candidate is None:
+            return
+        if method == "Page.frameStartedNavigating":
+            loader_id = event.get("loaderId")
+            if (
+                set(event) != _SRCDOC_STARTED_NAVIGATING_FIELDS
+                or event.get("frameId") != candidate.frame_id
+                or not isinstance(loader_id, str)
+                or not loader_id
+                or event.get("navigationType") != "differentDocument"
+                or event.get("url") != "about:srcdoc"
+            ):
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page started-navigation event is malformed"
+                )
+            if (
+                candidate.phase != "armed"
+                or candidate.loader_id is not None
+                or candidate.started_navigating_event_ordinal is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page navigation started out of sequence"
+                )
+            if (
+                loader_id in self._srcdoc_seen_page_loader_ids
+                or loader_id in self._csp_seen_loader_ids
+                or loader_id in self._srcdoc_seen_network_request_ids
+                or loader_id in self._srcdoc_seen_fetch_network_ids
+                or loader_id in self._srcdoc_terminal_request_ids
+                or loader_id in self._seen_page_frame_ids
+                or self._active_requests.get(loader_id)
+                or any(key[1] == loader_id for key in self._root_terminal_requests)
+            ):
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page loader identity was reused or network-observed"
+                )
+            if len(self._srcdoc_seen_page_loader_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page loader identity history saturated"
+                )
+            self._srcdoc_seen_page_loader_ids.add(loader_id)
+            candidate.loader_id = loader_id
+            candidate.started_navigating_event_ordinal = (
+                self._next_srcdoc_event_ordinal()
+            )
+            candidate.phase = "navigating"
+            return
+        if set(event) != {"frameId"}:
+            raise CdpTargetIntegrityError("srcdoc Page loading event is malformed")
+        if method == "Page.frameStartedLoading":
+            if (
+                candidate.phase != "navigating"
+                or candidate.loader_id is None
+                or candidate.started_navigating_event_ordinal is None
+                or candidate.started_event_ordinal is not None
+            ):
+                raise CdpTargetIntegrityError("srcdoc Page loading started out of sequence")
+            candidate.started_event_ordinal = self._next_srcdoc_event_ordinal()
+            candidate.phase = "loading"
+            return
+        if method != "Page.frameStoppedLoading":
+            raise CdpTargetIntegrityError(f"unsupported root Page lifecycle event: {method}")
+        stopped_ordinal = self._next_srcdoc_event_ordinal()
+        self._srcdoc_ineligible_frame_ids.add(candidate.frame_id)
+        if candidate.terminal_request_id is None:
+            if candidate.phase not in {"armed", "navigating", "loading"}:
+                raise CdpTargetIntegrityError("srcdoc Page loading stopped out of sequence")
+            self._srcdoc_candidates.pop(candidate.frame_id)
+            return
+        if candidate.phase != "quarantined" or candidate.terminal_event_ordinal is None:
+            raise CdpTargetIntegrityError("srcdoc pseudo-Document stop was out of sequence")
+        candidate.stopped_event_ordinal = stopped_ordinal
+        if candidate.abort_owned:
+            candidate.phase = "abort-drained"
+            return
+        if (
+            candidate.loader_id is None
+            or candidate.started_navigating_event_ordinal is None
+            or candidate.started_event_ordinal is None
+            or candidate.loader_id != candidate.terminal_request_id
+            or candidate.terminal_variant is None
+            or candidate.terminal_method not in _SRCDOC_TERMINAL_METHODS
+            or candidate.terminal_fields is None
+        ):
+            raise CdpTargetIntegrityError("srcdoc pseudo-Document lost its start evidence")
+        loader_hash = hashlib.sha256(candidate.loader_id.encode()).hexdigest()
+        diagnostic = {
+            "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+            "source_role": "root-page",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "loader_id_sha256": loader_hash,
+            "request_id_sha256": hashlib.sha256(
+                candidate.terminal_request_id.encode()
+            ).hexdigest(),
+            "requested_event_ordinal": candidate.requested_event_ordinal,
+            "started_navigating_event_ordinal": (
+                candidate.started_navigating_event_ordinal
+            ),
+            "started_event_ordinal": candidate.started_event_ordinal,
+            "terminal_event_ordinal": candidate.terminal_event_ordinal,
+            "stopped_event_ordinal": stopped_ordinal,
+            "navigation_reason": "initialFrameNavigation",
+            "navigation_type": "differentDocument",
+            "disposition": "currentTab",
+            "url_kind": "about:srcdoc",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "request_id_matches_loader": True,
+            "terminal_variant": candidate.terminal_variant,
+            "terminal_method": candidate.terminal_method,
+            "terminal_fields": list(candidate.terminal_fields),
+            "resource_type": candidate.terminal_resource_type,
+            "error_text": candidate.terminal_error_text,
+            "canceled": candidate.terminal_canceled,
+            "encoded_data_length": candidate.terminal_encoded_data_length,
+            "network_request_seen": False,
+            "fetch_pause_seen": False,
+            "frame_stopped_after_terminal": True,
+        }
+        self._srcdoc_diagnostics.append(diagnostic)
+        self._srcdoc_candidates.pop(candidate.frame_id)
+        callback = self._on_internal_document_lifecycle
+        if callback is not None:
+            callback(self.root_source, deepcopy(diagnostic))
+
+    def _next_csp_event_ordinal(self) -> int:
+        if self._csp_event_ordinal >= _SRCDOC_EVENT_ORDINAL_LIMIT:
+            raise CdpTargetIntegrityError("pre-request CSP Page event bound was exceeded")
+        self._csp_event_ordinal += 1
+        return self._csp_event_ordinal
+
+    def _record_csp_page_lifecycle(self, method: str, event: Mapping[str, Any]) -> bool:
+        """Retain only a fresh attached iframe's exact initial HTTPS navigation."""
+
+        frame_id = event.get("frameId")
+        if not isinstance(frame_id, str) or not frame_id:
+            return False
+        if method in {"Page.frameRequestedNavigation", "Page.frameStartedNavigating", "Page.frameStartedLoading"} and any(
+            candidate.frame_id == frame_id for candidate in self._csp_denied_navigations.values()
+        ):
+            raise CdpTargetIntegrityError("Page navigation reused a denied-before-network CSP frame")
+        if method == "Page.frameRequestedNavigation":
+            if frame_id in self._csp_candidates:
+                self._csp_candidates.pop(frame_id)
+                self._csp_ineligible_frame_ids.add(frame_id)
+                return False
+            url = event.get("url")
+            try:
+                parsed = urlsplit(url) if isinstance(url, str) else None
+                https_url = bool(parsed and parsed.scheme == "https" and parsed.hostname and parsed.username is None and parsed.password is None and not parsed.fragment)
+            except ValueError:
+                https_url = False
+            if (
+                set(event) != _SRCDOC_REQUEST_FIELDS
+                or not https_url or event.get("reason") != "initialFrameNavigation"
+                or event.get("disposition") != "currentTab"
+                or frame_id == self._root_frame_id
+                or self._page_frame_parents.get(frame_id) is None
+                or frame_id not in self._csp_attachment_ordinals
+                or frame_id in self._csp_ineligible_frame_ids
+                or frame_id in self._srcdoc_candidates
+                or self._shutting_down or self._aborting
+            ):
+                return False
+            if len(self._csp_candidates) >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+                raise CdpTargetIntegrityError("pre-request CSP candidate bound was exceeded")
+            self._csp_candidates[frame_id] = _PreRequestCspNavigation(
+                frame_id=frame_id, parent_frame_id=self._page_frame_parents[frame_id], url=url,
+                attached_event_ordinal=self._csp_attachment_ordinals[frame_id],
+                requested_event_ordinal=self._next_csp_event_ordinal(),
+            )
+            return True
+        candidate = self._csp_candidates.get(frame_id)
+        if candidate is None:
+            return False
+        if method == "Page.frameStartedNavigating":
+            loader_id = event.get("loaderId")
+            if (
+                set(event) != _SRCDOC_STARTED_NAVIGATING_FIELDS
+                or event.get("url") != candidate.url
+                or event.get("navigationType") != "differentDocument"
+                or not isinstance(loader_id, str) or not loader_id
+                or candidate.loader_id is not None
+                or loader_id in self._csp_seen_loader_ids
+                or loader_id in self._srcdoc_seen_page_loader_ids
+                or not self._csp_loader_is_unobserved(loader_id)
+            ):
+                raise CdpTargetIntegrityError("pre-request CSP Page loader evidence is invalid")
+            if len(self._csp_seen_loader_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError("pre-request CSP Page loader history saturated")
+            self._csp_seen_loader_ids.add(loader_id)
+            candidate.loader_id = loader_id
+            candidate.started_navigating_event_ordinal = self._next_csp_event_ordinal()
+            return True
+        if method == "Page.frameStartedLoading":
+            if set(event) != {"frameId"} or candidate.loader_id is None or candidate.started_event_ordinal is not None:
+                raise CdpTargetIntegrityError("pre-request CSP Page loading evidence is invalid")
+            candidate.started_event_ordinal = self._next_csp_event_ordinal()
+            return True
+        if method == "Page.frameStoppedLoading":
+            self._csp_candidates.pop(frame_id)
+            self._csp_ineligible_frame_ids.add(frame_id)
+        return False
+
+    def _csp_loader_is_unobserved(self, loader_id: str, *, allow_denied: bool = False) -> bool:
+        return not (
+            self._srcdoc_network_history_saturated or self._srcdoc_fetch_history_saturated
+            or self._pre_shutdown_fetch_identity_saturated
+            or (not allow_denied and loader_id in self._csp_denied_loader_ids)
+            or loader_id in self._srcdoc_seen_network_request_ids
+            or loader_id in self._srcdoc_seen_fetch_network_ids
+            or loader_id in self._srcdoc_terminal_request_ids
+            or loader_id in self._seen_page_frame_ids
+            or self._active_requests.get(loader_id)
+            or any(key[1] == loader_id for key in self._root_terminal_requests)
+            or any(key[1] == loader_id for key in self._pre_shutdown_fetch_identities)
+        )
+
+    def _consume_pre_request_csp_terminal(
+        self, source: CdpTargetSource, method: str, event: Mapping[str, Any]
+    ) -> bool:
+        """Record a browser-denied navigation; synthesize no Network occurrence."""
+
+        if (
+            not self._track_root_srcdoc_lifecycle or source != self.root_source
+            or self._shutting_down or self._aborting
+            or method != "Network.loadingFailed"
+            or set(event) != _SRCDOC_ABORT_TERMINAL_FIELDS
+            or event.get("type") != "Document"
+            or event.get("errorText") != "net::ERR_BLOCKED_BY_CSP"
+            or event.get("canceled") is not False
+            or not _is_finite_protocol_number(event.get("timestamp"))
+            or event["timestamp"] < 0
+        ):
+            return False
+        request_id = event.get("requestId")
+        matches = [candidate for candidate in self._csp_candidates.values() if candidate.loader_id == request_id and candidate.started_event_ordinal is not None]
+        if len(matches) != 1:
+            return False
+        candidate = matches[0]
+        if (
+            not self._csp_loader_is_unobserved(request_id)
+            or any(
+                active.frame_id == candidate.frame_id
+                or active.source.target_id == candidate.frame_id
+                or active.source.parent_frame_id == candidate.frame_id
+                for occurrences in self._active_requests.values()
+                for active in occurrences
+            )
+            or candidate.frame_id == self._root_frame_id
+            or self._page_frame_parents.get(candidate.frame_id) is None
+            or candidate.frame_id in self._csp_ineligible_frame_ids
+        ):
+            raise CdpTargetIntegrityError("pre-request CSP terminal is not provably before Network")
+        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+            raise CdpTargetIntegrityError("pre-request CSP receipt bound was exceeded")
+        diagnostic = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "denied-before-network",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "parent_frame_id_sha256": hashlib.sha256(candidate.parent_frame_id.encode()).hexdigest(),
+            "loader_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "request_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "url_sha256": hashlib.sha256(candidate.url.encode()).hexdigest(),
+            "attached_event_ordinal": candidate.attached_event_ordinal,
+            "requested_event_ordinal": candidate.requested_event_ordinal,
+            "started_navigating_event_ordinal": candidate.started_navigating_event_ordinal,
+            "started_event_ordinal": candidate.started_event_ordinal,
+            "terminal_event_ordinal": self._next_csp_event_ordinal(),
+            "navigation_reason": "initialFrameNavigation", "navigation_type": "differentDocument",
+            "navigation_disposition": "currentTab", "url_kind": "https",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "terminal_method": method, "terminal_fields": sorted(event),
+            "terminal_timestamp": event["timestamp"], "resource_type": "Document",
+            "error_text": "net::ERR_BLOCKED_BY_CSP", "canceled": False,
+            "network_request_seen": False, "fetch_pause_seen": False,
+        }
+        self._csp_candidates.pop(candidate.frame_id)
+        self._csp_ineligible_frame_ids.add(candidate.frame_id)
+        self._srcdoc_ineligible_frame_ids.add(candidate.frame_id)
+        self._csp_denied_loader_ids.add(request_id)
+        self._csp_denied_navigations[request_id] = candidate
+        candidate.terminal_event_ordinal = diagnostic["terminal_event_ordinal"]
+        candidate.failed_timestamp = event["timestamp"]
+        candidate.denied_source = source
+        candidate.denied_target_generation = self._target_generations.get(candidate.frame_id)
+        self._csp_total += 1
+        self._srcdoc_diagnostics.append(diagnostic)
+        if self._on_internal_document_lifecycle is not None:
+            self._on_internal_document_lifecycle(source, deepcopy(diagnostic))
+        return True
+
+    def _csp_denied_frame_is_current(self, candidate: _PreRequestCspNavigation) -> bool:
+        """Keep the denied navigation bound to its original live attachment."""
+
+        return (
+            not self._shutting_down and not self._aborting
+            and candidate.frame_id != self._root_frame_id
+            and self._page_frame_parents.get(candidate.frame_id) == candidate.parent_frame_id
+            and self._csp_attachment_ordinals.get(candidate.frame_id) == candidate.attached_event_ordinal
+            and candidate.loader_id is not None
+            and self._csp_loader_is_unobserved(candidate.loader_id, allow_denied=True)
+            and not any(
+                active.frame_id == candidate.frame_id
+                or active.source.target_id == candidate.frame_id
+                or active.source.parent_frame_id == candidate.frame_id
+                for occurrences in self._active_requests.values() for active in occurrences
+            )
+        )
+
+    def _record_csp_error_navigation(self, event: Mapping[str, Any]) -> None:
+        """Authenticate the actual Chrome error page following a CSP denial."""
+
+        frame = event.get("frame")
+        if not isinstance(frame, Mapping):
+            return
+        matches = [candidate for candidate in self._csp_denied_navigations.values()
+                   if frame.get("id") == candidate.frame_id or frame.get("loaderId") == candidate.loader_id]
+        if not matches:
+            return  # Ordinary Page navigations acquire no exception authority.
+        if len(matches) != 1:
+            raise CdpTargetIntegrityError("CSP error-page navigation identity is ambiguous")
+        candidate = matches[0]
+        if (
+            set(event) != {"frame", "type"} or event.get("type") != "Navigation"
+            or set(frame) != _CSP_ERROR_NAVIGATED_FRAME_FIELDS
+            or frame.get("id") != candidate.frame_id
+            or frame.get("parentId") != candidate.parent_frame_id
+            or frame.get("loaderId") != candidate.loader_id
+            or frame.get("url") != _ERROR_DOCUMENT_URL
+            or frame.get("unreachableUrl") != candidate.url
+            or frame.get("mimeType") != "text/html"
+            or candidate.error_navigated_event_ordinal is not None
+            or candidate.internal_finish_seen
+            or candidate.canceled_successor_seen
+            or not self._csp_denied_frame_is_current(candidate)
+        ):
+            raise CdpTargetIntegrityError("CSP error-page navigation lacks its exact denied-frame witness")
+        candidate.error_navigated_event_ordinal = self._next_csp_event_ordinal()
+
+    def _consume_csp_internal_finish(
+        self, source: CdpTargetSource, method: str, event: Mapping[str, Any]
+    ) -> bool:
+        """Retain one proven browser-internal finish, without remote byte credit."""
+
+        if method != "Network.loadingFinished":
+            return False
+        candidate = self._csp_denied_navigations.get(event.get("requestId")) if isinstance(event.get("requestId"), str) else None
+        if candidate is None:
+            return False
+        timestamp, encoded_length = event.get("timestamp"), event.get("encodedDataLength")
+        if (
+            source != self.root_source or set(event) != _ERROR_DOCUMENT_FINISH_FIELDS
+            or candidate.error_navigated_event_ordinal is None
+            or candidate.internal_finish_seen or candidate.canceled_successor_seen
+            or not self._csp_denied_frame_is_current(candidate)
+            or not _is_finite_protocol_number(timestamp)
+            or candidate.failed_timestamp is None or timestamp <= candidate.failed_timestamp
+            or not _is_finite_protocol_number(encoded_length) or encoded_length <= 0
+            or self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            raise CdpTargetIntegrityError("CSP internal finish lacks its exact Chrome-error navigation witness")
+        diagnostic = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "browser-internal-error-document-finished",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "parent_frame_id_sha256": hashlib.sha256(candidate.parent_frame_id.encode()).hexdigest(),
+            "loader_id_sha256": hashlib.sha256(candidate.loader_id.encode()).hexdigest(),
+            "request_id_sha256": hashlib.sha256(candidate.loader_id.encode()).hexdigest(),
+            "url_sha256": hashlib.sha256(candidate.url.encode()).hexdigest(),
+            "denied_terminal_event_ordinal": candidate.terminal_event_ordinal,
+            "frame_navigated_event_ordinal": candidate.error_navigated_event_ordinal,
+            "terminal_event_ordinal": self._next_csp_event_ordinal(),
+            "frame_navigated_method": "Page.frameNavigated",
+            "frame_navigated_fields": ["frame", "type"],
+            "frame_fields": sorted(_CSP_ERROR_NAVIGATED_FRAME_FIELDS),
+            "navigation_type": "Navigation", "error_document_url": _ERROR_DOCUMENT_URL,
+            "mime_type": "text/html", "unreachable_url_matches_denied_url": True,
+            "terminal_method": method, "terminal_fields": sorted(event),
+            "terminal_timestamp": timestamp, "reported_encoded_data_length": encoded_length,
+            "encoded_data_length_use": "diagnostic-only",
+            "network_request_seen": False, "fetch_pause_seen": False,
+            "remote_response_body_credit": False,
+        }
+        candidate.internal_finish_seen = True
+        self._csp_internal_finish_total += 1
+        self._srcdoc_diagnostics.append(diagnostic)
+        if self._on_internal_document_lifecycle is not None:
+            self._on_internal_document_lifecycle(source, deepcopy(diagnostic))
+        return True
+
+    def _consume_csp_canceled_successor(
+        self, source: CdpTargetSource, method: str, event: Mapping[str, Any]
+    ) -> bool:
+        """Record one exact abort of an already browser-denied navigation."""
+
+        if method != "Network.loadingFailed":
+            return False
+        request_id = event.get("requestId")
+        candidate = self._csp_denied_navigations.get(request_id) if isinstance(request_id, str) else None
+        if candidate is None:
+            return False
+        timestamp = event.get("timestamp")
+        if (
+            source != self.root_source or source != candidate.denied_source
+            or self._target_generations.get(candidate.frame_id) != candidate.denied_target_generation
+            or set(event) != _SRCDOC_ABORT_TERMINAL_FIELDS
+            or event.get("type") != "Document" or event.get("canceled") is not True
+            or event.get("errorText") != "net::ERR_ABORTED"
+            or candidate.canceled_successor_seen or candidate.internal_finish_seen
+            or candidate.error_navigated_event_ordinal is not None
+            or not self._csp_denied_frame_is_current(candidate)
+            or not _is_finite_protocol_number(timestamp)
+            or candidate.failed_timestamp is None or timestamp <= candidate.failed_timestamp
+            or self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            raise CdpTargetIntegrityError("CSP canceled successor lacks its exact denied-navigation witness")
+        diagnostic = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "browser-canceled-denied-navigation",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "parent_frame_id_sha256": hashlib.sha256(candidate.parent_frame_id.encode()).hexdigest(),
+            "loader_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "request_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "url_sha256": hashlib.sha256(candidate.url.encode()).hexdigest(),
+            "denied_terminal_event_ordinal": candidate.terminal_event_ordinal,
+            "terminal_event_ordinal": self._next_csp_event_ordinal(),
+            "terminal_method": method, "terminal_fields": sorted(event),
+            "terminal_timestamp": timestamp, "resource_type": "Document",
+            "error_text": "net::ERR_ABORTED", "canceled": True,
+            "network_request_seen": False, "fetch_pause_seen": False,
+            "remote_response_body_credit": False,
+        }
+        candidate.canceled_successor_seen = True
+        self._csp_canceled_total += 1
+        self._srcdoc_diagnostics.append(diagnostic)
+        if self._on_internal_document_lifecycle is not None:
+            self._on_internal_document_lifecycle(source, deepcopy(diagnostic))
+        return True
+
+    def _page_frame_is_descendant(self, frame_id: str, ancestor_id: str) -> bool:
+        parent_id = self._page_frame_parents.get(frame_id)
+        visited: set[str] = set()
+        while parent_id is not None and parent_id not in visited:
+            if parent_id == ancestor_id:
+                return True
+            visited.add(parent_id)
+            parent_id = self._page_frame_parents.get(parent_id)
+        return False
+
+    def _record_srcdoc_identity_history(
+        self,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Retain every raw identity that could disprove an orphan terminal."""
+
+        if not self._track_root_srcdoc_lifecycle:
+            return
+        identities = {
+            identity for key in ("requestId", "loaderId", "networkId")
+            if isinstance(identity := event.get(key), str) and identity
+        }
+        if identities & self._csp_denied_loader_ids:
+            raise CdpTargetIntegrityError("CDP event reused a denied-before-network CSP loader")
+        if method in {"Network.requestWillBeSent", "Fetch.requestPaused"}:
+            for frame_id, candidate in tuple(self._csp_candidates.items()):
+                if event.get("frameId") == frame_id or candidate.loader_id in identities:
+                    self._csp_candidates.pop(frame_id)
+                    self._csp_ineligible_frame_ids.add(frame_id)
+        document_evidence = (
+            method == "Network.requestWillBeSent" and event.get("type") == "Document"
+        ) or (
+            method == "Fetch.requestPaused"
+            and event.get("resourceType") == "Document"
+        )
+        if document_evidence:
+            frame_id = event.get("frameId")
+            event_loader_ids = {
+                identity
+                for identity in (
+                    (event.get("requestId"), event.get("loaderId"))
+                    if method == "Network.requestWillBeSent"
+                    else (event.get("networkId"),)
+                )
+                if isinstance(identity, str) and identity
+            }
+            matching_accepted = [
+                accepted_frame_id
+                for accepted_frame_id, accepted_loader_id in (
+                    self._srcdoc_accepted_frame_loaders.items()
+                )
+                if (
+                    isinstance(frame_id, str)
+                    and frame_id
+                    and frame_id == accepted_frame_id
+                )
+                or accepted_loader_id in event_loader_ids
+            ]
+            matching_candidates = [
+                candidate
+                for candidate in self._srcdoc_candidates.values()
+                if (
+                    isinstance(frame_id, str)
+                    and frame_id
+                    and frame_id == candidate.frame_id
+                )
+                or candidate.loader_id in event_loader_ids
+            ]
+            if matching_accepted or any(
+                candidate.terminal_request_id is not None
+                for candidate in matching_candidates
+            ):
+                raise CdpTargetIntegrityError(
+                    "Document evidence arrived after srcdoc pseudo-Document quarantine"
+                )
+            if len(matching_candidates) > 1:
+                raise CdpTargetIntegrityError(
+                    "Document evidence ambiguously matched srcdoc Page candidates"
+                )
+            if matching_candidates:
+                candidate = matching_candidates[0]
+                self._srcdoc_candidates.pop(candidate.frame_id)
+                self._srcdoc_ineligible_frame_ids.add(candidate.frame_id)
+        if method == "Network.requestWillBeSent":
+            request_id = event.get("requestId")
+            loader_id = event.get("loaderId")
+            network_identities = {
+                identity
+                for identity in (request_id, loader_id)
+                if isinstance(identity, str) and identity
+            }
+            for identity in network_identities:
+                if identity in self._srcdoc_terminal_request_ids:
+                    raise CdpTargetIntegrityError(
+                        "Network request or loader reused a srcdoc pseudo-Document "
+                        "terminal identity"
+                    )
+                if identity not in self._srcdoc_seen_network_request_ids:
+                    if (
+                        len(self._srcdoc_seen_network_request_ids)
+                        >= _SRCDOC_IDENTITY_HISTORY_LIMIT
+                    ):
+                        self._srcdoc_network_history_saturated = True
+                        if self._srcdoc_total + self._csp_total:
+                            raise CdpTargetIntegrityError(
+                                "srcdoc Network identity history saturated after acceptance"
+                            )
+                    else:
+                        self._srcdoc_seen_network_request_ids.add(identity)
+        elif method == "Fetch.requestPaused":
+            network_id = event.get("networkId")
+            if isinstance(network_id, str) and network_id:
+                if network_id in self._srcdoc_terminal_request_ids:
+                    raise CdpTargetIntegrityError(
+                        "Fetch pause reused a srcdoc pseudo-Document terminal identity"
+                    )
+                if network_id not in self._srcdoc_seen_fetch_network_ids:
+                    if (
+                        len(self._srcdoc_seen_fetch_network_ids)
+                        >= _SRCDOC_IDENTITY_HISTORY_LIMIT
+                    ):
+                        self._srcdoc_fetch_history_saturated = True
+                        if self._srcdoc_total + self._csp_total:
+                            raise CdpTargetIntegrityError(
+                                "srcdoc Fetch identity history saturated after acceptance"
+                            )
+                    else:
+                        self._srcdoc_seen_fetch_network_ids.add(network_id)
+
+    def _consume_srcdoc_pseudo_document_terminal(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Quarantine the exact loader-bound otherwise-orphaned srcdoc terminal."""
+
+        if (
+            not self._track_root_srcdoc_lifecycle
+            or source != self.root_source
+            or method not in _SRCDOC_TERMINAL_METHODS
+            or not _is_finite_protocol_number(event.get("timestamp"))
+        ):
+            return False
+        if method == "Network.loadingFailed":
+            if (
+                set(event) != _SRCDOC_ABORT_TERMINAL_FIELDS
+                or event.get("type") != "Document"
+                or event.get("errorText") != "net::ERR_ABORTED"
+                or event.get("canceled") is not True
+            ):
+                return False
+            terminal_variant = "loading-failed-document-abort"
+            terminal_fields = tuple(sorted(_SRCDOC_ABORT_TERMINAL_FIELDS))
+            terminal_resource_type: str | None = "Document"
+            terminal_error_text: str | None = "net::ERR_ABORTED"
+            terminal_canceled: bool | None = True
+            terminal_encoded_data_length: int | None = None
+        else:
+            encoded_data_length = event.get("encodedDataLength")
+            if (
+                set(event) != _SRCDOC_FINISH_TERMINAL_FIELDS
+                or type(encoded_data_length) is not int
+                or encoded_data_length not in _SRCDOC_FINISH_ENCODED_DATA_LENGTHS
+            ):
+                return False
+            terminal_variant = "loading-finished"
+            terminal_fields = tuple(sorted(_SRCDOC_FINISH_TERMINAL_FIELDS))
+            terminal_resource_type = None
+            terminal_error_text = None
+            terminal_canceled = None
+            terminal_encoded_data_length = encoded_data_length
+        request_id = event.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            return False
+        loading_candidates = [
+            candidate
+            for candidate in self._srcdoc_candidates.values()
+            if candidate.phase == "loading"
+            and candidate.started_navigating_event_ordinal is not None
+            and candidate.started_event_ordinal is not None
+            and candidate.terminal_request_id is None
+        ]
+        eligible = [
+            candidate
+            for candidate in loading_candidates
+            if candidate.loader_id == request_id
+        ]
+        if len(eligible) > 1:
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document terminal matched multiple Page loaders"
+            )
+        if method == "Network.loadingFinished" and (
+            len(self._srcdoc_candidates) != 1 or len(loading_candidates) != 1
+        ):
+            return False
+        if len(eligible) != 1:
+            return False
+        candidate = eligible[0]
+        if (
+            self._srcdoc_network_history_saturated
+            or self._srcdoc_fetch_history_saturated
+            or request_id in self._srcdoc_seen_network_request_ids
+            or request_id in self._srcdoc_seen_fetch_network_ids
+            or request_id in self._srcdoc_terminal_request_ids
+            or request_id in self._csp_denied_loader_ids
+            or request_id in self._seen_page_frame_ids
+            or self._active_requests.get(request_id)
+            or any(key[1] == request_id for key in self._root_terminal_requests)
+        ):
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document terminal identity is not provably orphaned"
+            )
+        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+            self._srcdoc_candidate_limit_saturated = True
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document receipt bound was exceeded"
+            )
+        if (
+            candidate.frame_id in self._srcdoc_accepted_frame_loaders
+            or len(self._srcdoc_accepted_frame_loaders)
+            >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            self._srcdoc_candidate_limit_saturated = True
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document accepted identity bound was exceeded"
+            )
+        candidate.terminal_request_id = request_id
+        candidate.terminal_variant = terminal_variant
+        candidate.terminal_method = method
+        candidate.terminal_fields = terminal_fields
+        candidate.terminal_resource_type = terminal_resource_type
+        candidate.terminal_error_text = terminal_error_text
+        candidate.terminal_canceled = terminal_canceled
+        candidate.terminal_encoded_data_length = terminal_encoded_data_length
+        candidate.terminal_event_ordinal = self._next_srcdoc_event_ordinal()
+        candidate.phase = "quarantined"
+        candidate.abort_owned = candidate.abort_owned or self._aborting
+        self._srcdoc_accepted_frame_loaders[candidate.frame_id] = request_id
+        self._srcdoc_terminal_request_ids.add(request_id)
+        self._srcdoc_total += 1
+        self._srcdoc_terminal_outcomes[method] += 1
+        return True
+
+    def _handle_root_event(self, method: str, event: Mapping[str, Any]) -> None:
+        self._handle_forwarded(self.root_source, method, event)
+
+    def _target_lifecycle_event(self, method: str, event: Mapping[str, Any]) -> None:
+        if method in {"Inspector.targetCrashed", "Target.targetCrashed"}:
+            raise CdpTargetIntegrityError(f"CDP target crashed: {method}")
+        if method == "Target.targetCreated":
+            raise CdpTargetIntegrityError(
+                "CDP reported a discovered target outside recursive auto-attach"
+            )
+        if method == "Target.targetInfoChanged":
+            info = event.get("targetInfo")
+            if not isinstance(info, Mapping):
+                raise CdpTargetIntegrityError("CDP target-info update is malformed")
+            target_id = info.get("targetId")
+            route = self._target_routes.get(target_id) if isinstance(target_id, str) else None
+            state = self._states.get(route) if route is not None else None
+            if state is None or info.get("type") != state.target_type or state.phase == "destroyed":
+                raise CdpTargetIntegrityError(
+                    "CDP target-info update named an unknown or changed target"
+                )
+            self._notify_target_activity(state.source, "target-info-changed")
+            return
+        if method == "Target.targetDestroyed":
+            target_id = event.get("targetId")
+            route = self._target_routes.get(target_id) if isinstance(target_id, str) else None
+            state = self._states.get(route) if route is not None else None
+            if state is None and isinstance(target_id, str):
+                historical = [
+                    candidate
+                    for candidate in self._states.values()
+                    if candidate.source.target_id == target_id and candidate.phase == "detached"
+                ]
+                state = max(historical, key=lambda item: item.source.generation, default=None)
+            if state is None or state.phase != "detached":
+                raise CdpTargetIntegrityError(
+                    "CDP destroyed an unknown or not-cleanly-detached target"
+                )
+            state.phase = "destroyed"
+            self._notify_target_activity(state.source, "target-destroyed")
+            return
+        raise CdpTargetIntegrityError(f"unsupported CDP target lifecycle event: {method}")
+
+    def _handle_forwarded(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if state.source != source:
+            raise CdpTargetIntegrityError("CDP event source does not match its target identity")
+        if state.phase not in {"ready", "resuming"}:
+            request = event.get("request")
+            request_id = event.get("requestId")
+            url = request.get("url") if isinstance(request, Mapping) else None
+            raise CdpTargetIntegrityError(
+                f"CDP {source.target_type} target emitted {method} for "
+                f"request {request_id!r} ({url!r}) during {state.phase}"
+            )
+        if self._consume_csp_internal_finish(source, method, event):
+            return
+        if self._consume_csp_canceled_successor(source, method, event):
+            return
+        self._record_srcdoc_identity_history(method, event)
+        if self._consume_error_document_resource_event(source, method, event):
+            return
+        if method == "Fetch.requestPaused" and not self._shutting_down:
+            fetch_request_id = event.get("requestId")
+            if isinstance(fetch_request_id, str) and fetch_request_id:
+                identity = (source, fetch_request_id)
+                if identity in self._pre_shutdown_fetch_identities:
+                    # Fetch has no occurrence serial. A second pause with the
+                    # same ID cannot justify discarding an inexact command.
+                    self._pre_shutdown_reused_fetch_identities.add(identity)
+                else:
+                    if (
+                        len(self._pre_shutdown_fetch_identities)
+                        >= _PRE_SHUTDOWN_FETCH_IDENTITY_LIMIT
+                    ):
+                        self._pre_shutdown_fetch_identity_saturated = True
+                    else:
+                        self._pre_shutdown_fetch_identities.add(identity)
+        if method == "Fetch.requestPaused" and self._shutting_down:
+            if self._aborting:
+                self._hold_aborted_fetch(event)
+            else:
+                network_id = event.get("networkId")
+                self._normal_shutdown_disposal.add_fetch(
+                    source,
+                    event,
+                    pre_shutdown_network_id_seen=(
+                        isinstance(network_id, str)
+                        and any(
+                            candidate_id == network_id
+                            for _candidate_source, candidate_id in (
+                                self._pre_shutdown_network_identities
+                            )
+                        )
+                    ),
+                    pre_shutdown_fetch_request_id_seen=(
+                        isinstance(event.get("requestId"), str)
+                        and any(
+                            candidate_id == event["requestId"]
+                            for _candidate_source, candidate_id in (
+                                self._pre_shutdown_fetch_identities
+                            )
+                        )
+                    ),
+                    root_page_context_disposal_candidate=(
+                        source == self.root_source
+                        and self._root_frame_id is not None
+                        and event.get("frameId") == self._root_frame_id
+                    ),
+                )
+            return
+        if method == "Network.requestServedFromCache":
+            self._record_inline_data_cache_marker(source, event)
+        event_source = source
+        quarantine_event = False
+        advance_bootstraps = False
+        bootstrap_fetch: _BootstrapFetchDecision | None = None
+        document_fetch: _DocumentFetchDecision | None = None
+        root_fetch: _RootFetchDecision | None = None
+        if method == "Network.requestWillBeSent":
+            request_id = event.get("requestId")
+            if not isinstance(request_id, str) or not request_id:
+                raise CdpTargetIntegrityError("CDP request event omitted its request ID")
+            chain_key = source.request_chain_key(request_id)
+            if (
+                chain_key in self._pending_blocked_documents
+                or chain_key in self._error_document_finishes
+                or chain_key in self._retired_error_document_chains
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP reused a request chain after its Document denial"
+                )
+            redirected = event.get("redirectResponse") is not None
+            local = [
+                item for item in self._active_requests.get(request_id, ()) if item.source == source
+            ]
+            migrated = None
+            if redirected and not local:
+                migrated = self._resolve_active_request(
+                    source, request_id, allow_target_migration=True
+                )
+            canonical_source = migrated.source if migrated is not None else source
+            canonical_chain_key = canonical_source.request_chain_key(request_id)
+            if canonical_chain_key != chain_key and (
+                canonical_chain_key in self._pending_blocked_documents
+                or canonical_chain_key in self._error_document_finishes
+                or canonical_chain_key in self._retired_error_document_chains
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP redirected a request chain after its Document denial"
+                )
+            active = _ActiveRequest(
+                source=canonical_source,
+                request_id=request_id,
+                loader_id=event.get("loaderId") if isinstance(event.get("loaderId"), str) else None,
+                frame_id=event.get("frameId") if isinstance(event.get("frameId"), str) else None,
+                resource_type=event.get("type") if isinstance(event.get("type"), str) else None,
+                method=(
+                    event.get("request", {}).get("method")
+                    if isinstance(event.get("request"), Mapping)
+                    and isinstance(event.get("request", {}).get("method"), str)
+                    else None
+                ),
+                url=(
+                    event.get("request", {}).get("url")
+                    if isinstance(event.get("request"), Mapping)
+                    and isinstance(event.get("request", {}).get("url"), str)
+                    else None
+                ),
+                redirected=redirected,
+            )
+            if local and not redirected:
+                raise CdpTargetIntegrityError(
+                    "CDP reused an active request identity outside a redirect chain"
+                )
+            if len(local) > 1:
+                raise CdpTargetIntegrityError("CDP request identity is ambiguous within one target")
+            replaced = migrated or (local[0] if local else None)
+            network_identity = (canonical_source, request_id)
+            if (
+                self._shutting_down
+                and not self._aborting
+                and replaced is None
+                and network_identity in self._pre_shutdown_network_identities
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP Network identity crossed the normal shutdown boundary"
+                )
+            if not self._shutting_down:
+                known_pre_shutdown_identity = (
+                    network_identity in self._pre_shutdown_network_identities
+                )
+                if known_pre_shutdown_identity:
+                    if not redirected or replaced is None:
+                        # A fresh occurrence is indistinguishable from delayed
+                        # ExtraInfo for its predecessor. Redirect legs instead
+                        # retain their protocol FIFO below.
+                        self._pre_shutdown_reused_network_identities.add(
+                            network_identity
+                        )
+                if (
+                    self._pre_shutdown_network_occurrence_total
+                    >= _PRE_SHUTDOWN_NETWORK_IDENTITY_LIMIT
+                ):
+                    self._pre_shutdown_network_identity_saturated = True
+                else:
+                    if not known_pre_shutdown_identity:
+                        self._pre_shutdown_network_identities.add(
+                            network_identity
+                        )
+                    self._pre_shutdown_network_occurrence_counts[
+                        network_identity
+                    ] = (
+                        self._pre_shutdown_network_occurrence_counts.get(
+                            network_identity,
+                            0,
+                        )
+                        + 1
+                    )
+                    self._pre_shutdown_network_occurrence_total += 1
+            self._track_root_network_occurrence(active, replaced=replaced)
+            root_network_key = (canonical_source, request_id)
+            if replaced is not None:
+                pending_root_continue = self._pending_root_invalid_interceptions.get(
+                    root_network_key
+                )
+                if pending_root_continue is not None:
+                    if pending_root_continue.active is not replaced:
+                        raise CdpTargetIntegrityError(
+                            "root redirect found a mismatched provisional Fetch occurrence"
+                        )
+                    raise CdpTargetIntegrityError(
+                        "root Network occurrence redirected while its Fetch continue was provisional"
+                    )
+            elif root_network_key in self._root_terminal_requests:
+                # A fresh Network occurrence reused a raw request ID whose
+                # prior occurrence is retained as a tombstone. Fetch exposes
+                # no occurrence serial, so keep ordinary successful policy
+                # sends but permanently disable race recovery for this key.
+                self._root_terminal_requests.pop(root_network_key)
+                self._disabled_root_invalid_interception_networks.add(
+                    root_network_key
+                )
+            if replaced is not None:
+                candidates = self._active_requests[request_id]
+                candidates[candidates.index(replaced)] = active
+                event_source = canonical_source
+            else:
+                state.active_request_ids.add(request_id)
+                self._active_requests.setdefault(request_id, []).append(active)
+            if self._shutting_down and not self._aborting:
+                self._normal_shutdown_disposal.add_network(
+                    active,
+                    redirected=redirected,
+                    predecessor_active=replaced,
+                )
+                quarantine_event = True
+            advance_bootstraps = True
+        elif method in {"Network.loadingFinished", "Network.loadingFailed"}:
+            request_id = event.get("requestId")
+            if not isinstance(request_id, str):
+                raise CdpTargetIntegrityError("CDP loading terminal event omitted its request ID")
+            bootstrap = self._guarded_shared_bootstrap_for_target_id(request_id)
+            if bootstrap is not None and bootstrap.fetch_policy_outcome is None:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap request terminated before its exact Fetch policy"
+                )
+            if (
+                bootstrap is not None
+                and bootstrap.fetch_network_id == request_id
+                and bootstrap.fetch_policy_outcome == "continue"
+                and not bootstrap.fetch_released
+            ):
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap request terminated before its held continue was released"
+                )
+            active = self._resolve_active_request(source, request_id, allow_target_migration=True)
+            if active is None:
+                if method == "Network.loadingFinished" and self._consume_error_document_finish(
+                    source, event
+                ):
+                    return
+                if method == "Network.loadingFailed" and self._consume_error_document_abort(
+                    source, event
+                ):
+                    return
+                if (
+                    request_id
+                    and source.request_chain_key(request_id) in self._retired_error_document_chains
+                ):
+                    raise CdpTargetIntegrityError(
+                        "CDP repeated a terminal event for a retired Document chain"
+                    )
+                if self._consume_srcdoc_pseudo_document_terminal(source, method, event):
+                    return
+                if self._consume_pre_request_csp_terminal(source, method, event):
+                    return
+                raise CdpTargetIntegrityError(
+                    "CDP loading terminal event has no active request occurrence"
+                )
+            event_source = active.source
+            chain_key = active.source.request_chain_key(request_id)
+            blocked_document = self._pending_blocked_documents.get(chain_key)
+            if blocked_document is not None:
+                if (
+                    method != "Network.loadingFailed"
+                    or source != active.source
+                    or not blocked_document.blocked_by_client_acknowledged
+                    or blocked_document.active is not active
+                    or not self._is_exact_blocked_document_failure(event, request_id)
+                ):
+                    raise CdpTargetIntegrityError(
+                        "self-denied Document emitted a mismatched terminal event"
+                    )
+                self._pending_blocked_documents.pop(chain_key)
+                if (
+                    chain_key in self._error_document_finishes
+                    or chain_key in self._retired_error_document_chains
+                ):
+                    raise CdpTargetIntegrityError(
+                        "Chromium error-document chain was duplicated or reused"
+                    )
+                self._retired_error_document_chains.add(chain_key)
+                self._error_document_finishes[chain_key] = _ErrorDocumentFinish(
+                    canonical_source=active.source,
+                    terminal_source=source,
+                    request_id=request_id,
+                    frame_id=blocked_document.frame_id,
+                    failed_timestamp=float(event["timestamp"]),
+                )
+            if source == active.source and active.source == self.root_source:
+                self._record_root_terminal_request(
+                    active,
+                    terminal_method=method,
+                    event=event,
+                )
+            if self._normal_shutdown_disposal.owns(active):
+                self._normal_shutdown_disposal.add_terminal(
+                    active,
+                    terminal_method=method,
+                    synthetic_shutdown=False,
+                )
+                quarantine_event = True
+            self._remove_active(active)
+        elif method.startswith("Network."):
+            request_id = event.get("requestId")
+            if isinstance(request_id, str):
+                if (
+                    request_id
+                    and source.request_chain_key(request_id) in self._retired_error_document_chains
+                ):
+                    raise CdpTargetIntegrityError(
+                        "CDP emitted a Network event for a retired Document chain"
+                    )
+                delayed_worker_source = (
+                    self._delayed_pre_shutdown_worker_extra_info_source(
+                        source,
+                        request_id,
+                    )
+                    if method == "Network.requestWillBeSentExtraInfo"
+                    else None
+                )
+                active = self._resolve_active_request(
+                    source, request_id, allow_target_migration=True
+                )
+                owner_routed_worker = False
+                if active is None and method == "Network.requestWillBeSentExtraInfo":
+                    active = self._resolve_worker_subresource_extra_info(source, request_id)
+                    owner_routed_worker = active is not None
+                if active is not None:
+                    if delayed_worker_source is not None:
+                        raise CdpTargetIntegrityError(
+                            "CDP Network event has competing live and delayed "
+                            "scientific owners"
+                        )
+                    disposal_owned = self._normal_shutdown_disposal.owns(active)
+                    if (
+                        disposal_owned
+                        and (source, request_id)
+                        in self._pre_shutdown_network_identities
+                    ):
+                        raise CdpTargetIntegrityError(
+                            "CDP Network event is ambiguous across the normal "
+                            "shutdown boundary"
+                        )
+                    if owner_routed_worker:
+                        if (
+                            active.source != source
+                            and (source, request_id)
+                            in self._pre_shutdown_network_identities
+                        ):
+                            raise CdpTargetIntegrityError(
+                                "worker ExtraInfo collides with scientific owner history"
+                            )
+                        self._claim_pre_shutdown_worker_extra_info(
+                            active.source,
+                            request_id,
+                        )
+                    event_source = active.source
+                    quarantine_event = disposal_owned
+                elif self._active_requests.get(request_id):
+                    raise CdpTargetIntegrityError(
+                        "CDP network event collided with an unrelated active request identity"
+                    )
+                else:
+                    disposal_source = self._normal_shutdown_disposal.owned_source(
+                        source,
+                        request_id,
+                    )
+                    if disposal_source is not None:
+                        if delayed_worker_source is not None:
+                            raise CdpTargetIntegrityError(
+                                "CDP Network event has competing disposal and "
+                                "delayed scientific owners"
+                            )
+                        if (
+                            (source, request_id)
+                            in self._pre_shutdown_network_identities
+                        ):
+                            raise CdpTargetIntegrityError(
+                                "CDP Network event is ambiguous across the normal "
+                                "shutdown boundary"
+                            )
+                        event_source = disposal_source
+                        quarantine_event = True
+                    elif delayed_worker_source is not None:
+                        self._claim_pre_shutdown_worker_extra_info(
+                            delayed_worker_source,
+                            request_id,
+                        )
+                        event_source = delayed_worker_source
+        elif method == "Fetch.requestPaused":
+            root_fetch = self._register_root_fetch(source, event)
+            bootstrap_fetch = self._register_bootstrap_fetch(source, event)
+            document_fetch = self._register_document_fetch(source, event)
+        try:
+            if not quarantine_event:
+                callback_token = (
+                    self._root_request_stage_fetch_token(source, event)
+                    if method == "Fetch.requestPaused"
+                    else None
+                )
+                # A stack preserves the command's own callback under reentrant
+                # CDP events and hides an outer Fetch during a nested event.
+                self._root_fetch_callback_stack.append(callback_token)
+                try:
+                    self._on_event(event_source, method, event)
+                finally:
+                    self._root_fetch_callback_stack.pop()
+        finally:
+            if root_fetch is not None:
+                self._root_fetch_by_policy_identity.pop(
+                    (source, root_fetch.fetch_request_id),
+                    None,
+                )
+            if document_fetch is not None:
+                self._document_fetch_by_policy_identity.pop(
+                    (source, document_fetch.fetch_request_id),
+                    None,
+                )
+        if bootstrap_fetch is not None and not bootstrap_fetch.decided:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch policy callback returned without a decision"
+            )
+        if root_fetch is not None and not root_fetch.decided:
+            raise CdpTargetIntegrityError(
+                "root Fetch policy callback returned without a decision"
+            )
+        if document_fetch is not None and not document_fetch.decided:
+            raise CdpTargetIntegrityError(
+                "Document Fetch policy callback returned without a decision"
+            )
+        if advance_bootstraps:
+            # The evidence consumer must observe the owning Script occurrence
+            # before resuming code in the target that it created.
+            self._advance_pending_worker_bootstraps()
+
+    def _hold_aborted_fetch(self, event: Mapping[str, Any]) -> None:
+        """Leave request-stage interceptions paused until rejected-context disposal.
+
+        Calling the application policy while context.close() drains events can
+        release new requests or fail against the closing session. No callback,
+        policy decision or success evidence is produced on this abort-only path.
+        """
+
+        request = event.get("request")
+        if (
+            not self._shutting_down
+            or self._abort_finished
+            or not isinstance(event.get("requestId"), str)
+            or not event["requestId"]
+            or not isinstance(request, Mapping)
+            or not isinstance(request.get("method"), str)
+            or not request["method"]
+            or not isinstance(request.get("url"), str)
+            or not request["url"]
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+            or (
+                "networkId" in event
+                and (not isinstance(event["networkId"], str) or not event["networkId"])
+            )
+        ):
+            raise CdpTargetIntegrityError("invalid request-stage Fetch pause during abort")
+
+    def _record_inline_data_cache_marker(
+        self, source: CdpTargetSource, event: Mapping[str, Any]
+    ) -> None:
+        """Distinguish one inline data-URL marker from forbidden network caching.
+
+        Chromium reports inline page data through Network even though no HTTP
+        response was cached. Keep its ordinary request/response/terminal audit;
+        only the cache marker is classified using its exact live occurrence.
+        """
+
+        request_id = event.get("requestId")
+        active = (
+            self._resolve_active_request(source, request_id, allow_target_migration=False)
+            if isinstance(request_id, str) and request_id
+            else None
+        )
+        if (
+            frozenset(event) != {"requestId"}
+            or active is None
+            or active.source != source
+            or active.method != "GET"
+            or not isinstance(active.url, str)
+            or not active.url.startswith("data:")
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP served a request from cache despite the disabled-cache policy"
+            )
+        key = source.request_chain_key(request_id)
+        if key in self._cached_inline_data_requests:
+            raise CdpTargetIntegrityError("CDP repeated an inline data cache marker")
+        self._cached_inline_data_requests.add(key)
+
+    def _bind_bootstrap_owner(
+        self,
+        target_id: str,
+        bootstrap: _WorkerBootstrap,
+        *,
+        shared: bool,
+    ) -> None:
+        if bootstrap.owner_source is not None:
+            return
+        candidates = list(self._active_requests.get(target_id, ()))
+        exact = [
+            item
+            for item in candidates
+            if item.resource_type == "Script"
+            and item.method == "GET"
+            and item.url == bootstrap.url
+            and (
+                shared
+                or (
+                    item.source.session_path == bootstrap.parent_route
+                    and (
+                        bootstrap.parent_frame_id is None
+                        or item.frame_id == bootstrap.parent_frame_id
+                    )
+                )
+            )
+        ]
+        if len(exact) > 1:
+            raise CdpTargetIntegrityError("worker bootstrap request ownership is ambiguous")
+        if not exact:
+            if candidates:
+                raise CdpTargetIntegrityError(
+                    "worker bootstrap request identity, URL, type, method, route, or "
+                    "parent frame does not match"
+                )
+            return
+        claim = (exact[0].source, exact[0].request_id)
+        if claim in self._claimed_worker_bootstraps:
+            raise CdpTargetIntegrityError("worker bootstrap request occurrence was already claimed")
+        self._claimed_worker_bootstraps.add(claim)
+        bootstrap.owner_source = exact[0].source
+        if bootstrap.source is not None:
+            self._pending_worker_sources.discard(bootstrap.source)
+            state = self._states.get(bootstrap.source.session_path)
+            if state is not None and state.phase == "awaiting-owner":
+                self._resume_instrumented_child(bootstrap.source)
+
+    def _advance_pending_worker_bootstraps(self) -> None:
+        for source in tuple(self._pending_worker_sources):
+            bootstrap = self._worker_bootstraps[source]
+            self._bind_bootstrap_owner(source.target_id, bootstrap, shared=False)
+        for target_id, bootstrap in tuple(self._guarded_shared_workers.items()):
+            if bootstrap.source is not None or bootstrap.attach_requested:
+                continue
+            self._bind_bootstrap_owner(target_id, bootstrap, shared=True)
+            if bootstrap.owner_source is not None:
+                self._request_guarded_shared_worker_attach(target_id, bootstrap)
+
+    def _request_guarded_shared_worker_attach(
+        self,
+        target_id: str,
+        bootstrap: _WorkerBootstrap,
+    ) -> None:
+        if bootstrap.attach_requested:
+            raise CdpTargetIntegrityError(
+                "shared-worker page adoption was requested more than once"
+            )
+        bootstrap.attach_requested = True
+        result = self._root_send(
+            "Target.attachToTarget",
+            {"targetId": target_id, "flatten": False},
+        )
+        session_id = result.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise CdpTargetIntegrityError(
+                "shared-worker page adoption returned no session identity"
+            )
+        bootstrap.attach_command_session_id = session_id
+        bootstrap.attach_command_resolved = True
+        if bootstrap.attach_session_id is not None and bootstrap.attach_session_id != session_id:
+            raise CdpTargetIntegrityError(
+                "shared-worker adoption response changed its page session identity"
+            )
+        if bootstrap.source is not None:
+            state = self._state(bootstrap.source.session_path)
+            if state.phase == "awaiting-adoption-ack":
+                self._resume_instrumented_child(bootstrap.source)
+        self.raise_if_failed()
+
+    def _resume_instrumented_child(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase
+            not in {
+                "configuring",
+                "awaiting-adoption-ack",
+                "awaiting-bootstrap-policy",
+                "awaiting-bootstrap-release",
+                "awaiting-owner",
+            }
+            or state.setup_pending
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP child resume was attempted before setup and ownership converged"
+            )
+        bootstrap = self._worker_bootstraps.get(source)
+        if source.target_type in {"worker", "shared_worker"} and (
+            bootstrap is None or bootstrap.owner_source is None
+        ):
+            state.phase = "awaiting-owner"
+            return
+        if source.target_type == "shared_worker" and (
+            bootstrap is None
+            or not bootstrap.attach_command_resolved
+            or bootstrap.attach_session_id != bootstrap.attach_command_session_id
+        ):
+            state.phase = "awaiting-adoption-ack"
+            return
+        if source.target_type == "shared_worker":
+            if bootstrap is None or bootstrap.fetch_policy_outcome is None:
+                state.phase = "awaiting-bootstrap-policy"
+                return
+            if bootstrap.fetch_policy_outcome == "fail":
+                state.phase = "awaiting-bootstrap-failure"
+                return
+            if not bootstrap.fetch_released:
+                state.phase = "awaiting-bootstrap-release"
+                return
+        state.phase = "resuming"
+        self._queue_command(
+            source,
+            "Runtime.runIfWaitingForDebugger",
+            {},
+            label=f"{state.target_type}:Runtime.runIfWaitingForDebugger",
+            on_success=lambda result, child=source: self._resume_ack(child, result),
+        )
+
+    def _attached(self, parent_route: tuple[str, ...], event: Mapping[str, Any]) -> None:
+        parent = self._state(parent_route)
+        if parent.phase in {"destroyed", "detached"}:
+            raise CdpTargetIntegrityError("detached CDP target attached a new child")
+        session_id = event.get("sessionId")
+        target_info = event.get("targetInfo")
+        waiting = event.get("waitingForDebugger")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(target_info, Mapping)
+        ):
+            raise CdpTargetIntegrityError("related CDP target attachment is malformed")
+        target_id = target_info.get("targetId")
+        target_type = target_info.get("type")
+        if not isinstance(target_id, str) or not target_id or not isinstance(target_type, str):
+            raise CdpTargetIntegrityError("related CDP target identity is malformed")
+        if target_type == "service_worker":
+            raise CdpTargetIntegrityError(
+                "service-worker target violated the blocked-worker policy"
+            )
+        if target_type not in _ALLOWED_CHILD_TARGET_TYPES:
+            raise CdpTargetIntegrityError(
+                f"unsupported related CDP target type cannot be instrumented: {target_type}"
+            )
+        guarded = self._guarded_shared_workers.get(target_id)
+        if target_type == "shared_worker":
+            if (
+                parent_route
+                or waiting is not False
+                or guarded is None
+                or not guarded.attach_requested
+                or guarded.source is not None
+                or target_info.get("url") != guarded.url
+                or target_info.get("browserContextId") != guarded.browser_context_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "shared-worker page attachment was not exactly preauthorised by its "
+                    "browser guard"
+                )
+            if (
+                guarded.attach_command_session_id is not None
+                and guarded.attach_command_session_id != session_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "shared-worker adoption returned a different page session"
+                )
+        elif waiting is not True:
+            raise CdpTargetIntegrityError(
+                "related CDP target attachment was not held for instrumentation"
+            )
+        if target_type == "iframe":
+            browser_context_id = target_info.get("browserContextId")
+            if (
+                browser_context_id is not None
+                and browser_context_id != self.root_browser_context_id
+            ):
+                raise CdpTargetIntegrityError("iframe target named a foreign browser context")
+        route = (*parent_route, session_id)
+        if (
+            route in self._states
+            or target_id in self._target_routes
+            or session_id in self._session_routes
+        ):
+            raise CdpTargetIntegrityError("related CDP target/session identity was reused")
+        generation = self._target_generations.get(target_id, -1) + 1
+        self._target_generations[target_id] = generation
+        parent_frame_id = target_info.get("parentFrameId")
+        if not isinstance(parent_frame_id, str):
+            parent_frame_id = None
+        source = CdpTargetSource(
+            route,
+            target_id,
+            target_type,
+            generation,
+            parent_route,
+            parent_frame_id,
+        )
+        bootstrap: _WorkerBootstrap | None = None
+        if target_type == "shared_worker":
+            assert guarded is not None
+            guarded.source = source
+            guarded.attach_session_id = session_id
+            self._worker_bootstraps[source] = guarded
+            bootstrap = guarded
+        elif target_type == "worker" and not self._shutting_down:
+            url = target_info.get("url")
+            browser_context_id = target_info.get("browserContextId")
+            if (
+                not isinstance(url, str)
+                or not url
+                or not isinstance(browser_context_id, str)
+                or browser_context_id != self.root_browser_context_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "dedicated-worker target omitted its URL or root context"
+                )
+            bootstrap = _WorkerBootstrap(
+                source=source,
+                url=url,
+                parent_route=parent_route,
+                parent_frame_id=parent_frame_id,
+                browser_context_id=browser_context_id,
+            )
+            self._worker_bootstraps[source] = bootstrap
+            self._pending_worker_sources.add(source)
+            self._bind_bootstrap_owner(target_id, bootstrap, shared=False)
+        if self._shutting_down:
+            state = _TargetState(source, target_type, "closing")
+            state.setup_pending.add("Runtime.runIfWaitingForDebugger")
+            self._states[route] = state
+            self._target_routes[target_id] = route
+            self._session_routes[session_id] = route
+            self._notify_target_activity(source, "target-attached")
+            self._queue_command(
+                source,
+                "Runtime.runIfWaitingForDebugger",
+                {},
+                label=f"{target_type}:shutdown-resume",
+                on_success=lambda result, child=source: self._shutdown_resume_ack(child, result),
+            )
+            return
+        state = _TargetState(source, target_type, "configuring")
+        setup = list(_BASE_SETUP_COMMANDS)
+        if target_type in _PAGE_TARGET_TYPES:
+            setup.append(_egress_new_document_command(target_type))
+        if target_type in {"iframe", "shared_worker"}:
+            setup.append(_FETCH_SETUP_COMMAND)
+        state.setup_pending = {method for method, _params in setup}
+        self._states[route] = state
+        self._target_routes[target_id] = route
+        self._session_routes[session_id] = route
+        self._notify_target_activity(source, "target-attached")
+        if target_type == "shared_worker" and bootstrap is not None:
+            if (
+                bootstrap.initial_setup_envelopes_expected
+                or bootstrap.initial_setup_envelopes_issued
+            ):
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap initial setup envelopes were reused"
+                )
+            bootstrap.initial_setup_envelopes_expected = len(setup)
+        for method, params in setup:
+            self._queue_command(
+                source,
+                method,
+                dict(params),
+                label=f"{target_type}:{method}",
+                on_success=lambda result, setup_method=method, child=source: self._setup_ack(
+                    child, setup_method, result
+                ),
+            )
+            # A nested target or transport event may be dispatched re-entrantly
+            # while the outer send is in progress.  Never count that envelope,
+            # or release a held bootstrap, after such an event failed the router.
+            self.raise_if_failed()
+            if target_type == "shared_worker" and bootstrap is not None:
+                bootstrap.initial_setup_envelopes_issued += 1
+        if target_type == "shared_worker" and bootstrap is not None:
+            self._maybe_release_bootstrap_continue(bootstrap)
+
+    def _setup_ack(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if state.phase != "configuring" or method not in state.setup_pending:
+            raise CdpTargetIntegrityError("CDP child setup acknowledgement is out of sequence")
+        if method == "Target.getTargetInfo":
+            info = result.get("targetInfo")
+            if (
+                not isinstance(info, Mapping)
+                or info.get("targetId") != source.target_id
+                or info.get("type") != state.target_type
+            ):
+                raise CdpTargetIntegrityError("CDP child setup changed target identity")
+            bootstrap = self._worker_bootstraps.get(source)
+            if bootstrap is not None and (
+                info.get("url") != bootstrap.url
+                or info.get("browserContextId") != bootstrap.browser_context_id
+            ):
+                raise CdpTargetIntegrityError("CDP worker setup changed its URL or browser context")
+            if state.target_type == "iframe":
+                browser_context_id = info.get("browserContextId")
+                if (
+                    browser_context_id is not None
+                    and browser_context_id != self.root_browser_context_id
+                ):
+                    raise CdpTargetIntegrityError(
+                        "CDP iframe setup named a foreign browser context"
+                    )
+        elif method == "Page.addScriptToEvaluateOnNewDocument":
+            self._validate_page_init_result(result)
+        elif method == "Debugger.setInstrumentationBreakpoint":
+            breakpoint_id = result.get("breakpointId")
+            if not isinstance(breakpoint_id, str) or not breakpoint_id:
+                raise CdpTargetIntegrityError(
+                    "CDP pre-author instrumentation breakpoint acknowledgement is invalid"
+                )
+            if state.target_type == "iframe":
+                if state.iframe_instrumentation_breakpoint_id is not None:
+                    raise CdpTargetIntegrityError(
+                        "CDP iframe instrumentation breakpoint acknowledgement is invalid"
+                    )
+                state.iframe_instrumentation_breakpoint_id = breakpoint_id
+            elif state.target_type in _WORKER_TARGET_TYPES:
+                if state.worker_instrumentation_breakpoint_id is not None:
+                    raise CdpTargetIntegrityError(
+                        "CDP worker instrumentation breakpoint acknowledgement is invalid"
+                    )
+                state.worker_instrumentation_breakpoint_id = breakpoint_id
+            else:
+                raise CdpTargetIntegrityError(
+                    "CDP target cannot use a pre-author instrumentation breakpoint"
+                )
+        elif method == "Runtime.evaluate:egress-shim":
+            self._record_egress_evaluation(source, result)
+        elif method == "Runtime.evaluate:popup-guard":
+            self._record_popup_guard_evaluation(source, result)
+        state.setup_pending.remove(method)
+        if state.setup_pending:
+            return
+        if state.target_type == "iframe":
+            if method not in {
+                "Debugger.setInstrumentationBreakpoint",
+                "Target.setAutoAttach",
+                "Target.getTargetInfo",
+            }:
+                state.setup_pending.add("Debugger.setInstrumentationBreakpoint")
+                self._queue_command(
+                    source,
+                    *_IFRAME_INSTRUMENTATION_COMMAND,
+                    label="iframe:Debugger.setInstrumentationBreakpoint",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Debugger.setInstrumentationBreakpoint", result
+                    ),
+                )
+                return
+            if method == "Debugger.setInstrumentationBreakpoint":
+                state.setup_pending.add("Target.setAutoAttach")
+                self._queue_command(
+                    source,
+                    *_AUTO_ATTACH_COMMAND,
+                    label="iframe:Target.setAutoAttach",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.setAutoAttach", result
+                    ),
+                )
+                return
+            if method == "Target.setAutoAttach":
+                state.setup_pending.add("Target.getTargetInfo")
+                self._queue_command(
+                    source,
+                    *_TARGET_BARRIER_COMMAND,
+                    label="iframe:Target.getTargetInfo",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.getTargetInfo", result
+                    ),
+                )
+                return
+            self._resume_instrumented_child(source)
+            return
+        if state.target_type in _WORKER_TARGET_TYPES:
+            if method not in {
+                "Debugger.setInstrumentationBreakpoint",
+                "Target.setAutoAttach",
+                "Target.getTargetInfo",
+            }:
+                state.setup_pending.add("Debugger.setInstrumentationBreakpoint")
+                self._queue_command(
+                    source,
+                    *_WORKER_INSTRUMENTATION_COMMAND,
+                    label=f"{state.target_type}:Debugger.setInstrumentationBreakpoint",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Debugger.setInstrumentationBreakpoint", result
+                    ),
+                )
+                return
+            if method == "Debugger.setInstrumentationBreakpoint":
+                state.setup_pending.add("Target.setAutoAttach")
+                self._queue_command(
+                    source,
+                    *_AUTO_ATTACH_COMMAND,
+                    label=f"{state.target_type}:Target.setAutoAttach",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.setAutoAttach", result
+                    ),
+                )
+                return
+            if method == "Target.setAutoAttach":
+                state.setup_pending.add("Target.getTargetInfo")
+                self._queue_command(
+                    source,
+                    *_TARGET_BARRIER_COMMAND,
+                    label=f"{state.target_type}:Target.getTargetInfo",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.getTargetInfo", result
+                    ),
+                )
+                return
+            self._resume_instrumented_child(source)
+            return
+        if method not in {
+            "Runtime.evaluate:egress-shim",
+            "Runtime.evaluate:popup-guard",
+            "Target.setAutoAttach",
+            "Target.getTargetInfo",
+        }:
+            state.setup_pending.add("Runtime.evaluate:egress-shim")
+            self._queue_command(
+                source,
+                *_egress_evaluate_command(state.target_type),
+                label=f"{state.target_type}:Runtime.evaluate:egress-shim",
+                on_success=lambda result, child=source: self._setup_ack(
+                    child, "Runtime.evaluate:egress-shim", result
+                ),
+            )
+            return
+        if method == "Runtime.evaluate:egress-shim" and source.target_type in _PAGE_TARGET_TYPES:
+            state.setup_pending.add("Runtime.evaluate:popup-guard")
+            self._queue_command(
+                source,
+                *_popup_guard_evaluate_command(),
+                label=f"{state.target_type}:Runtime.evaluate:popup-guard",
+                on_success=lambda result, child=source: self._setup_ack(
+                    child, "Runtime.evaluate:popup-guard", result
+                ),
+            )
+            return
+        if method in {"Runtime.evaluate:egress-shim", "Runtime.evaluate:popup-guard"}:
+            state.setup_pending.add("Target.setAutoAttach")
+            self._queue_command(
+                source,
+                *_AUTO_ATTACH_COMMAND,
+                label=f"{state.target_type}:Target.setAutoAttach",
+                on_success=lambda result, child=source: self._setup_ack(
+                    child, "Target.setAutoAttach", result
+                ),
+            )
+            return
+        if method == "Target.setAutoAttach":
+            state.setup_pending.add("Target.getTargetInfo")
+            self._queue_command(
+                source,
+                *_TARGET_BARRIER_COMMAND,
+                label=f"{state.target_type}:Target.getTargetInfo",
+                on_success=lambda result, child=source: self._setup_ack(
+                    child, "Target.getTargetInfo", result
+                ),
+            )
+            return
+        self._resume_instrumented_child(source)
+
+    def _handle_iframe_context_event(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Track the one default realm used by the iframe pre-author barrier."""
+
+        state = self._state(source.session_path)
+        if source.target_type != "iframe":
+            return
+        if state.phase == "ready":
+            # The pre-document script registered during setup protects later
+            # document realms.  This barrier receipts the initial runnable realm.
+            return
+        if state.phase not in {"configuring", "resuming"}:
+            raise CdpTargetIntegrityError(
+                "CDP iframe execution-context event arrived outside prearm"
+            )
+        if method == "Runtime.executionContextCreated":
+            context = event.get("context")
+            if not isinstance(context, Mapping):
+                raise CdpTargetIntegrityError("CDP iframe execution context is malformed")
+            context_id = context.get("id")
+            unique_context_id = context.get("uniqueId")
+            aux_data = context.get("auxData")
+            if (
+                type(context_id) is not int
+                or context_id < 0
+                or not isinstance(unique_context_id, str)
+                or not unique_context_id
+                or not isinstance(aux_data, Mapping)
+                or type(aux_data.get("isDefault")) is not bool
+                or not isinstance(aux_data.get("type"), str)
+                or not aux_data.get("type")
+                or not isinstance(aux_data.get("frameId"), str)
+                or aux_data.get("frameId") != source.target_id
+            ):
+                raise CdpTargetIntegrityError("CDP iframe execution context is malformed")
+            is_default = aux_data["isDefault"]
+            context_type = aux_data["type"]
+            if (is_default is True) != (context_type == "default"):
+                raise CdpTargetIntegrityError(
+                    "CDP iframe default execution-context identity is inconsistent"
+                )
+            if not is_default:
+                return
+            if (
+                state.iframe_default_context_id is not None
+                or state.iframe_default_context_unique_id is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP iframe reported more than one default execution context during prearm"
+                )
+            state.iframe_default_context_id = context_id
+            state.iframe_default_context_unique_id = unique_context_id
+            self._maybe_trigger_iframe_synthetic(source)
+            return
+        if method == "Runtime.executionContextDestroyed":
+            context_id = event.get("executionContextId")
+            unique_context_id = event.get("executionContextUniqueId")
+            if (
+                type(context_id) is not int
+                or context_id < 0
+                or not isinstance(unique_context_id, str)
+                or not unique_context_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP iframe execution-context destruction is malformed"
+                )
+            selected_by_id = context_id == state.iframe_default_context_id
+            selected_by_unique_id = unique_context_id == state.iframe_default_context_unique_id
+            if selected_by_id != selected_by_unique_id:
+                raise CdpTargetIntegrityError(
+                    "CDP iframe execution-context destruction changed identity"
+                )
+            if selected_by_id:
+                raise CdpTargetIntegrityError(
+                    "CDP iframe default execution context was destroyed before prearm completed"
+                )
+            return
+        if method != "Runtime.executionContextsCleared" or event:
+            raise CdpTargetIntegrityError("CDP iframe execution-context event is malformed")
+        if (
+            state.iframe_default_context_id is None
+            and state.iframe_default_context_unique_id is None
+            and not state.iframe_synthetic_issued
+            and not state.iframe_pause_seen
+            and not state.iframe_installation_received
+        ):
+            # Chromium clears the provisional empty-document realm while the
+            # held OOPIF commits.  No selected realm or barrier obligation has
+            # been invalidated, and the instrumentation breakpoint remains armed.
+            return
+        raise CdpTargetIntegrityError(
+            "CDP iframe execution contexts were cleared before prearm completed"
+        )
+
+    def _handle_worker_script_parsed(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Bind the worker's first runnable script to its registered bootstrap URL."""
+
+        if source.target_type not in _WORKER_TARGET_TYPES:
+            return
+        state = self._state(source.session_path)
+        if state.phase in {"ready", "closing", "detached", "destroyed"}:
+            # Once the exact bootstrap barrier has completed, later eval,
+            # import, or debugger bookkeeping scripts are unrelated to prearm.
+            # Do not retain their identities or reinterpret a repeated URL as
+            # a second bootstrap script.
+            return
+        bootstrap = self._worker_bootstraps.get(source)
+        script_id = event.get("scriptId")
+        url = event.get("url")
+        start_line = event.get("startLine")
+        start_column = event.get("startColumn")
+        if (
+            bootstrap is None
+            or not isinstance(script_id, str)
+            or not script_id
+            or not isinstance(url, str)
+            or type(start_line) is not int
+            or start_line < 0
+            or type(start_column) is not int
+            or start_column < 0
+            or script_id in state.worker_parsed_script_urls
+        ):
+            raise CdpTargetIntegrityError("CDP worker parsed-script identity is invalid or reused")
+        state.worker_parsed_script_urls[script_id] = url
+        if url != bootstrap.url:
+            return
+        if (
+            state.phase != "resuming"
+            or state.worker_bootstrap_script_id is not None
+            or start_line != 0
+            or start_column != 0
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker bootstrap script was duplicated or parsed outside its exact origin"
+            )
+        state.worker_bootstrap_script_id = script_id
+
+    def _handle_worker_debugger_paused(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Install the worker egress shim in its fully initialised first-script realm."""
+
+        state = self._state(source.session_path)
+        bootstrap = self._worker_bootstraps.get(source)
+        instrumentation_id = state.worker_instrumentation_breakpoint_id
+        call_frames = event.get("callFrames")
+        hit_breakpoints = event.get("hitBreakpoints", [])
+        instrumentation_data = event.get("data")
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or bootstrap is None
+            or state.phase != "resuming"
+            or not isinstance(instrumentation_id, str)
+            or not instrumentation_id
+            or not isinstance(state.worker_bootstrap_script_id, str)
+            or state.worker_pause_seen
+            or state.worker_debugger_paused
+            or state.worker_egress_evaluation_issued
+            or event.get("reason") != "instrumentation"
+            or not isinstance(call_frames, list)
+            or not call_frames
+            or not isinstance(hit_breakpoints, list)
+            or hit_breakpoints not in ([], [instrumentation_id])
+            or not isinstance(instrumentation_data, Mapping)
+            or set(instrumentation_data) != {"scriptId", "url"}
+            or instrumentation_data.get("scriptId") != state.worker_bootstrap_script_id
+            or instrumentation_data.get("url") != bootstrap.url
+        ):
+            raise CdpTargetIntegrityError("CDP worker first-script debugger pause is invalid")
+        first_frame = call_frames[0]
+        location = first_frame.get("location") if isinstance(first_frame, Mapping) else None
+        call_frame_id = first_frame.get("callFrameId") if isinstance(first_frame, Mapping) else None
+        frame_url = first_frame.get("url") if isinstance(first_frame, Mapping) else None
+        function_name = (
+            first_frame.get("functionName") if isinstance(first_frame, Mapping) else None
+        )
+        function_location = (
+            first_frame.get("functionLocation") if isinstance(first_frame, Mapping) else None
+        )
+        if (
+            not isinstance(call_frame_id, str)
+            or not call_frame_id
+            or not isinstance(frame_url, str)
+            or (frame_url and frame_url != bootstrap.url)
+            or not isinstance(function_name, str)
+            or not isinstance(location, Mapping)
+            or location.get("scriptId") != state.worker_bootstrap_script_id
+            or type(location.get("lineNumber")) is not int
+            or location.get("lineNumber") < 0
+            or type(location.get("columnNumber")) is not int
+            or location.get("columnNumber") < 0
+            or not isinstance(function_location, Mapping)
+            or function_location.get("scriptId") != state.worker_bootstrap_script_id
+            or type(function_location.get("lineNumber")) is not int
+            or function_location.get("lineNumber") != 0
+            or type(function_location.get("columnNumber")) is not int
+            or function_location.get("columnNumber") != 0
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker first-script call-frame identity or location is invalid"
+            )
+        state.worker_pause_seen = True
+        state.worker_debugger_paused = True
+        state.worker_pause_call_frame_id = call_frame_id
+        state.worker_egress_evaluation_issued = True
+        self._queue_command(
+            source,
+            *_worker_egress_evaluate_command(source.target_type, call_frame_id),
+            label=f"{source.target_type}:Debugger.evaluateOnCallFrame:egress-shim",
+            on_success=lambda result, child=source: self._worker_egress_evaluation_ack(
+                child, result
+            ),
+        )
+
+    def _worker_egress_evaluation_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        breakpoint_id = state.worker_instrumentation_breakpoint_id
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or state.phase != "resuming"
+            or not state.worker_pause_seen
+            or not state.worker_debugger_paused
+            or not state.worker_egress_evaluation_issued
+            or state.worker_egress_evaluation_acknowledged
+            or not isinstance(state.worker_pause_call_frame_id, str)
+            or not isinstance(breakpoint_id, str)
+            or not breakpoint_id
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker first-script egress evaluation acknowledgement is invalid"
+            )
+        self._record_egress_evaluation(
+            source,
+            result,
+            expected_already_installed=False,
+        )
+        state.worker_egress_evaluation_acknowledged = True
+        self._queue_command(
+            source,
+            "Debugger.removeBreakpoint",
+            {"breakpointId": breakpoint_id},
+            label=f"{source.target_type}:Debugger.removeBreakpoint:instrumentation",
+            on_success=lambda response, child=source: self._worker_instrumentation_remove_ack(
+                child, response
+            ),
+        )
+
+    def _worker_instrumentation_remove_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or state.phase != "resuming"
+            or not state.worker_debugger_paused
+            or not state.worker_egress_evaluation_acknowledged
+            or source not in self._egress_shim_receipts
+            or state.worker_instrumentation_removed
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker instrumentation-breakpoint removal is invalid"
+            )
+        state.worker_instrumentation_removed = True
+        self._queue_command(
+            source,
+            "Debugger.resume",
+            {},
+            label=f"{source.target_type}:Debugger.resume:first-script-installation",
+            on_success=lambda response, child=source: self._worker_debugger_resume_ack(
+                child, response
+            ),
+        )
+
+    def _worker_debugger_resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or state.phase != "resuming"
+            or not state.worker_debugger_paused
+            or not state.worker_instrumentation_removed
+            or state.worker_debugger_resume_acknowledged
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError("CDP worker first-script debugger resume is invalid")
+        state.worker_debugger_paused = False
+        state.worker_debugger_resume_acknowledged = True
+        self._maybe_finish_worker_prearm(source)
+
+    def _handle_debugger_paused(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Turn the first iframe instrumentation pause into an exact conditional barrier."""
+
+        if source.target_type in _WORKER_TARGET_TYPES:
+            self._handle_worker_debugger_paused(source, event)
+            return
+
+        state = self._state(source.session_path)
+        instrumentation_id = state.iframe_instrumentation_breakpoint_id
+        call_frames = event.get("callFrames")
+        hit_breakpoints = event.get("hitBreakpoints", [])
+        if (
+            source.target_type != "iframe"
+            or state.phase != "resuming"
+            or not isinstance(instrumentation_id, str)
+            or not instrumentation_id
+            or state.iframe_pause_seen
+            or state.iframe_debugger_paused
+            or event.get("reason") != "instrumentation"
+            or not isinstance(call_frames, list)
+            or not call_frames
+            or not isinstance(hit_breakpoints, list)
+            or any(not isinstance(item, str) or not item for item in hit_breakpoints)
+            or (hit_breakpoints and instrumentation_id not in hit_breakpoints)
+        ):
+            raise CdpTargetIntegrityError("CDP iframe debugger pause is invalid")
+        first_frame = call_frames[0]
+        location = first_frame.get("location") if isinstance(first_frame, Mapping) else None
+        if not isinstance(location, Mapping):
+            raise CdpTargetIntegrityError("CDP iframe debugger call-frame location is malformed")
+        exact_location = {
+            "scriptId": location.get("scriptId"),
+            "lineNumber": location.get("lineNumber"),
+            "columnNumber": location.get("columnNumber"),
+        }
+        if (
+            not isinstance(exact_location["scriptId"], str)
+            or not exact_location["scriptId"]
+            or type(exact_location["lineNumber"]) is not int
+            or exact_location["lineNumber"] < 0
+            or type(exact_location["columnNumber"]) is not int
+            or exact_location["columnNumber"] < 0
+        ):
+            raise CdpTargetIntegrityError("CDP iframe debugger call-frame location is malformed")
+        state.iframe_pause_seen = True
+        state.iframe_debugger_paused = True
+        state.iframe_pause_location = exact_location
+        self._queue_command(
+            source,
+            "Debugger.setBreakpoint",
+            {
+                "location": dict(exact_location),
+                "condition": _iframe_breakpoint_condition(),
+            },
+            label="iframe:Debugger.setBreakpoint:pre-author-installation",
+            on_success=lambda result, child=source: self._iframe_regular_breakpoint_ack(
+                child, result
+            ),
+        )
+
+    def _iframe_regular_breakpoint_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        breakpoint_id = result.get("breakpointId")
+        actual_location = result.get("actualLocation")
+        expected_location = state.iframe_pause_location
+        if (
+            state.phase != "resuming"
+            or not state.iframe_debugger_paused
+            or not isinstance(breakpoint_id, str)
+            or not breakpoint_id
+            or breakpoint_id == state.iframe_instrumentation_breakpoint_id
+            or state.iframe_regular_breakpoint_id is not None
+            or not isinstance(actual_location, Mapping)
+            or not isinstance(expected_location, Mapping)
+            or any(
+                actual_location.get(field) != expected_location[field]
+                for field in ("scriptId", "lineNumber", "columnNumber")
+            )
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP iframe exact conditional breakpoint acknowledgement is invalid"
+            )
+        state.iframe_regular_breakpoint_id = breakpoint_id
+        self._queue_command(
+            source,
+            "Debugger.removeBreakpoint",
+            {"breakpointId": state.iframe_instrumentation_breakpoint_id},
+            label="iframe:Debugger.removeBreakpoint:instrumentation",
+            on_success=lambda response, child=source: self._iframe_instrumentation_remove_ack(
+                child, response
+            ),
+        )
+
+    def _iframe_instrumentation_remove_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase != "resuming"
+            or not state.iframe_debugger_paused
+            or state.iframe_instrumentation_removed
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP iframe instrumentation-breakpoint removal is invalid"
+            )
+        state.iframe_instrumentation_removed = True
+        self._queue_command(
+            source,
+            "Debugger.resume",
+            {},
+            label="iframe:Debugger.resume:conditional-installation",
+            on_success=lambda response, child=source: self._iframe_debugger_resume_ack(
+                child, response
+            ),
+        )
+
+    def _iframe_debugger_resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase != "resuming"
+            or not state.iframe_debugger_paused
+            or not state.iframe_instrumentation_removed
+            or state.iframe_debugger_resume_acknowledged
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError("CDP iframe debugger resume is invalid")
+        state.iframe_debugger_paused = False
+        state.iframe_debugger_resume_acknowledged = True
+        self._maybe_remove_iframe_regular_breakpoint(source)
+        self._maybe_trigger_iframe_synthetic(source)
+        self._maybe_finish_iframe_prearm(source)
+
+    def _maybe_trigger_iframe_synthetic(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        unique_context_id = state.iframe_default_context_unique_id
+        if (
+            state.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_initial_resume_acknowledged
+            or not isinstance(unique_context_id, str)
+            or state.iframe_synthetic_issued
+            or state.iframe_debugger_paused
+        ):
+            return
+        state.iframe_synthetic_issued = True
+        self._queue_command(
+            source,
+            *_iframe_synthetic_trigger_command(unique_context_id),
+            label="iframe:Runtime.evaluate:pre-author-trigger",
+            on_success=lambda result, child=source: self._iframe_synthetic_ack(child, result),
+        )
+
+    def _iframe_synthetic_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        remote = result.get("result")
+        if (
+            state.phase != "resuming"
+            or not state.iframe_synthetic_issued
+            or state.iframe_synthetic_completed
+            or not state.iframe_pause_seen
+            or state.iframe_debugger_paused
+            or result.get("exceptionDetails") is not None
+            or not isinstance(remote, Mapping)
+            or remote.get("type") != "boolean"
+            or remote.get("value") is not True
+        ):
+            raise CdpTargetIntegrityError("CDP iframe synthetic barrier result is invalid")
+        state.iframe_synthetic_completed = True
+        self._maybe_finish_iframe_prearm(source)
+
+    def _maybe_remove_iframe_regular_breakpoint(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        breakpoint_id = state.iframe_regular_breakpoint_id
+        if (
+            state.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_installation_received
+            or not state.iframe_debugger_resume_acknowledged
+            or not isinstance(breakpoint_id, str)
+            or state.iframe_regular_remove_issued
+        ):
+            return
+        state.iframe_regular_remove_issued = True
+        self._queue_command(
+            source,
+            "Debugger.removeBreakpoint",
+            {"breakpointId": breakpoint_id},
+            label="iframe:Debugger.removeBreakpoint:conditional-installation",
+            on_success=lambda result, child=source: self._iframe_regular_remove_ack(child, result),
+        )
+
+    def _iframe_regular_remove_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase != "resuming"
+            or not state.iframe_regular_remove_issued
+            or state.iframe_regular_removed
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError("CDP iframe conditional-breakpoint removal is invalid")
+        state.iframe_regular_removed = True
+        self._maybe_finish_iframe_prearm(source)
+
+    def _maybe_finish_iframe_prearm(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        if state.target_type != "iframe" or state.phase != "resuming":
+            return
+        if all(
+            (
+                state.iframe_initial_resume_acknowledged,
+                state.iframe_default_context_id is not None,
+                state.iframe_default_context_unique_id is not None,
+                state.iframe_synthetic_completed,
+                state.iframe_pause_seen,
+                not state.iframe_debugger_paused,
+                state.iframe_instrumentation_removed,
+                state.iframe_debugger_resume_acknowledged,
+                state.iframe_installation_received,
+                state.iframe_regular_removed,
+                source in self._egress_shim_receipts,
+                source in self._popup_guard_receipts,
+            )
+        ):
+            state.phase = "ready"
+
+    def _maybe_finish_worker_prearm(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        if source.target_type not in _WORKER_TARGET_TYPES or state.phase != "resuming":
+            return
+        if all(
+            (
+                isinstance(state.worker_instrumentation_breakpoint_id, str),
+                isinstance(state.worker_bootstrap_script_id, str),
+                isinstance(state.worker_pause_call_frame_id, str),
+                state.worker_initial_resume_acknowledged,
+                state.worker_pause_seen,
+                not state.worker_debugger_paused,
+                state.worker_egress_evaluation_issued,
+                state.worker_egress_evaluation_acknowledged,
+                state.worker_instrumentation_removed,
+                state.worker_debugger_resume_acknowledged,
+                source in self._egress_shim_receipts,
+            )
+        ):
+            # Parsed-script identities are needed only to bind the bootstrap
+            # pause.  Clearing them makes the completed worker state bounded.
+            state.worker_parsed_script_urls.clear()
+            state.phase = "ready"
+
+    def _resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if state.phase != "resuming" or result != {}:
+            raise CdpTargetIntegrityError("CDP child resume acknowledgement is out of sequence")
+        if state.target_type == "iframe":
+            if state.iframe_initial_resume_acknowledged:
+                raise CdpTargetIntegrityError(
+                    "CDP iframe initial resume acknowledgement was duplicated"
+                )
+            state.iframe_initial_resume_acknowledged = True
+            self._maybe_trigger_iframe_synthetic(source)
+            self._maybe_finish_iframe_prearm(source)
+            return
+        if state.target_type in _WORKER_TARGET_TYPES:
+            if state.worker_initial_resume_acknowledged:
+                raise CdpTargetIntegrityError(
+                    "CDP worker initial resume acknowledgement was duplicated"
+                )
+            state.worker_initial_resume_acknowledged = True
+            self._maybe_finish_worker_prearm(source)
+            return
+        state.phase = "ready"
+
+    def _shutdown_resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase != "closing"
+            or state.setup_pending != {"Runtime.runIfWaitingForDebugger"}
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError("CDP shutdown resume acknowledgement is out of sequence")
+        state.setup_pending.clear()
+
+    def _detached(self, parent_route: tuple[str, ...], event: Mapping[str, Any]) -> None:
+        session_id = event.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise CdpTargetIntegrityError("related CDP target detach omitted its session ID")
+        route = (*parent_route, session_id)
+        state = self._state(route)
+        target_id = event.get("targetId")
+        if target_id is not None and target_id != state.source.target_id:
+            raise CdpTargetIntegrityError("related CDP target detach changed target identity")
+        bootstrap = self._worker_bootstraps.get(state.source)
+        if (
+            state.source.target_type == "shared_worker"
+            and bootstrap is not None
+            and bootstrap.fetch_policy_outcome is None
+            and not self._shutting_down
+        ):
+            raise CdpTargetIntegrityError(
+                "worker target detached before its exact bootstrap Fetch policy"
+            )
+        if (
+            state.source.target_type == "shared_worker"
+            and bootstrap is not None
+            and bootstrap.fetch_policy_outcome == "continue"
+            and not bootstrap.fetch_released
+            and not self._aborting
+        ):
+            raise CdpTargetIntegrityError("worker target detached with a held bootstrap request")
+        descendants = [
+            child
+            for child_route, child in self._states.items()
+            if len(child_route) > len(route)
+            and child_route[: len(route)] == route
+            and child.phase not in {"destroyed", "detached"}
+        ]
+        route_pending = [key for key in self._pending if key[0][: len(route)] == route]
+        if (
+            state.phase
+            in {
+                "configuring",
+                "awaiting-adoption-ack",
+                "awaiting-bootstrap-failure",
+                "awaiting-bootstrap-policy",
+                "awaiting-owner",
+            }
+            and not state.active_request_ids
+        ):
+            self._cancel_detached_route_commands(route_pending)
+            state.setup_pending.clear()
+            state.phase = "detached"
+            self._pending_worker_sources.discard(state.source)
+            self._target_routes.pop(state.source.target_id, None)
+            self._session_routes.pop(session_id, None)
+            self._notify_target_activity(state.source, "target-detached")
+            return
+        if self._shutting_down:
+            for request_id in tuple(state.active_request_ids):
+                self._terminalise_request(
+                    state.source,
+                    request_id,
+                    synthetic_shutdown=not self._aborting,
+                )
+            self._cancel_detached_route_commands(route_pending)
+            state.phase = "detached"
+            self._pending_worker_sources.discard(state.source)
+            self._target_routes.pop(state.source.target_id, None)
+            self._session_routes.pop(session_id, None)
+            self._notify_target_activity(state.source, "target-detached")
+            return
+        cleanup_retired = self._retire_removed_iframe_cleanup(state, descendants, route_pending)
+        if not cleanup_retired and (
+            state.phase != "ready" or state.active_request_ids or descendants or route_pending
+        ):
+            raise CdpTargetIntegrityError(
+                "related CDP target detached with setup, request, descendant, or "
+                "command work pending"
+            )
+        state.phase = "detached"
+        self._pending_worker_sources.discard(state.source)
+        self._target_routes.pop(state.source.target_id, None)
+        self._session_routes.pop(session_id, None)
+        self._notify_target_activity(state.source, "target-detached")
+
+    def _retire_removed_iframe_cleanup(
+        self,
+        state: _TargetState,
+        descendants: list[_TargetState],
+        route_pending: list[tuple[tuple[str, ...], int]],
+    ) -> bool:
+        """Retire only a removed, fully protected iframe's final breakpoint cleanup."""
+
+        if (
+            state.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_page_remove_seen
+            or state.iframe_retired_cleanup is not None
+            or state.setup_pending
+            or state.active_request_ids
+            or descendants
+            or any(
+                active.source == state.source
+                for requests in self._active_requests.values()
+                for active in requests
+            )
+            or not all((
+                state.iframe_initial_resume_acknowledged,
+                state.iframe_default_context_id is not None,
+                state.iframe_default_context_unique_id is not None,
+                state.iframe_synthetic_issued,
+                state.iframe_synthetic_completed,
+                state.iframe_pause_seen,
+                not state.iframe_debugger_paused,
+                state.iframe_instrumentation_removed,
+                state.iframe_debugger_resume_acknowledged,
+                state.iframe_installation_received,
+                state.iframe_regular_remove_issued,
+                not state.iframe_regular_removed,
+                state.source in self._egress_shim_receipts,
+                state.source in self._popup_guard_receipts,
+            ))
+            or len(route_pending) != 1
+            or route_pending[0][0] != state.source.session_path
+        ):
+            return False
+        key = route_pending[0]
+        pending = self._pending[key]
+        if (
+            pending.label != "iframe:Debugger.removeBreakpoint:conditional-installation"
+            or pending.policy_decision
+        ):
+            return False
+        state.iframe_retired_cleanup = _RetiredIframeCleanup(
+            state.source, key[1], "Debugger.removeBreakpoint", pending.label
+        )
+        self._pending.pop(key)
+        return True
+
+    @staticmethod
+    def _ack_retired_iframe_cleanup(state: _TargetState, payload: Mapping[str, Any]) -> None:
+        retired = state.iframe_retired_cleanup
+        if (
+            retired is None
+            or retired.source != state.source
+            or retired.late_acknowledged
+            or set(payload) != {"id", "result"}
+            or type(payload["id"]) is not int
+            or payload["id"] != retired.command_id
+            or type(payload["result"]) is not dict
+            or payload["result"] != {}
+        ):
+            raise CdpTargetIntegrityError("detached CDP target emitted an invalid retired cleanup acknowledgement")
+        retired.late_acknowledged = True
+
+    def _record_retired_iframe_transport_absence(
+        self,
+        route: tuple[str, ...],
+        payload: Mapping[str, Any],
+        label: str,
+        error: BaseException | None,
+    ) -> bool:
+        """Retain one vanished-session result for an already retired cleanup."""
+
+        if not _is_exact_root_send_no_session(
+            error, expected_type=self._root_continue_error_type,
+        ):
+            return False
+        state = self._states.get(route)
+        retired = state.iframe_retired_cleanup if state is not None else None
+        if (
+            len(route) != 1
+            or self._shutting_down or self._aborting
+            or state is None or state.phase not in {"detached", "destroyed"}
+            or state.target_type != "iframe" or state.source.session_path != route
+            or retired is None or retired.source != state.source
+            or retired.frame_detach_reason != "remove"
+            or not state.iframe_page_remove_seen
+            or not state.iframe_regular_remove_issued or state.iframe_regular_removed
+            or retired.late_acknowledged or retired.transport_absence_observed
+            or retired.transport_absence_fingerprint is not None
+            or retired.method != "Debugger.removeBreakpoint"
+            or label != retired.label
+            or label != "iframe:Debugger.removeBreakpoint:conditional-installation"
+            or set(payload) != {"id", "method", "params"}
+            or type(payload["id"]) is not int or payload["id"] != retired.command_id
+            or payload["method"] != retired.method
+            or payload["params"] != {"breakpointId": state.iframe_regular_breakpoint_id}
+            or self._target_generations.get(state.source.target_id) != state.source.generation
+            or state.source.target_id in self._target_routes
+            or route[-1] in self._session_routes
+            or state.setup_pending or state.active_request_ids
+            or any(key[0][:len(route)] == route for key in self._pending)
+            or any(
+                child_route[:len(route)] == route and len(child_route) > len(route)
+                and child.phase not in {"destroyed", "detached"}
+                for child_route, child in self._states.items()
+            )
+            or any(
+                active.source == state.source
+                for requests in self._active_requests.values() for active in requests
+            )
+        ):
+            return False
+        assert isinstance(error, Exception)
+        retired.transport_absence_observed = True
+        retired.transport_absence_fingerprint = _exception_fingerprint(error)
+        # This records only outer transport absence. The inner ACK flag and
+        # all policy, request, prearm and resource accounting stay unchanged.
+        return True
+
+    def _cancel_detached_route_commands(
+        self,
+        keys: list[tuple[tuple[str, ...], int]],
+    ) -> None:
+        policy_commands = [
+            self._pending[key]
+            for key in keys
+            if key in self._pending and self._pending[key].policy_decision
+        ]
+        if policy_commands and not self._aborting:
+            labels = ", ".join(sorted(command.label for command in policy_commands))
+            raise CdpTargetIntegrityError(
+                f"CDP target detached with policy acknowledgements pending: {labels}"
+            )
+        for key in keys:
+            pending = self._pending.get(key)
+            if pending is not None and not pending.policy_decision:
+                self._pending.pop(key, None)
+
+    def _notify_target_activity(self, source: CdpTargetSource, event: str) -> None:
+        if self._on_target_activity is not None:
+            self._on_target_activity(source, event)
+
+    def _received(self, parent_route: tuple[str, ...], event: Mapping[str, Any]) -> None:
+        session_id = event.get("sessionId")
+        message = event.get("message")
+        if not isinstance(session_id, str) or not session_id or not isinstance(message, str):
+            raise CdpTargetIntegrityError("nested CDP message envelope is malformed")
+        route = (*parent_route, session_id)
+        state = self._state(route)
+        if state.phase in {"destroyed", "detached"} and state.iframe_retired_cleanup is None:
+            raise CdpTargetIntegrityError("detached CDP target emitted a protocol message")
+        target_id = event.get("targetId")
+        if target_id is not None and target_id != state.source.target_id:
+            raise CdpTargetIntegrityError("nested CDP message changed target identity")
+        try:
+            payload = json.loads(message)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise CdpTargetIntegrityError("nested CDP message is not valid JSON") from error
+        if not isinstance(payload, Mapping):
+            raise CdpTargetIntegrityError("nested CDP message payload is not an object")
+        if state.phase in {"destroyed", "detached"}:
+            self._ack_retired_iframe_cleanup(state, payload)
+            return
+        self._handle_payload(state.source, payload)
+
+    def _handle_payload(self, source: CdpTargetSource, payload: Mapping[str, Any]) -> None:
+        if "id" in payload:
+            command_id = payload["id"]
+            if type(command_id) is not int:
+                raise CdpTargetIntegrityError("nested CDP response ID is malformed")
+            pending = self._pending.pop((source.session_path, command_id), None)
+            if pending is None:
+                raise CdpTargetIntegrityError("nested CDP response has no pending command")
+            if payload.get("error") is not None:
+                detail = _sanitised_protocol_error(payload["error"])
+                raise CdpTargetIntegrityError(
+                    f"nested CDP command {pending.label} failed ({detail})"
+                )
+            if "result" not in payload or not isinstance(payload["result"], Mapping):
+                raise CdpTargetIntegrityError(
+                    f"nested CDP command {pending.label} returned malformed data"
+                )
+            if pending.policy_decision:
+                if type(payload["result"]) is not dict:
+                    raise CdpTargetIntegrityError(
+                        f"nested CDP policy command {pending.label} returned malformed data"
+                    )
+                if payload["result"] != {}:
+                    raise CdpTargetIntegrityError(
+                        f"nested CDP policy command {pending.label} did not return an exact "
+                        "empty result"
+                    )
+            result = payload["result"]
+            if pending.on_success is not None:
+                pending.on_success(result)
+            return
+        method = payload.get("method")
+        params = payload.get("params", {})
+        if not isinstance(method, str) or not isinstance(params, Mapping):
+            raise CdpTargetIntegrityError("nested CDP event is malformed")
+        if method == "Target.attachedToTarget":
+            self._attached(source.session_path, params)
+        elif method == "Target.detachedFromTarget":
+            self._detached(source.session_path, params)
+        elif method == "Target.receivedMessageFromTarget":
+            self._received(source.session_path, params)
+        elif method in _TARGET_LIFECYCLE_METHODS:
+            self._target_lifecycle_event(method, params)
+        elif method in _IFRAME_CONTEXT_EVENTS:
+            self._handle_iframe_context_event(source, method, params)
+        elif method == "Debugger.scriptParsed":
+            self._handle_worker_script_parsed(source, params)
+        elif method == "Debugger.paused":
+            self._handle_debugger_paused(source, params)
+        elif method in _NON_REPLAYABLE_EGRESS_EVENTS:
+            self._handle_non_replayable_egress(source, method, params)
+        elif method in _FORWARDED_METHODS:
+            self._handle_forwarded(source, method, params)
+        elif method.startswith("Target."):
+            raise CdpTargetIntegrityError(
+                f"unsupported nested CDP target lifecycle event: {method}"
+            )
+
+    def _queue_command(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        params: dict[str, Any],
+        *,
+        label: str,
+        on_success: Callable[[Mapping[str, Any]], None] | None = None,
+        policy_decision: bool = False,
+    ) -> None:
+        if not source.session_path:
+            raise CdpTargetIntegrityError("nested CDP command has no child-session route")
+        command_id = self._allocate_command_id()
+        key = (source.session_path, command_id)
+        self._pending[key] = _PendingCommand(label, on_success, policy_decision)
+        self._send_raw(
+            source.session_path,
+            {"id": command_id, "method": method, "params": params},
+            label=label,
+        )
+
+    def _send_raw(
+        self,
+        route: tuple[str, ...],
+        payload: Mapping[str, Any],
+        *,
+        label: str,
+    ) -> None:
+        session_id = route[-1]
+        message = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        parent_route = route[:-1]
+        if not parent_route:
+            try:
+                self._root_send(
+                    "Target.sendMessageToTarget",
+                    {"sessionId": session_id, "message": message},
+                )
+            except CdpTargetIntegrityError as error:
+                if not self._record_retired_iframe_transport_absence(
+                    route, payload, label, error.__cause__,
+                ):
+                    raise
+            return
+        wrapper_id = self._allocate_command_id()
+        self._pending[(parent_route, wrapper_id)] = _PendingCommand(f"transport-forward:{label}")
+        self._send_raw(
+            parent_route,
+            {
+                "id": wrapper_id,
+                "method": "Target.sendMessageToTarget",
+                "params": {"sessionId": session_id, "message": message},
+            },
+            label=f"transport-forward:{label}",
+        )
+
+    def _allocate_command_id(self) -> int:
+        result = self._next_command_id
+        self._next_command_id += 1
+        return result
+
+    def _resolve_active_request(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+        *,
+        allow_target_migration: bool,
+    ) -> _ActiveRequest | None:
+        candidates = list(self._active_requests.get(request_id, ()))
+        local = [item for item in candidates if item.source == source]
+        if len(local) == 1:
+            return local[0]
+        if len(local) > 1:
+            raise CdpTargetIntegrityError("CDP request identity is ambiguous within one target")
+        if not allow_target_migration:
+            return None
+        if source.target_type == "iframe":
+            migrated = [
+                item
+                for item in candidates
+                if item.resource_type == "Document"
+                and item.loader_id == request_id
+                and item.frame_id == source.target_id
+            ]
+            label = "OOPIF"
+        elif source.target_type in {"worker", "shared_worker"}:
+            bootstrap = self._worker_bootstraps.get(source)
+            migrated = [
+                item
+                for item in candidates
+                if bootstrap is not None
+                and bootstrap.owner_source is not None
+                and item.source == bootstrap.owner_source
+                and item.request_id == source.target_id
+                and item.resource_type == "Script"
+                and item.method == "GET"
+            ]
+            label = "worker bootstrap"
+        else:
+            return None
+        if len(migrated) > 1:
+            raise CdpTargetIntegrityError(f"{label} request migration is ambiguous")
+        return migrated[0] if migrated else None
+
+    def _resolve_worker_subresource_extra_info(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+    ) -> _ActiveRequest | None:
+        """Bind Chromium's owner-routed worker request-header evidence.
+
+        Chromium 143 reports a worker subresource's primary Network events on
+        the worker target, while ``requestWillBeSentExtraInfo`` is delivered
+        on the exact page or OOPIF session that created that worker.  The
+        ExtraInfo event carries no URL, loader, frame, or target identity, so
+        it is migrated only when one live worker occurrence with the same raw
+        request ID has that exact bootstrap owner.  Cross-owner or duplicate
+        candidates remain fail-closed.
+        """
+
+        candidates: list[_ActiveRequest] = []
+        for active in self._active_requests.get(request_id, ()):
+            if active.source.target_type not in {"worker", "shared_worker"}:
+                continue
+            bootstrap = self._worker_bootstraps.get(active.source)
+            if bootstrap is not None and bootstrap.owner_source == source:
+                candidates.append(active)
+        if len(candidates) > 1:
+            raise CdpTargetIntegrityError("worker subresource ExtraInfo migration is ambiguous")
+        return candidates[0] if candidates else None
+
+    def _delayed_pre_shutdown_worker_extra_info_source(
+        self,
+        owner_source: CdpTargetSource,
+        request_id: str,
+    ) -> CdpTargetSource | None:
+        """Resolve one terminal scientific worker occurrence after the cutoff.
+
+        Chromium can deliver a worker subresource's owner-routed request-header
+        evidence after its worker-side Network terminal.  ExtraInfo exposes
+        only the raw request ID, so reconstruction is allowed only from the
+        bounded pre-shutdown identity history and the exact retained bootstrap
+        owner.  Live occurrences are left to the ordinary resolver.
+        """
+
+        if not self._shutting_down or self._aborting:
+            return None
+        if self._pre_shutdown_network_identity_saturated:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo has saturated scientific history"
+            )
+        live_sources = {
+            active.source for active in self._active_requests.get(request_id, ())
+        }
+        candidates: list[CdpTargetSource] = []
+        for candidate_source, candidate_request_id in (
+            self._pre_shutdown_network_identities
+        ):
+            if (
+                candidate_request_id != request_id
+                or candidate_source in live_sources
+                or candidate_source.target_type not in _WORKER_TARGET_TYPES
+            ):
+                continue
+            bootstrap = self._worker_bootstraps.get(candidate_source)
+            if bootstrap is not None and bootstrap.owner_source == owner_source:
+                candidates.append(candidate_source)
+        if not candidates:
+            return None
+        if (owner_source, request_id) in self._pre_shutdown_network_identities:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo collides with scientific owner history"
+            )
+        if len(candidates) > 1:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo scientific migration is ambiguous"
+            )
+        identity = (candidates[0], request_id)
+        if identity in self._pre_shutdown_reused_network_identities:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo scientific identity was reused"
+            )
+        return candidates[0]
+
+    def _claim_pre_shutdown_worker_extra_info(
+        self,
+        worker_source: CdpTargetSource,
+        request_id: str,
+    ) -> None:
+        identity = (worker_source, request_id)
+        occurrence_total = self._pre_shutdown_network_occurrence_counts.get(identity)
+        if occurrence_total is None:
+            return
+        if identity in self._pre_shutdown_reused_network_identities:
+            raise CdpTargetIntegrityError(
+                "worker ExtraInfo scientific identity was reused"
+            )
+        claimed_total = self._pre_shutdown_worker_extra_info_claims.get(identity, 0)
+        if claimed_total >= occurrence_total:
+            raise CdpTargetIntegrityError(
+                "worker ExtraInfo scientific occurrence bound was exceeded"
+            )
+        self._pre_shutdown_worker_extra_info_claims[identity] = claimed_total + 1
+
+    def _remove_active(self, active: _ActiveRequest) -> None:
+        self._cached_inline_data_requests.discard(
+            active.source.request_chain_key(active.request_id)
+        )
+        state = self._state(active.source.session_path)
+        state.active_request_ids.discard(active.request_id)
+        candidates = self._active_requests.get(active.request_id, [])
+        if active in candidates:
+            candidates.remove(active)
+        if not candidates:
+            self._active_requests.pop(active.request_id, None)
+
+    def _record_root_terminal_request(
+        self,
+        active: _ActiveRequest,
+        *,
+        terminal_method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Retain a bounded exact tombstone and resolve a provisional continue."""
+
+        if active.source != self.root_source:
+            raise CdpTargetIntegrityError(
+                "root terminal history received a non-root Network occurrence"
+            )
+        key = (active.source, active.request_id)
+        if key in self._root_terminal_requests:
+            raise CdpTargetIntegrityError(
+                "root Network occurrence emitted more than one terminal event"
+            )
+        terminal_is_eligible = self._is_eligible_root_terminal_event(
+            active,
+            terminal_method=terminal_method,
+            event=event,
+        )
+        terminal_is_canceled_retry = self._is_exact_canceled_root_terminal_event(
+            active,
+            terminal_method=terminal_method,
+            event=event,
+        )
+        pending = self._pending_root_invalid_interceptions.get(key)
+        if pending is not None:
+            if pending.active is not active or not self._root_fetch_matches_active(
+                pending, active
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId terminal did not match its provisional Fetch"
+                )
+            if pending.abort_owned:
+                if not self._aborting:
+                    raise CdpTargetIntegrityError(
+                        "abort-owned InvalidInterceptionId provisional escaped abort"
+                    )
+                # Disposal terminals cannot promote already rejected evidence.
+                # The provisional remains owned until finish_abort accounts it.
+                return
+            if not terminal_is_eligible:
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId received a malformed or ineligible Network terminal"
+                )
+        elif self._aborting:
+            return
+        if not (terminal_is_eligible or terminal_is_canceled_retry):
+            return
+        terminal = _RootTerminalRequest(active=active, terminal_method=terminal_method)
+        if pending is not None:
+            # Identity and full-field validation above must complete before
+            # state removal so a mismatch cannot be misreported as an abort.
+            self._pending_root_invalid_interceptions.pop(key)
+            self._record_resolved_root_invalid_interception(
+                pending,
+                terminal_method=terminal_method,
+                terminal_before_policy=False,
+                fingerprint=pending.transport_fingerprint,
+            )
+        if len(self._root_terminal_requests) >= _ROOT_TERMINAL_HISTORY_LIMIT:
+            self._root_terminal_history_saturated = True
+            return
+        self._root_terminal_requests[key] = terminal
+
+    def _is_eligible_root_terminal_event(
+        self,
+        active: _ActiveRequest,
+        *,
+        terminal_method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        if (
+            self._root_frame_id is None
+            or active.frame_id != self._root_frame_id
+            or active.resource_type
+            not in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+            or active.method != "GET"
+            or not isinstance(active.url, str)
+            or not active.url
+            or event.get("requestId") != active.request_id
+        ):
+            return False
+        return (
+            terminal_method == "Network.loadingFinished"
+            and frozenset(event) == {"requestId", "timestamp", "encodedDataLength"}
+            and _is_finite_protocol_number(event.get("timestamp"))
+            and _is_finite_protocol_number(event.get("encodedDataLength"))
+            and float(event["encodedDataLength"]) >= 0
+        )
+
+    def _is_exact_canceled_root_terminal_event(
+        self,
+        active: _ActiveRequest,
+        *,
+        terminal_method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Retain a canceled Script/Other tombstone for discard-only retry."""
+
+        return (
+            active.source == self.root_source
+            and self._root_frame_id is not None
+            and active.frame_id == self._root_frame_id
+            and active.resource_type in _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES
+            and active.method == "GET"
+            and isinstance(active.url, str)
+            and bool(active.url)
+            and not active.redirected
+            and terminal_method == "Network.loadingFailed"
+            and frozenset(event)
+            == {"requestId", "timestamp", "type", "errorText", "canceled"}
+            and event.get("requestId") == active.request_id
+            and event.get("type") == active.resource_type
+            and event.get("errorText") == "net::ERR_ABORTED"
+            and event.get("canceled") is True
+            and _is_finite_protocol_number(event.get("timestamp"))
+        )
+
+    def _terminalise_request(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+        *,
+        synthetic_shutdown: bool,
+    ) -> None:
+        active = self._resolve_active_request(source, request_id, allow_target_migration=False)
+        if active is None:
+            return
+        self._pending_blocked_documents.pop(
+            active.source.request_chain_key(request_id),
+            None,
+        )
+        disposal_owned = (
+            synthetic_shutdown and self._normal_shutdown_disposal.owns(active)
+        )
+        if disposal_owned:
+            self._normal_shutdown_disposal.add_terminal(
+                active,
+                terminal_method="Network.loadingFailed",
+                synthetic_shutdown=True,
+            )
+        self._remove_active(active)
+        if synthetic_shutdown and not disposal_owned:
+            self._on_event(
+                active.source,
+                "Network.loadingFailed",
+                {"requestId": request_id, "canceled": True, "qcsdShutdown": True},
+            )
+
+
+@dataclass
+class _PopupTabTripwire:
+    """Browser-scope lifecycle of one synchronously rejected popup tab."""
+
+    session_id: str
+    target_id: str
+    close_requested: bool = False
+    close_acknowledged: bool = False
+    detached: bool = False
+    destroyed: bool = False
+
+
+class BrowserSharedWorkerGuard:
+    """Guard shared workers and tripwire root-context popup tabs.
+
+    Playwright's public browser CDP session exposes flattened attachment events
+    but cannot address those child sessions.  The flattened session is used
+    only as a debugger hold and lifecycle guardian.  The page router performs
+    a separately validated non-flat adoption, configures the target, and is the
+    sole component that resumes it. Browser-level ``tab`` auto-attachment
+    additionally closes and receipts any root-context popup before its paused
+    page is resumed. This is a post-creation tripwire: packet-level tests prove
+    that tab creation itself can perform I/O before the attachment event.
+    """
+
+    def __init__(
+        self,
+        session: _CdpSession,
+        router: RecursiveCdpTargetRouter,
+    ) -> None:
+        self._session = session
+        self._router = router
+        self._started = False
+        self._shutting_down = False
+        self._aborting = False
+        self._finished = False
+        self._page_discovery_started = False
+        self._root_tab_session_id: str | None = None
+        self._root_tab_target_id: str | None = None
+        self._root_tab_detached = False
+        self._popup_tabs: dict[str, _PopupTabTripwire] = {}
+        self._popup_target_by_session: dict[str, str] = {}
+
+    def start(self) -> None:
+        """Install shared-worker holds and popup-tab tripwires before navigation."""
+
+        if self._started:
+            raise CdpTargetIntegrityError("browser shared-worker guard started more than once")
+        self._router.register_shared_worker_guard()
+        self._session.on("Target.attachedToTarget", self._dispatch_attached)
+        self._session.on("Target.detachedFromTarget", self._dispatch_detached)
+        self._session.on("Inspector.targetCrashed", self._dispatch_crashed)
+        self._session.on("Target.targetCrashed", self._dispatch_crashed)
+        self._session.on(
+            "Target.targetCreated",
+            lambda event: self._dispatch_browser_target("Target.targetCreated", event),
+        )
+        self._session.on(
+            "Target.targetInfoChanged",
+            lambda event: self._dispatch_browser_target("Target.targetInfoChanged", event),
+        )
+        self._session.on("Target.targetDestroyed", self._dispatch_target_destroyed)
+        self._started = True
+        self._send(*_PAGE_DISCOVERY_COMMAND)
+        self._page_discovery_started = True
+        self._send(*_SHARED_WORKER_GUARD_COMMAND)
+        barrier = self._send(*_SHARED_WORKER_GUARD_BARRIER)
+        infos = barrier.get("targetInfos")
+        if not isinstance(infos, list) or not all(isinstance(info, Mapping) for info in infos):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard barrier returned malformed targets"
+            )
+        root = self._router.root_source
+        matching_roots = [
+            info
+            for info in infos
+            if info.get("targetId") == root.target_id
+            and info.get("type") == "page"
+            and info.get("browserContextId") == self._router.root_browser_context_id
+        ]
+        if len(matching_roots) != 1:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard barrier did not identify the root page"
+            )
+        if self._root_tab_target_id is None or self._root_tab_session_id is None:
+            raise CdpTargetIntegrityError(
+                "browser popup-tab tripwire did not identify exactly one unpaused root tab"
+            )
+        for info in infos:
+            self._validate_page_target_info(info)
+        self._router.raise_if_failed()
+
+    def begin_shutdown(self) -> None:
+        """Declare that context disposal is the next operation."""
+
+        if not self._started or self._shutting_down or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard shutdown is missing or repeated"
+            )
+        self._router.begin_shared_worker_guard_shutdown()
+        self._shutting_down = True
+
+    def begin_abort(self) -> None:
+        """Declare rejected-observation disposal as the next operation."""
+
+        if not self._started or self._shutting_down or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard abort is missing or repeated"
+            )
+        self._router.begin_shared_worker_guard_abort()
+        self._aborting = True
+        self._shutting_down = True
+
+    def finish(self) -> None:
+        """Prove guardian detaches, disable auto-attach, and close the session."""
+
+        if not self._shutting_down or self._aborting or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard finished without deliberate shutdown"
+            )
+        if self._popup_tabs:
+            raise CdpTargetIntegrityError(
+                "browser popup-tab tripwire cannot produce successful evidence"
+            )
+        self._prove_shared_worker_guard_lifecycles()
+        self._router.finish_shared_worker_guard()
+        self._disable_and_detach()
+        self._finished = True
+        self._router.raise_if_failed()
+
+    def finish_abort(self) -> None:
+        """Detach the browser guard after the rejected context was disposed."""
+
+        if not self._shutting_down or not self._aborting or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard abort finished without disposal"
+            )
+        self._prove_popup_tab_close_lifecycles()
+        self._router.finish_shared_worker_guard_abort()
+        self._disable_and_detach()
+        self._finished = True
+
+    def _prove_popup_tab_close_lifecycles(self) -> None:
+        """Drain ordered CDP barriers until every rejected tab has detached."""
+
+        if not self._popup_tabs:
+            return
+        if any(not popup.close_acknowledged for popup in self._popup_tabs.values()):
+            raise CdpTargetIntegrityError(
+                "browser popup-tab close acknowledgement remains unresolved"
+            )
+        for _ in range(_BROWSER_TARGET_LIFECYCLE_BARRIER_LIMIT):
+            barrier = self._send(*_SHARED_WORKER_GUARD_BARRIER)
+            infos = barrier.get("targetInfos")
+            if not isinstance(infos, list) or not all(isinstance(info, Mapping) for info in infos):
+                raise CdpTargetIntegrityError(
+                    "browser popup-tab lifecycle barrier returned malformed targets"
+                )
+            live_target_ids = {
+                info.get("targetId") for info in infos if isinstance(info.get("targetId"), str)
+            }
+            if all(
+                popup.detached and popup.target_id not in live_target_ids
+                for popup in self._popup_tabs.values()
+            ):
+                return
+        raise CdpTargetIntegrityError(
+            "browser popup-tab close did not reach an exact detached lifecycle"
+        )
+
+    def _prove_shared_worker_guard_lifecycles(self) -> None:
+        """Drain ordered browser events without synthesising guardian retirement."""
+
+        _guarded, unresolved, guardian_session_count = (
+            self._router.shared_worker_guard_lifecycle_state()
+        )
+        if not unresolved and guardian_session_count == 0:
+            return
+        for _ in range(_BROWSER_TARGET_LIFECYCLE_BARRIER_LIMIT):
+            barrier = self._send(*_SHARED_WORKER_GUARD_BARRIER)
+            infos = barrier.get("targetInfos")
+            if not isinstance(infos, list) or not all(isinstance(info, Mapping) for info in infos):
+                raise CdpTargetIntegrityError(
+                    "browser shared-worker lifecycle barrier returned malformed targets"
+                )
+            live_target_ids: set[str] = set()
+            for info in infos:
+                target_id = info.get("targetId")
+                if not isinstance(target_id, str) or not target_id or target_id in live_target_ids:
+                    raise CdpTargetIntegrityError(
+                        "browser shared-worker lifecycle barrier returned malformed identities"
+                    )
+                live_target_ids.add(target_id)
+            guarded, unresolved, guardian_session_count = (
+                self._router.shared_worker_guard_lifecycle_state()
+            )
+            if (
+                not unresolved
+                and guardian_session_count == 0
+                and live_target_ids.isdisjoint(guarded)
+            ):
+                return
+        raise CdpTargetIntegrityError(
+            "browser shared-worker guardian detach did not reach an exact lifecycle"
+        )
+
+    def _disable_and_detach(self) -> None:
+        if not self._page_discovery_started:
+            raise CdpTargetIntegrityError(
+                "browser page-target discovery was not active at guard finish"
+            )
+        self._send(
+            "Target.setAutoAttach",
+            {
+                "autoAttach": False,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+            },
+        )
+        self._send(*_PAGE_DISCOVERY_DISABLE_COMMAND)
+        self._page_discovery_started = False
+        try:
+            self._session.detach()
+        except Exception as error:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard session detach failed"
+            ) from error
+
+    def _validate_page_target_info(self, info: Mapping[str, Any]) -> None:
+        """Reject sibling pages and browser-scope service workers in the root context."""
+
+        target_type = info.get("type")
+        if target_type not in {"page", "service_worker"}:
+            return
+        target_id = info.get("targetId")
+        browser_context_id = info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or not isinstance(browser_context_id, str)
+            or not browser_context_id
+        ):
+            raise CdpTargetIntegrityError(
+                "browser page-target discovery reported a malformed identity"
+            )
+        root = self._router.root_source
+        root_context = self._router.root_browser_context_id
+        if browser_context_id == root_context and target_type == "service_worker":
+            service_worker_url = info.get("url")
+            self._router.browser_service_worker_attempt(
+                service_worker_url
+                if isinstance(service_worker_url, str) and service_worker_url
+                else None
+            )
+            raise CdpTargetIntegrityError(
+                "service-worker target violated the blocked-worker policy"
+            )
+        if target_type != "page":
+            return
+        if target_id == root.target_id and browser_context_id != root_context:
+            raise CdpTargetIntegrityError("root browser page target changed its context identity")
+        if browser_context_id == root_context and target_id != root.target_id:
+            raise CdpTargetIntegrityError(
+                "sibling popup/page target escaped the recursive discovery graph"
+            )
+
+    def _send(self, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            result = self._session.send(method, dict(params))
+        except Exception as error:
+            raise CdpTargetIntegrityError(
+                f"browser shared-worker guard command {method} failed"
+            ) from error
+        if not isinstance(result, dict):
+            raise CdpTargetIntegrityError(
+                f"browser shared-worker guard command {method} returned malformed data"
+            )
+        return result
+
+    def _dispatch_attached(self, event: dict[str, Any]) -> None:
+        target_info = event.get("targetInfo")
+        if isinstance(target_info, Mapping) and target_info.get("type") == "tab":
+            # Closing a waiting popup remains important even when an earlier,
+            # later-stage page discovery event has already failed the router.
+            self._dispatch(lambda: self._attached_tab(event), allow_after_failure=True)
+            return
+        self._dispatch(lambda: self._router.adopt_guarded_shared_worker(event))
+
+    def _dispatch_detached(self, event: dict[str, Any]) -> None:
+        session_id = event.get("sessionId")
+        if session_id == self._root_tab_session_id or (
+            isinstance(session_id, str) and session_id in self._popup_target_by_session
+        ):
+            self._dispatch(lambda: self._detached_tab(event), allow_after_failure=True)
+            return
+        self._dispatch(lambda: self._router.guarded_shared_worker_detached(event))
+
+    def _attached_tab(self, event: Mapping[str, Any]) -> None:
+        """Track the existing tab or synchronously close a waiting popup tab."""
+
+        session_id = event.get("sessionId")
+        info = event.get("targetInfo")
+        waiting = event.get("waitingForDebugger")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(info, Mapping)
+            or info.get("type") != "tab"
+        ):
+            raise CdpTargetIntegrityError("browser tab attachment is malformed")
+        target_id = info.get("targetId")
+        browser_context_id = info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or not isinstance(browser_context_id, str)
+            or not browser_context_id
+            or info.get("attached") is not True
+            or type(waiting) is not bool
+        ):
+            raise CdpTargetIntegrityError("browser tab attachment identity is malformed")
+        if waiting is False:
+            if browser_context_id != self._router.root_browser_context_id:
+                raise CdpTargetIntegrityError(
+                    "unpaused browser tab attachment escaped the root browser context"
+                )
+            if self._root_tab_target_id is not None or self._root_tab_session_id is not None:
+                raise CdpTargetIntegrityError(
+                    "browser popup-tab tripwire observed more than one unpaused root tab"
+                )
+            self._root_tab_target_id = target_id
+            self._root_tab_session_id = session_id
+            return
+        if (
+            target_id == self._root_tab_target_id
+            or target_id in self._popup_tabs
+            or session_id == self._root_tab_session_id
+            or session_id in self._popup_target_by_session
+        ):
+            raise CdpTargetIntegrityError(
+                "browser popup-tab tripwire reused a target or session identity"
+            )
+        popup = _PopupTabTripwire(session_id=session_id, target_id=target_id)
+        self._popup_tabs[target_id] = popup
+        self._popup_target_by_session[session_id] = target_id
+        callback_error: Exception | None = None
+        try:
+            popup_url = info.get("url")
+            self._router.browser_popup_tab_attempt(
+                popup_url if isinstance(popup_url, str) and popup_url else None
+            )
+        except Exception as error:  # noqa: BLE001 - close still must be attempted
+            callback_error = error
+        popup.close_requested = True
+        close_result = self._send("Target.closeTarget", {"targetId": target_id})
+        if set(close_result) != {"success"} or close_result.get("success") is not True:
+            raise CdpTargetIntegrityError("browser popup-tab tripwire close was not acknowledged")
+        popup.close_acknowledged = True
+        if callback_error is not None:
+            raise callback_error
+        if browser_context_id != self._router.root_browser_context_id:
+            raise CdpTargetIntegrityError(
+                "waiting browser tab attachment escaped the root browser context"
+            )
+
+    def _detached_tab(self, event: Mapping[str, Any]) -> None:
+        """Validate exact flattened-session termination for a browser tab."""
+
+        session_id = event.get("sessionId")
+        target_id = event.get("targetId")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(target_id, str)
+            or not target_id
+        ):
+            raise CdpTargetIntegrityError("browser tab detach identity is malformed")
+        if session_id == self._root_tab_session_id:
+            if target_id != self._root_tab_target_id or self._root_tab_detached:
+                raise CdpTargetIntegrityError("root browser tab detach changed identity")
+            self._root_tab_detached = True
+            if not self._shutting_down:
+                raise CdpTargetIntegrityError(
+                    "root browser tab detached before the disposal boundary"
+                )
+            return
+        expected_target = self._popup_target_by_session.get(session_id)
+        if expected_target != target_id or target_id not in self._popup_tabs:
+            raise CdpTargetIntegrityError("popup browser tab detach changed identity")
+        popup = self._popup_tabs[target_id]
+        if not popup.close_requested or popup.detached:
+            raise CdpTargetIntegrityError("popup browser tab detached outside its close lifecycle")
+        popup.detached = True
+
+    def _dispatch_browser_target(self, method: str, event: dict[str, Any]) -> None:
+        def validate() -> None:
+            info = event.get("targetInfo")
+            if not isinstance(info, Mapping):
+                raise CdpTargetIntegrityError("browser page-target discovery event is malformed")
+            self._validate_page_target_info(info)
+            if (
+                method == "Target.targetInfoChanged"
+                and info.get("targetId") == self._router.root_source.target_id
+            ):
+                self._router.browser_target_info_changed(info)
+
+        self._dispatch(validate)
+
+    def _dispatch_target_destroyed(self, event: dict[str, Any]) -> None:
+        def validate() -> None:
+            target_id = event.get("targetId")
+            if not isinstance(target_id, str) or not target_id:
+                raise CdpTargetIntegrityError("browser page-target destruction event is malformed")
+            if target_id in self._popup_tabs:
+                popup = self._popup_tabs[target_id]
+                if not popup.close_requested or popup.destroyed:
+                    raise CdpTargetIntegrityError(
+                        "popup browser tab destruction violated its close lifecycle"
+                    )
+                popup.destroyed = True
+                return
+            if not self._shutting_down and target_id in {
+                self._router.root_source.target_id,
+                self._root_tab_target_id,
+            }:
+                raise CdpTargetIntegrityError(
+                    "root page/tab target was destroyed before the evidence cutoff"
+                )
+
+        self._dispatch(validate, allow_after_failure=True)
+
+    def _dispatch_crashed(self, _event: dict[str, Any]) -> None:
+        self._dispatch(self._raise_target_crashed)
+
+    @staticmethod
+    def _raise_target_crashed() -> None:
+        raise CdpTargetIntegrityError("browser-level shared-worker target crashed")
+
+    def _dispatch(
+        self,
+        operation: Callable[[], None],
+        *,
+        allow_after_failure: bool = False,
+    ) -> None:
+        if self._finished or (
+            self._router._failure is not None
+            and not self._router._aborting
+            and not allow_after_failure
+        ):
+            return
+        try:
+            operation()
+        except Exception as error:  # noqa: BLE001 - retained for fail-closed finish
+            self._router._record_failure(error)
