@@ -200,3 +200,8 @@ For a complete-census, PCAP-only results narrative prepared for review, see the
 [report builder](report/README.md). It checks the manifest, input provenance,
 cohort and summary consistency, exclusions and figure identities; no report is
 published automatically, and historical metadata is not used for the numbers.
+
+For a read-only consistency check of the measurement database against the final
+manifest, see the [census verifier](census-qa/README.md). It checks recorded
+identities, byte-accounting invariants, timestamp spans and quality flags; it
+does not independently re-read the captures or prove defense fidelity.
