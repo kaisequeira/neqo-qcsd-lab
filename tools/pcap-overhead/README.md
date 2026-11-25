@@ -186,3 +186,8 @@ The literature basis and interpretation boundaries are in the study's
 For supplemental MAL configuration strata only, add `--mal-timing mal-buflo-timing-map.csv` and use a new output directory. The main estimates and bootstrap intervals remain exactly unchanged when these labels are provided.
 
 The extractor needs Python 3.9+ and Wireshark as above; the statistical aggregator requires Python 3.11+ and NumPy 2.3.5 (`python -m pip install -r requirements.txt`).
+
+For per-session distributions, capture-epoch coverage and exploratory
+within-domain robustness checks after the full census, see the
+[descriptive analysis](descriptive/README.md). It uses the same verified
+final-PCAP metrics and does not change the primary estimates.
