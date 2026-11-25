@@ -198,6 +198,26 @@ class BundleTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 b.validate_day_packet_eligibility({**result, **changes}, quality)
 
+    def test_arithmetic_audit_binds_coverage_scope_snapshot_and_tables(self):
+        quality, _, _, _, sbytes, dbytes, _, _ = self.domain_fixture()
+        result = {'status': 'passed', 'scope': b.ARITHMETIC_AUDIT_SCOPE,
+                  'manifest_sha256': self.manifest_sha, 'aggregator_sha256': b.AGGREGATE_SHA,
+                  'metric_rows_content_sha256': self.snapshot, 'captures': 12, 'domains': 1,
+                  'domain_table_sha256': sha(dbytes), 'overall_table_sha256': sha(sbytes),
+                  'domain_rows_checked': 10, 'overall_rows_checked': 10,
+                  'unavailable_domain_rows': 0, 'unavailable_overall_rows': 0, 'differences': []}
+        b.validate_arithmetic_audit(result, quality, dbytes, sbytes, expected_domains=1)
+        unavailable = {**result, 'status': 'passed_with_unavailable', 'domain_rows_checked': 8,
+                       'overall_rows_checked': 8, 'unavailable_domain_rows': 2, 'unavailable_overall_rows': 2}
+        b.validate_arithmetic_audit(unavailable, quality, dbytes, sbytes, expected_domains=1)
+        for changes in ({'status': 'passed_with_unavailable'}, {'scope': 'PCAPs independently checked'},
+                        {'metric_rows_content_sha256': '0'*64}, {'captures': 11},
+                        {'domain_rows_checked': 9}, {'domain_rows_checked': True},
+                        {'overall_table_sha256': '0'*64}, {'differences': [{'field': 'overhead_pct'}]},
+                        {'status': 'discrepancies'}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                b.validate_arithmetic_audit({**result, **changes}, quality, dbytes, sbytes, expected_domains=1)
+
     def test_clean_sensitivity_provenance_and_arithmetic(self):
         detail, summaries, primary, quality, clean_q = self.clean_fixture()
         b.validate_clean_provenance(clean_q, quality, 'b' * 64, expected_rows=12)
@@ -431,6 +451,14 @@ class BundleTests(unittest.TestCase):
                                          'metric_rows_content_sha256': self.snapshot,
                                          'packet_count_categories': {'valid': 12}, 'scope': b.DAY_ELIGIBILITY_SCOPE}))
         day_source = self.root / 'check_day_packet_count_eligibility.py'; day_source.write_text('# synthetic source\n')
+        arithmetic_result = self.root / 'independent-arithmetic-audit.json'
+        arithmetic_result.write_text(json.dumps({'status': 'passed', 'scope': b.ARITHMETIC_AUDIT_SCOPE,
+            'manifest_sha256': self.manifest_sha, 'aggregator_sha256': b.AGGREGATE_SHA,
+            'metric_rows_content_sha256': self.snapshot, 'captures': 12, 'domains': 1,
+            'domain_table_sha256': sha(dbytes), 'overall_table_sha256': sha(sbytes),
+            'domain_rows_checked': 10, 'overall_rows_checked': 10,
+            'unavailable_domain_rows': 0, 'unavailable_overall_rows': 0, 'differences': []}))
+        arithmetic_source = self.root / 'audit.py'; arithmetic_source.write_text('# synthetic arithmetic audit source\n')
         resources = self.root / 'resources.csv'; resources.write_text('domain\nfixture.invalid\n')
         census = self.root / 'census.json'; census.write_text('{"status":"synthetic"}\n')
         report = b'# SYNTHETIC REPORT\n'
@@ -438,19 +466,27 @@ class BundleTests(unittest.TestCase):
                                resources=resources, aggregate=ag, descriptive=de, figures=fi, day=day,
                                census_qa=census, reviewed_report_sha256=sha(report),
                                domain_bootstrap=domain, domain_bootstrap_script=source,
-                               day_eligibility=day_result, day_eligibility_script=day_source)
+                               day_eligibility=day_result, day_eligibility_script=day_source,
+                               arithmetic_audit=arithmetic_result, arithmetic_audit_script=arithmetic_source)
         result = b.verify_database(self.db, self.manifest, self.manifest_sha, self.snapshot)
         fake_day_sha = sha(day_source.read_bytes())
+        fake_audit_sha = sha(arithmetic_source.read_bytes())
         b.assemble_zip(args, self.db, self.manifest, quality, result, report, '# SYNTHETIC DRAFT', synthetic=True,
-                       expected_day_eligibility_sha=fake_day_sha)
-        b.verify_zip(args.output, strict=True, expected_day_eligibility_sha=fake_day_sha)
+                       expected_day_eligibility_sha=fake_day_sha, expected_arithmetic_audit_sha=fake_audit_sha,
+                       expected_arithmetic_domains=1)
+        b.verify_zip(args.output, strict=True, expected_day_eligibility_sha=fake_day_sha,
+                     expected_arithmetic_audit_sha=fake_audit_sha, expected_arithmetic_domains=1)
         with self.assertRaisesRegex(ValueError, 'UTC-day packet-count eligibility source hash mismatch'):
             b.verify_zip(args.output, strict=True)
+        with self.assertRaisesRegex(ValueError, 'Independent arithmetic audit source hash mismatch'):
+            b.verify_zip(args.output, strict=True, expected_day_eligibility_sha=fake_day_sha,
+                         expected_arithmetic_domains=1)
         with zipfile.ZipFile(args.output) as z:
             content = {n: z.read(n) for n in z.namelist() if n != 'SHA256SUMS.txt'}
         self.assertEqual(content['results/domain-bootstrap/domain_bootstrap.py'], script)
         for mutation in ('partial', 'all_removed', 'source', 'csv', 'primary',
-                         'day_partial', 'day_all_removed', 'day_source', 'day_snapshot', 'day_status'):
+                         'day_partial', 'day_all_removed', 'day_source', 'day_snapshot', 'day_status',
+                         'audit_partial', 'audit_all_removed', 'audit_source', 'audit_snapshot', 'audit_difference'):
             altered = dict(content)
             if mutation == 'partial':
                 del altered['results/domain-bootstrap/domain-session-bootstrap.csv']
@@ -468,16 +504,28 @@ class BundleTests(unittest.TestCase):
                 altered = {n: v for n, v in altered.items() if not n.startswith('results/day-eligibility/')}
             elif mutation == 'day_source':
                 altered['results/day-eligibility/check_day_packet_count_eligibility.py'] += b'# changed\n'
-            else:
+            elif mutation in ('day_snapshot', 'day_status'):
                 row = json.loads(altered['results/day-eligibility/day-packet-eligibility.json'])
                 row['metric_rows_content_sha256' if mutation == 'day_snapshot' else 'status'] = 'invalid'
                 altered['results/day-eligibility/day-packet-eligibility.json'] = json.dumps(row).encode()
+            elif mutation == 'audit_partial':
+                del altered['results/independent-audit/independent-arithmetic-audit.json']
+            elif mutation == 'audit_all_removed':
+                altered = {n: v for n, v in altered.items() if not n.startswith('results/independent-audit/')}
+            elif mutation == 'audit_source':
+                altered['results/independent-audit/audit.py'] += b'# changed\n'
+            else:
+                row = json.loads(altered['results/independent-audit/independent-arithmetic-audit.json'])
+                if mutation == 'audit_snapshot': row['metric_rows_content_sha256'] = '0' * 64
+                else: row['differences'] = [{'field': 'overhead_pct'}]
+                altered['results/independent-audit/independent-arithmetic-audit.json'] = json.dumps(row).encode()
             out = self.root / ('domain-' + mutation + '.zip')
             with zipfile.ZipFile(out, 'x') as z:
                 for name, data in altered.items(): z.writestr(name, data)
                 z.writestr('SHA256SUMS.txt', ''.join(sha(altered[n]) + '  ' + n + '\n' for n in sorted(altered)))
-            with self.assertRaisesRegex(ValueError, 'Exploratory domain bootstrap|UTC-day packet-count eligibility'):
-                b.verify_zip(out, strict=True, expected_day_eligibility_sha=fake_day_sha)
+            with self.assertRaisesRegex(ValueError, 'Exploratory domain bootstrap|UTC-day packet-count eligibility|Independent arithmetic audit'):
+                b.verify_zip(out, strict=True, expected_day_eligibility_sha=fake_day_sha,
+                             expected_arithmetic_audit_sha=fake_audit_sha, expected_arithmetic_domains=1)
 
     def test_manifest_duplicate_and_nonportable_filename_rejected(self):
         path = self.root / 'invalid.csv'

@@ -34,6 +34,8 @@ REPORT_SHA = 'fd7e47dbfdbe04ed68436a5800c88a28e5e6669f26d3fe9aaae6bd716a11a6d4'
 VERIFIER_SHA = '865964780a80b87be79f96a37216995dfb1cc99f0f6e9baa7e52c9739b840696'
 DAY_ELIGIBILITY_SHA = 'a7b4aecabd8c6e3cfe08884a9c12a4b9bcca639ae95c03439f04342755d16a35'
 DAY_ELIGIBILITY_SCOPE = 'Packet-count eligibility only; requires independent manifest/identity QA and does not fix the day tool.'
+ARITHMETIC_AUDIT_SHA = '94134a3800f364442edcfdbaa9961fe28866e07f20742aa6fdba3deab0fa72b3'
+ARITHMETIC_AUDIT_SCOPE = 'point estimates and counts only; no independent PCAP reparse or uncertainty verification'
 SCHEMA = '2026-11-25-ip-frame-direction-v2'
 AGG_FILES = ('quality.json', 'overall-overheads.csv', 'domain-overheads.csv', 'extraction-errors.json')
 DESC_FILES = ('descriptive-provenance.json', 'session-distributions-by-cohort.csv',
@@ -541,6 +543,43 @@ def validate_day_packet_eligibility(result, quality):
         raise ValueError('UTC-day packet-count eligibility status mismatch')
 
 
+def validate_arithmetic_audit(result, quality, primary_domain, primary_summary, *, expected_domains=50):
+    """Bind the arithmetic audit record to the full primary snapshot/tables.
+
+    A valid record does not prove the checker ran or reparse the PCAPs; the
+    audit does not independently validate uncertainty calculations.
+    """
+    if (quality.get('status') != 'complete'
+            or quality.get('analysis_script_sha256') != AGGREGATE_SHA
+            or not valid_sha(quality.get('manifest_sha256'))
+            or not valid_sha(quality.get('metric_rows_content_sha256'))
+            or type(quality.get('accepted_metric_rows')) is not int or quality['accepted_metric_rows'] <= 0
+            or (expected_domains == 50 and (quality.get('accepted_metric_rows') != 120000
+                                            or quality.get('manifest_sha256') != MANIFEST_SHA))
+            or result.get('status') not in ('passed', 'passed_with_unavailable')
+            or result.get('scope') != ARITHMETIC_AUDIT_SCOPE
+            or result.get('manifest_sha256') != quality.get('manifest_sha256')
+            or result.get('aggregator_sha256') != quality.get('analysis_script_sha256')
+            or result.get('metric_rows_content_sha256') != quality.get('metric_rows_content_sha256')
+            or result.get('captures') != quality.get('accepted_metric_rows')
+            or type(result.get('domains')) is not int or result['domains'] != expected_domains
+            or result.get('domain_table_sha256') != hashlib.sha256(primary_domain).hexdigest()
+            or result.get('overall_table_sha256') != hashlib.sha256(primary_summary).hexdigest()
+            or result.get('differences') != []):
+        raise ValueError('Independent arithmetic audit provenance or discrepancies mismatch')
+    keys = ('domain_rows_checked', 'overall_rows_checked', 'unavailable_domain_rows', 'unavailable_overall_rows')
+    if any(type(result.get(k)) is not int or result[k] < 0 for k in keys):
+        raise ValueError('Independent arithmetic audit coverage is invalid')
+    unavailable_domain, unavailable_overall = result['unavailable_domain_rows'], result['unavailable_overall_rows']
+    if (result['domain_rows_checked'] + unavailable_domain != 10 * expected_domains
+            or result['overall_rows_checked'] + unavailable_overall != 10
+            or unavailable_overall > min(10, unavailable_domain)):
+        raise ValueError('Independent arithmetic audit coverage mismatch')
+    expected_status = 'passed_with_unavailable' if unavailable_domain else 'passed'
+    if result['status'] != expected_status or (unavailable_domain and not unavailable_overall):
+        raise ValueError('Independent arithmetic audit status mismatch')
+
+
 def load_builder(path, expected_sha=REPORT_SHA):
     fixed_file(path, expected_sha)
     spec = importlib.util.spec_from_file_location('verified_study_report_builder', path)
@@ -651,6 +690,11 @@ eligibility check and its source. Its status covers this one criterion only;
 it does not establish other UTC-day eligibility or interval validity. The check
 JSON does not identify its source hash; the archived source is checked against
 the watcher's pinned version, but matching bytes do not prove that code ran it.
+Optional `results/independent-audit/` preserves the independent point-estimate
+arithmetic audit and the watcher-pinned source. It is limited to counts and
+point estimates; it does not reparse PCAPs or independently check intervals.
+The audit JSON does not identify the source hash, so matching the archived code
+does not prove that code generated the result.
 `figures/` provides SVG/PDF
 figures and input provenance. The report
 folder contains the supplied report and the provisional generator draft, with a
@@ -676,7 +720,8 @@ cannot remove temporal confounding or establish independent days.
 '''
 
 
-def verify_zip(path, *, strict=False, expected_day_eligibility_sha=DAY_ELIGIBILITY_SHA):
+def verify_zip(path, *, strict=False, expected_day_eligibility_sha=DAY_ELIGIBILITY_SHA,
+               expected_arithmetic_audit_sha=ARITHMETIC_AUDIT_SHA, expected_arithmetic_domains=50):
     with zipfile.ZipFile(path) as z:
         if z.testzip() is not None:
             raise ValueError('ZIP CRC validation failed')
@@ -706,17 +751,22 @@ def verify_zip(path, *, strict=False, expected_day_eligibility_sha=DAY_ELIGIBILI
             domain_members = {'results/domain-bootstrap/' + n for n in DOMAIN_FILES} | {'results/domain-bootstrap/domain_bootstrap.py'}
             day_eligibility_members = {'results/day-eligibility/day-packet-eligibility.json',
                                        'results/day-eligibility/check_day_packet_count_eligibility.py'}
+            arithmetic_members = {'results/independent-audit/independent-arithmetic-audit.json',
+                                  'results/independent-audit/audit.py'}
             caveat_member = {'results/aggregate/README.md'}
             present_clean = names & clean_members
             present_domain = names & domain_members
             present_day_eligibility = names & day_eligibility_members
+            present_arithmetic = names & arithmetic_members
             if present_clean and present_clean != clean_members:
                 raise ValueError('Clean tuple sensitivity is incomplete')
             if present_domain and present_domain != domain_members:
                 raise ValueError('Exploratory domain bootstrap is incomplete')
             if present_day_eligibility and present_day_eligibility != day_eligibility_members:
                 raise ValueError('UTC-day packet-count eligibility evidence is incomplete')
-            if len(names & allowed_exclusions) != 1 or names != expected | (names & allowed_exclusions) | present_clean | present_domain | present_day_eligibility | (names & caveat_member):
+            if present_arithmetic and present_arithmetic != arithmetic_members:
+                raise ValueError('Independent arithmetic audit evidence is incomplete')
+            if len(names & allowed_exclusions) != 1 or names != expected | (names & allowed_exclusions) | present_clean | present_domain | present_day_eligibility | present_arithmetic | (names & caveat_member):
                 raise ValueError('Bundle contains an unexpected or missing member')
             provenance = json.loads(z.read('bundle-provenance.json'))
             if ('clean_tuple_analysis_sha256' in provenance) != bool(present_clean):
@@ -725,6 +775,8 @@ def verify_zip(path, *, strict=False, expected_day_eligibility_sha=DAY_ELIGIBILI
                 raise ValueError('Exploratory domain bootstrap provenance and archive members disagree')
             if ('day_packet_eligibility_script_sha256' in provenance) != bool(present_day_eligibility):
                 raise ValueError('UTC-day packet-count eligibility provenance and archive members disagree')
+            if ('independent_arithmetic_audit_script_sha256' in provenance) != bool(present_arithmetic):
+                raise ValueError('Independent arithmetic audit provenance and archive members disagree')
             caveat_version = provenance.get('domain_cluster_caveat_version')
             original_draft_sha = provenance.get('canonical_generated_draft_sha256')
             if caveat_version is None and original_draft_sha is None:
@@ -765,6 +817,16 @@ def verify_zip(path, *, strict=False, expected_day_eligibility_sha=DAY_ELIGIBILI
             validate_day_packet_eligibility(
                 json.loads(z.read('results/day-eligibility/day-packet-eligibility.json')),
                 json.loads(z.read('results/aggregate/quality.json')))
+        if strict and present_arithmetic:
+            code_sha = hashlib.sha256(z.read('results/independent-audit/audit.py')).hexdigest()
+            if (provenance.get('independent_arithmetic_audit_script_sha256') != code_sha
+                    or code_sha != expected_arithmetic_audit_sha):
+                raise ValueError('Independent arithmetic audit source hash mismatch')
+            validate_arithmetic_audit(
+                json.loads(z.read('results/independent-audit/independent-arithmetic-audit.json')),
+                json.loads(z.read('results/aggregate/quality.json')),
+                z.read('results/aggregate/domain-overheads.csv'), z.read('results/aggregate/overall-overheads.csv'),
+                expected_domains=expected_arithmetic_domains)
         if strict and present_clean:
             quality = json.loads(z.read('results/aggregate/quality.json'))
             clean_quality = json.loads(z.read('results/clean-tuple/clean-tuple-quality.json'))
@@ -788,7 +850,8 @@ def verify_zip(path, *, strict=False, expected_day_eligibility_sha=DAY_ELIGIBILI
 
 
 def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synthetic=False,
-                 expected_day_eligibility_sha=DAY_ELIGIBILITY_SHA):
+                 expected_day_eligibility_sha=DAY_ELIGIBILITY_SHA,
+                 expected_arithmetic_audit_sha=ARITHMETIC_AUDIT_SHA, expected_arithmetic_domains=50):
     """Write a previously validated snapshot. The synthetic flag is test-only."""
     args.output.parent.mkdir(parents=True, exist_ok=True)
     digests = {}
@@ -832,6 +895,13 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
         if day_eligibility:
             add_file(z, digests, 'results/day-eligibility/day-packet-eligibility.json', day_eligibility, text=True)
             add_file(z, digests, 'results/day-eligibility/check_day_packet_count_eligibility.py', day_eligibility_script, text=True)
+        arithmetic_audit = getattr(args, 'arithmetic_audit', None)
+        arithmetic_script = getattr(args, 'arithmetic_audit_script', None)
+        if bool(arithmetic_audit) != bool(arithmetic_script):
+            raise ValueError('Supply both independent arithmetic audit result and script')
+        if arithmetic_audit:
+            add_file(z, digests, 'results/independent-audit/independent-arithmetic-audit.json', arithmetic_audit, text=True)
+            add_file(z, digests, 'results/independent-audit/audit.py', arithmetic_script, text=True)
         optional = Path(args.aggregate) / 'cohort-exclusions.csv'
         if optional.exists():
             add_file(z, digests, 'results/aggregate/cohort-exclusions.csv', optional, text=True)
@@ -860,10 +930,14 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
             provenance['domain_bootstrap_analysis_sha256'] = sha_file(domain_script)
         if day_eligibility_script:
             provenance['day_packet_eligibility_script_sha256'] = sha_file(day_eligibility_script)
+        if arithmetic_script:
+            provenance['independent_arithmetic_audit_script_sha256'] = sha_file(arithmetic_script)
         add_bytes(z, digests, 'bundle-provenance.json', (json.dumps(provenance, sort_keys=True, indent=2) + '\n').encode())
         sums = ''.join(digests[name] + '  ' + name + '\n' for name in sorted(digests)).encode()
         z.writestr('SHA256SUMS.txt', sums)
-    verify_zip(args.output, strict=True, expected_day_eligibility_sha=expected_day_eligibility_sha)
+    verify_zip(args.output, strict=True, expected_day_eligibility_sha=expected_day_eligibility_sha,
+               expected_arithmetic_audit_sha=expected_arithmetic_audit_sha,
+               expected_arithmetic_domains=expected_arithmetic_domains)
     return digests
 
 
@@ -880,6 +954,8 @@ def main(argv=None):
     p.add_argument('--domain-bootstrap-script', type=Path, help='Exact source script used for the optional domain bootstrap')
     p.add_argument('--day-eligibility', type=Path, help='Optional completed UTC-day packet-count check JSON')
     p.add_argument('--day-eligibility-script', type=Path, help='Pinned source archived for inspection; the check JSON does not bind its source bytes')
+    p.add_argument('--arithmetic-audit', type=Path, help='Optional completed independent arithmetic audit JSON')
+    p.add_argument('--arithmetic-audit-script', type=Path, help='Pinned audit source archived for inspection; the audit JSON does not bind its source bytes')
     args = p.parse_args(argv)
     if args.output.exists():
         raise ValueError('Refusing to overwrite output')
@@ -891,6 +967,8 @@ def main(argv=None):
         raise ValueError('Supply both --domain-bootstrap and --domain-bootstrap-script, or neither')
     if bool(args.day_eligibility) != bool(args.day_eligibility_script):
         raise ValueError('Supply both --day-eligibility and --day-eligibility-script, or neither')
+    if bool(args.arithmetic_audit) != bool(args.arithmetic_audit_script):
+        raise ValueError('Supply both --arithmetic-audit and --arithmetic-audit-script, or neither')
     fixed_file(args.resources, RESOURCES_SHA)
     fixed_file(args.reviewed_report, args.reviewed_report_sha256)
     reviewed = checked_text(args.reviewed_report)
@@ -922,6 +1000,11 @@ def main(argv=None):
     if args.day_eligibility:
         fixed_file(args.day_eligibility_script, DAY_ELIGIBILITY_SHA)
         validate_day_packet_eligibility(json_file(args.day_eligibility), quality)
+    if args.arithmetic_audit:
+        fixed_file(args.arithmetic_audit_script, ARITHMETIC_AUDIT_SHA)
+        validate_arithmetic_audit(json_file(args.arithmetic_audit), quality,
+                                  checked_text(Path(args.aggregate) / 'domain-overheads.csv'),
+                                  checked_text(Path(args.aggregate) / 'overall-overheads.csv'))
     validate_census(args.census_qa, snapshot=quality['metric_rows_content_sha256'])
     builder = load_builder(args.report_builder)
     draft = builder.make_report(args.aggregate, args.descriptive, args.figures, manifest=args.manifest)

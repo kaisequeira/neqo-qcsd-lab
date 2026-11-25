@@ -94,6 +94,18 @@ record a source hash; matching archived source bytes does not prove which code
 generated the result. A pass addresses only the packet-count criterion and is not a
 general UTC-day or confidence-interval validation.
 
+To preserve the independent arithmetic audit, add both
+`--arithmetic-audit INDEPENDENT_ARITHMETIC_AUDIT.json` and
+`--arithmetic-audit-script ../independent-audit/audit.py`. The result and
+watcher-pinned source are stored under `results/independent-audit/`. The exporter
+checks source and primary-table hashes, manifest, metrics snapshot, domain and
+summary coverage, status and the absence of discrepancies. An explicitly
+reported `passed_with_unavailable` status is preserved if coverage is partial;
+it must not be described as a full-domain pass. The audit checks primary point
+estimates and counts; it does not independently reparse PCAPs or verify
+uncertainty intervals. The audit JSON does not bind its source bytes, so the
+included pinned source does not prove which process produced that result.
+
 Compute `SUPPLIED_REPORT_SHA256` independently from the exact report file and
 pass the lowercase hexadecimal value. The argument name identifies the report
 intended for review; a matching hash **only binds its bytes**. It does not prove
@@ -139,6 +151,7 @@ or scientific validity.
   exact analysis source. If supplied, `results/domain-bootstrap/` contains
   the exploratory domain-resampling sensitivity, provenance and source.
   `results/day-eligibility/`, if supplied, has the packet-count check and source.
+  `results/independent-audit/`, if supplied, has the arithmetic audit and source.
 - `figures/` contains the SVG/PDF figures and their input provenance.
 - `report/` contains the supplied report and the generator draft preceded by a
   caveat banner. The unmodified original follows it and its hash is recorded.
