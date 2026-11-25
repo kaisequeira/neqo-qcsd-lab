@@ -1,0 +1,2 @@
+# Preserve byte-identical historical sources, including original whitespace.
+drivers/** -whitespace
