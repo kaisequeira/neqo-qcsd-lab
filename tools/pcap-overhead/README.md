@@ -205,3 +205,8 @@ For a read-only consistency check of the measurement database against the final
 manifest, see the [census verifier](census-qa/README.md). It checks recorded
 identities, byte-accounting invariants, timestamp spans and quality flags; it
 does not independently re-read the captures or prove defense fidelity.
+
+For an optional UTC-day cluster sensitivity review draft, see the
+[day-sensitivity report](day-report/README.md). It requires two separate,
+matching day-analysis outputs and explicitly preserves eligible-subset and
+few-day limitations; it does not publish a conclusion automatically.
