@@ -195,3 +195,8 @@ final-PCAP metrics and does not change the primary estimates.
 For an optional, exploratory UTC-day cluster sensitivity after the full census,
 see the [day-cluster analysis](day-bootstrap/README.md). It reports eligible
 domain coverage and does not claim that distinct days are independent.
+
+For a complete-census, PCAP-only results narrative prepared for review, see the
+[report builder](report/README.md). It checks the manifest, input provenance,
+cohort and summary consistency, exclusions and figure identities; no report is
+published automatically, and historical metadata is not used for the numbers.
