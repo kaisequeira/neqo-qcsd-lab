@@ -21,10 +21,13 @@ study reference library. The join establishes recorded driver identities, not
 a fresh execution, defense-fidelity validation, or independent assessment of
 scientific eligibility.
 
-Two source files have not yet been located, affecting seven `www.flashscore.com.mx`
-BuFLO sessions. Their entries in `driver-index.csv` have blank `source_file` and
-`original_filename` fields: slot 1 reports SHA-256
-`5eba9b07bd6751d54737f3855ff667f8d2e80a8fa12ff65570dfe90d2583fe7f`, and
-slots 2–7 report
+The source versions for seven `www.flashscore.com.mx` BuFLO sessions were
+recovered by reversing recorded changes to the later preserved production owner.
+The recovered byte streams independently match the exact SHA-256 recorded in
+their selected capture records: slot 1 uses
+`5eba9b07bd6751d54737f3855ff667f8d2e80a8fa12ff65570dfe90d2583fe7f`;
+slots 2–7 use
 `c31c7e563ae785f7ee9741e0a040a367a8141a27df8363c3eaa29efacb0cb9a0`.
-The source bytes cannot be reconstructed from those hashes alone.
+These are hash-verified reconstructed source bytes, not copies recovered from
+an independently preserved original file. The private research evidence includes
+the later source, recorded changes, reconstruction method and checksums.
