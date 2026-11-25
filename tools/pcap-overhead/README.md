@@ -210,3 +210,8 @@ For an optional UTC-day cluster sensitivity review draft, see the
 [day-sensitivity report](day-report/README.md). It requires two separate,
 matching day-analysis outputs and explicitly preserves eligible-subset and
 few-day limitations; it does not publish a conclusion automatically.
+
+After reviewing the completed analysis, a portable derived-results archive and
+SQLite restore tool are described in [derived-bundle](derived-bundle/README.md).
+It excludes packet captures and historical runtime data; a matching report
+hash binds bytes only and is not evidence that any review occurred.
