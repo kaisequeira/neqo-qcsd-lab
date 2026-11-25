@@ -191,3 +191,7 @@ For per-session distributions, capture-epoch coverage and exploratory
 within-domain robustness checks after the full census, see the
 [descriptive analysis](descriptive/README.md). It uses the same verified
 final-PCAP metrics and does not change the primary estimates.
+
+For an optional, exploratory UTC-day cluster sensitivity after the full census,
+see the [day-cluster analysis](day-bootstrap/README.md). It reports eligible
+domain coverage and does not claim that distinct days are independent.
