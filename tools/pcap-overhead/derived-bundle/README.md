@@ -35,6 +35,25 @@ python3 build_bundle.py \
   --output NEW_DERIVED_RESULTS.zip
 ```
 
+To include the optional whole-capture clean UDP/443 candidate sensitivity, add
+both `--clean-tuple CLEAN_TUPLE_RESULTS_DIR` and
+`--clean-tuple-script ../clean-tuple-sensitivity/clean_tuple_sensitivity.py`.
+The complete sensitivity must have been run on the same final manifest and
+metric snapshot using the same aggregate implementation. The exporter binds the
+script bytes, verifies the sensitivity's identity, eligibility counts, exclusions,
+primary-table joins, and summary arithmetic, and includes the three result files
+and exact sensitivity script under `results/clean-tuple/`. Strict ZIP checks and
+restore accept either all four optional members or none, reject changed/missing
+members or inconsistent provenance, and remain compatible with prior bundles
+that omit this sensitivity. The source hash and table checks do not establish
+scientific correctness; independently review the implementation and estimates.
+This is a selected whole-capture comparison, not a way to subtract unrelated
+packets, identify the intended flow, or remove selection or temporal bias.
+The included script is a source record, not runnable from its ZIP location:
+run the published toolkit copy, or place the exact script in the toolkit's
+`clean-tuple-sensitivity/` subdirectory with the matching `aggregate.py` in
+the parent directory. The quality JSON records both script hashes.
+
 Compute `SUPPLIED_REPORT_SHA256` independently from the exact report file and
 pass the lowercase hexadecimal value. The argument name identifies the report
 intended for review; a matching hash **only binds its bytes**. It does not prove
@@ -72,7 +91,9 @@ or scientific validity.
   `metric_rows_content_sha256` in `results/aggregate/quality.json`. The sixth
   field is the original metric JSON **string**, preserving its bytes.
 - `results/` includes primary, descriptive and exploratory day-cluster tables,
-  quality/exclusion records and the independent full-census QA report.
+  quality/exclusion records and the independent full-census QA report. If
+  supplied, `results/clean-tuple/` holds the clean-capture sensitivity and its
+  exact analysis source.
 - `figures/` contains the SVG/PDF figures and their input provenance.
 - `report/` contains the supplied report and the builder's unmodified draft.
 - `bundle-provenance.json` and `SHA256SUMS.txt` record code, input and member

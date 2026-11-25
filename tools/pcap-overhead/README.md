@@ -196,6 +196,15 @@ For an optional, exploratory UTC-day cluster sensitivity after the full census,
 see the [day-cluster analysis](day-bootstrap/README.md). It reports eligible
 domain coverage and does not claim that distinct days are independent.
 
+For an optional whole-capture sensitivity to ambiguous candidate flows, see
+[clean candidate-flow analysis](clean-tuple-sensitivity/README.md). It reports
+coverage and descriptive changes in overhead after filtering both cohorts; it
+does not isolate traffic within a capture or establish causal effects.
+
+The [independent aggregation audit](independent-audit/README.md) recomputes
+primary point estimates and counts from the completed metrics database. It
+does not independently reparse packets or validate confidence intervals.
+
 For a complete-census, PCAP-only results narrative prepared for review, see the
 [report builder](report/README.md). It checks the manifest, input provenance,
 cohort and summary consistency, exclusions and figure identities; no report is

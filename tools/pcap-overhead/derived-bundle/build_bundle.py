@@ -42,6 +42,8 @@ DAY_FILES = ('utc-day-cluster-provenance.json', 'utc-day-cluster-by-domain.csv',
              'utc-day-cluster-eligible-subset-summary.csv')
 FIG_FILES = ('figure-provenance.json', '01-overall-overheads.svg', '01-overall-overheads.pdf',
              '02-domain-spread.svg', '02-domain-spread.pdf')
+CLEAN_FILES = ('clean-tuple-quality.json', 'domain-clean-tuple-sensitivity.csv',
+               'overall-clean-tuple-sensitivity.csv')
 METRIC_FIELDS = ('defense', 'domain', 'session', 'filename', 'drive_file_id', 'sha256', 'capture_bytes',
                  'capture_type', 'encapsulation', 'packet_count', 'packet_bytes', 'ip_bytes', 'ip_valid',
                  'udp443_direction_valid', 'udp443_up_ip_bytes', 'udp443_down_ip_bytes', 'other_ip_bytes',
@@ -258,6 +260,140 @@ def validate_census(path, *, snapshot, manifest_sha=MANIFEST_SHA,
     return result
 
 
+def validate_clean_provenance(clean_quality, primary_quality, script_sha, *, expected_rows=120000):
+    """Bind optional whole-capture sensitivity to this exact primary snapshot.
+
+    The script hash binds the supplied source bytes, not the scientific
+    correctness of the analysis; inspect and independently review the code.
+    """
+    if (not valid_sha(script_sha) or clean_quality.get('status') != 'complete' or
+            clean_quality.get('manifest_sha256') != primary_quality.get('manifest_sha256') or
+            clean_quality.get('metric_rows_content_sha256') != primary_quality.get('metric_rows_content_sha256') or
+            clean_quality.get('aggregate_library_sha256') != primary_quality.get('analysis_script_sha256') or
+            clean_quality.get('analysis_script_sha256') != script_sha or
+            clean_quality.get('accepted_records') != expected_rows or
+            clean_quality.get('extractor_errors') != 0 or clean_quality.get('identity_or_other_flags') != {}):
+        raise ValueError('Clean tuple sensitivity provenance mismatch')
+
+
+def validate_clean_tables(detail, summaries, primary, domains, *, sessions=400):
+    """Check identities, eligibility, primary joins and sensitivity arithmetic."""
+    metrics = ('ip_bytes', 'observed_span')
+    def key(row):
+        return (row['defense'], row['metric'], row['domain'])
+    expected = {(d, m, h) for d in MODES[1:] for m in metrics for h in domains}
+    detail_keys = [key(r) for r in detail]
+    if len(detail_keys) != len(expected) or set(detail_keys) != expected:
+        raise ValueError('Clean tuple domain table is incomplete or duplicated')
+    primary_rows = [r for r in primary if r['metric'] in metrics]
+    primary_keys = [key(r) for r in primary_rows]
+    if len(primary_keys) != len(expected) or set(primary_keys) != expected:
+        raise ValueError('Primary domain table is incomplete or duplicated')
+    primary_map = {key(r): r for r in primary_rows}
+    summary_keys = [(r['defense'], r['metric']) for r in summaries]
+    expected_summary = {(d, m) for d in MODES[1:] for m in metrics}
+    if len(summary_keys) != len(expected_summary) or set(summary_keys) != expected_summary:
+        raise ValueError('Clean tuple summaries are incomplete or duplicated')
+
+    def nint(value):
+        try:
+            n = int(value)
+        except (ValueError, TypeError) as exc:
+            raise ValueError('Invalid clean tuple count') from exc
+        if n < 0:
+            raise ValueError('Negative clean tuple count')
+        return n
+
+    def number(value):
+        try:
+            x = float(value)
+        except (ValueError, TypeError) as exc:
+            raise ValueError('Invalid clean tuple numeric value') from exc
+        if not math.isfinite(x):
+            raise ValueError('Non-finite clean tuple numeric value')
+        return x
+
+    def close(actual, expected_value):
+        if not math.isclose(number(actual), expected_value, rel_tol=1e-9, abs_tol=1e-8):
+            raise ValueError('Clean tuple table arithmetic mismatch')
+
+    for row in detail:
+        ref = primary_map[key(row)]
+        if row.get('unit') != ('bytes' if row['metric'] == 'ip_bytes' else 'seconds'):
+            raise ValueError('Clean tuple metric unit mismatch')
+        for side in ('baseline', 'defense'):
+            total = nint(row[side + '_expected_n'])
+            full = nint(row[side + '_full_n'])
+            clean = nint(row[side + '_clean_n'])
+            removed = nint(row[side + '_removed_by_clean_filter'])
+            if total != sessions or full > total or clean > full or removed != full - clean:
+                raise ValueError('Inconsistent clean tuple cohort counts')
+            if full != nint(ref[side + '_n']):
+                raise ValueError('Clean tuple primary cohort count mismatch')
+            for field, count in ((side + '_primary_exclusions', total - full),
+                                 (side + '_clean_filter_reasons', removed)):
+                try:
+                    reasons = json.loads(row[field])
+                except (ValueError, TypeError) as exc:
+                    raise ValueError('Invalid clean tuple exclusion reasons') from exc
+                if (not isinstance(reasons, dict) or any(type(v) is not int or v < 0 for v in reasons.values())
+                        or sum(reasons.values()) != count):
+                    raise ValueError('Clean tuple exclusion reasons do not match counts')
+        for field in ('baseline_mean', 'defense_mean', 'absolute_difference', 'overhead_pct'):
+            close(row['full_' + field], number(ref[field]))
+        for label in ('full', 'clean'):
+            fields = [row[label + '_' + f] for f in ('baseline_mean', 'defense_mean', 'absolute_difference', 'overhead_pct')]
+            if not any(fields):
+                if label == 'full':
+                    raise ValueError('Clean tuple full comparison missing')
+                continue
+            if not all(fields):
+                raise ValueError('Partially missing clean tuple comparison')
+            baseline, defended = map(number, fields[:2])
+            if baseline <= 0 or defended < 0 or not nint(row['baseline_' + label + '_n']) or not nint(row['defense_' + label + '_n']):
+                raise ValueError('Invalid clean tuple cohort mean')
+            close(fields[2], defended - baseline)
+            close(fields[3], 100 * (defended / baseline - 1))
+        if row['clean_overhead_pct']:
+            close(row['clean_minus_full_overhead_percentage_points'],
+                  number(row['clean_overhead_pct']) - number(row['full_overhead_pct']))
+        elif row['clean_minus_full_overhead_percentage_points']:
+            raise ValueError('Clean tuple difference exists without a clean comparison')
+
+    for row in summaries:
+        if row.get('unit') != ('bytes' if row['metric'] == 'ip_bytes' else 'seconds'):
+            raise ValueError('Clean tuple summary unit mismatch')
+        subset = [r for r in detail if (r['defense'], r['metric']) == (row['defense'], row['metric'])]
+        selections = {'full_available': [r for r in subset if r['full_overhead_pct']],
+                      'clean_available': [r for r in subset if r['clean_overhead_pct']]}
+        common = [r for r in subset if r['full_overhead_pct'] and r['clean_overhead_pct']]
+        selections.update(full_common=common, clean_common=common)
+        if nint(row['expected_domains']) != len(domains) or row['common_domain_coverage_complete'].lower() != str(len(common) == len(domains)).lower():
+            raise ValueError('Clean tuple summary coverage mismatch')
+        for name, selected in selections.items():
+            label = name.split('_')[0]
+            if nint(row[name + '_domains']) != len(selected):
+                raise ValueError('Clean tuple summary domain count mismatch')
+            fields = ('macro_overhead_pct', 'pooled_cohort_mean_overhead_pct',
+                      'baseline_equal_domain_mean', 'defense_equal_domain_mean')
+            if not selected:
+                if any(row[name + '_' + f] for f in fields):
+                    raise ValueError('Clean tuple empty summary has values')
+                continue
+            base = sum(number(r[label + '_baseline_mean']) for r in selected)
+            defended = sum(number(r[label + '_defense_mean']) for r in selected)
+            values = (sum(number(r[label + '_overhead_pct']) for r in selected) / len(selected),
+                      100 * (defended / base - 1), base / len(selected), defended / len(selected))
+            for field, val in zip(fields, values):
+                close(row[name + '_' + field], val)
+        for field in ('macro_overhead_pct', 'pooled_cohort_mean_overhead_pct'):
+            diff = row['clean_minus_full_common_' + field + '_percentage_points']
+            if common:
+                close(diff, number(row['clean_common_' + field]) - number(row['full_common_' + field]))
+            elif diff:
+                raise ValueError('Clean tuple empty comparison has a difference')
+
+
 def load_builder(path, expected_sha=REPORT_SHA):
     fixed_file(path, expected_sha)
     spec = importlib.util.spec_from_file_location('verified_study_report_builder', path)
@@ -333,7 +469,7 @@ No historical runtime or application-completion values were used.
 session. `measurements/session-metrics-canonical.jsonl` contains the exact
 ordered JSON array rows hashed by the public aggregator, including the original
 metric JSON as a JSON *string*. Its SHA-256 must equal the
-`metric_rows_content_sha256` in `results/quality.json` and bundle provenance.
+`metric_rows_content_sha256` in `results/aggregate/quality.json` and bundle provenance.
 The JSONL contains no packet contents or credential data. To reconstruct a
 SQLite `metrics` table, JSON-decode each line's six fields and insert them in
 the column order documented by the public aggregation code. The original
@@ -344,7 +480,13 @@ into a new SQLite database and cross-checks the CSV against the canonical rows.
 `inputs/session-manifest.csv` and `resources.csv` identify the exact handoff.
 `results/` provides cohort and aggregate tables, bootstrap uncertainty,
 exclusions, distribution/timing sensitivities and exploratory day-cluster
-results. `figures/` provides SVG/PDF figures and input provenance. The report
+results. Optional `results/clean-tuple/` contains whole-capture selection
+sensitivity tables, provenance and the exact sensitivity script. It is not a
+correction for unrelated traffic or confounding. The archived script is a
+source record and is not runnable from its archive location: use the published
+toolkit copy, or place this exact script in its toolkit subdirectory with the
+matching `aggregate.py` one directory above. `figures/` provides SVG/PDF
+figures and input provenance. The report
 folder contains the supplied report and the canonical generated draft for
 comparison. Supplying a matching report hash binds the report bytes; it does
 **not** establish that anyone reviewed the report or that its claims are true.
@@ -393,8 +535,15 @@ def verify_zip(path, *, strict=False):
                 expected.update(prefix + '/' + n for n in files)
             allowed_exclusions = {'results/aggregate/cohort-exclusions.csv',
                                   'results/aggregate/no-cohort-exclusions.txt'}
-            if len(names & allowed_exclusions) != 1 or names != expected | (names & allowed_exclusions):
+            clean_members = {'results/clean-tuple/' + n for n in CLEAN_FILES} | {'results/clean-tuple/clean_tuple_sensitivity.py'}
+            present_clean = names & clean_members
+            if present_clean and present_clean != clean_members:
+                raise ValueError('Clean tuple sensitivity is incomplete')
+            if len(names & allowed_exclusions) != 1 or names != expected | (names & allowed_exclusions) | present_clean:
                 raise ValueError('Bundle contains an unexpected or missing member')
+            provenance = json.loads(z.read('bundle-provenance.json'))
+            if ('clean_tuple_analysis_sha256' in provenance) != bool(present_clean):
+                raise ValueError('Clean tuple provenance and archive members disagree')
         for name, expected in listed.items():
             h = hashlib.sha256()
             with z.open(name) as f:
@@ -402,6 +551,26 @@ def verify_zip(path, *, strict=False):
                     h.update(block)
             if h.hexdigest() != expected:
                 raise ValueError('Bundle member hash mismatch: ' + name)
+        if strict and present_clean:
+            quality = json.loads(z.read('results/aggregate/quality.json'))
+            clean_quality = json.loads(z.read('results/clean-tuple/clean-tuple-quality.json'))
+            source_sha = hashlib.sha256(z.read('results/clean-tuple/clean_tuple_sensitivity.py')).hexdigest()
+            if provenance.get('clean_tuple_analysis_sha256') != source_sha:
+                raise ValueError('Clean tuple source hash mismatch')
+            validate_clean_provenance(clean_quality, quality, source_sha,
+                                      expected_rows=quality.get('accepted_metric_rows'))
+            def csv_rows(name):
+                return list(csv.DictReader(io.StringIO(z.read(name).decode('utf-8-sig'), newline='')))
+            primary = csv_rows('results/aggregate/domain-overheads.csv')
+            detail = csv_rows('results/clean-tuple/domain-clean-tuple-sensitivity.csv')
+            summary = csv_rows('results/clean-tuple/overall-clean-tuple-sensitivity.csv')
+            domains = {r['domain'] for r in primary if r['metric'] in ('ip_bytes', 'observed_span')}
+            if not domains or not detail:
+                raise ValueError('Empty clean tuple domain table')
+            sessions = int(detail[0]['baseline_expected_n'])
+            if quality.get('accepted_metric_rows') != len(MODES) * len(domains) * sessions:
+                raise ValueError('Clean tuple design does not match the complete primary census')
+            validate_clean_tables(detail, summary, primary, domains, sessions=sessions)
 
 
 def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synthetic=False):
@@ -424,6 +593,14 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
                 if name.endswith('.svg') and 'SYNTHETIC FIXTURE' in checked_text(source).decode('utf-8-sig'):
                     raise ValueError('Synthetic figure cannot be exported')
                 add_file(z, digests, prefix + '/' + name, source, text=not name.endswith('.pdf'))
+        clean_dir = getattr(args, 'clean_tuple', None)
+        clean_script = getattr(args, 'clean_tuple_script', None)
+        if bool(clean_dir) != bool(clean_script):
+            raise ValueError('Supply both clean tuple directory and script')
+        if clean_dir:
+            for name in CLEAN_FILES:
+                add_file(z, digests, 'results/clean-tuple/' + name, Path(clean_dir) / name, text=True)
+            add_file(z, digests, 'results/clean-tuple/clean_tuple_sensitivity.py', clean_script, text=True)
         optional = Path(args.aggregate) / 'cohort-exclusions.csv'
         if optional.exists():
             add_file(z, digests, 'results/aggregate/cohort-exclusions.csv', optional, text=True)
@@ -443,6 +620,8 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
                       'exporter_code_sha256': sha_file(__file__), 'supplied_report_sha256': args.reviewed_report_sha256,
                       'review_note': 'A matching supplied report hash binds its bytes only; it does not prove any human or agent review or the correctness of its claims.',
                       'scope': 'Final-PCAP-derived measurements; no PCAP payloads, historical runtime values or classification.'}
+        if clean_script:
+            provenance['clean_tuple_analysis_sha256'] = sha_file(clean_script)
         add_bytes(z, digests, 'bundle-provenance.json', (json.dumps(provenance, sort_keys=True, indent=2) + '\n').encode())
         sums = ''.join(digests[name] + '  ' + name + '\n' for name in sorted(digests)).encode()
         z.writestr('SHA256SUMS.txt', sums)
@@ -457,11 +636,15 @@ def main(argv=None):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--reviewed-report-sha256', required=True,
                    help='SHA-256 binds the supplied report bytes only; it does not prove review or correctness')
+    p.add_argument('--clean-tuple', type=Path, help='Optional completed whole-capture clean tuple sensitivity directory')
+    p.add_argument('--clean-tuple-script', type=Path, help='Exact source script used to create the optional sensitivity')
     args = p.parse_args(argv)
     if args.output.exists():
         raise ValueError('Refusing to overwrite output')
     if not valid_sha(args.reviewed_report_sha256):
         raise ValueError('Reviewed report SHA-256 must be lowercase hexadecimal')
+    if bool(args.clean_tuple) != bool(args.clean_tuple_script):
+        raise ValueError('Supply both --clean-tuple and --clean-tuple-script, or neither')
     fixed_file(args.resources, RESOURCES_SHA)
     fixed_file(args.reviewed_report, args.reviewed_report_sha256)
     reviewed = checked_text(args.reviewed_report)
@@ -472,6 +655,16 @@ def main(argv=None):
     if quality.get('counts_by_condition') != {m: 20000 for m in MODES}:
         raise ValueError('Primary condition counts differ from final design')
     check_day_tables(args.day, domains)
+    if args.clean_tuple:
+        source = regular(args.clean_tuple_script)
+        clean_quality = json_file(Path(args.clean_tuple) / CLEAN_FILES[0])
+        validate_clean_provenance(clean_quality, quality, sha_file(source))
+        def rows(path):
+            with regular(path).open(newline='', encoding='utf-8-sig') as f:
+                return list(csv.DictReader(f))
+        validate_clean_tables(rows(Path(args.clean_tuple) / CLEAN_FILES[1]),
+                              rows(Path(args.clean_tuple) / CLEAN_FILES[2]),
+                              rows(Path(args.aggregate) / 'domain-overheads.csv'), domains)
     validate_census(args.census_qa, snapshot=quality['metric_rows_content_sha256'])
     builder = load_builder(args.report_builder)
     draft = builder.make_report(args.aggregate, args.descriptive, args.figures, manifest=args.manifest)
