@@ -146,6 +146,15 @@ representativeness. Neither interval eliminates workload differences, temporal
 drift, response variation, dependence between captures, system load or
 success-selection bias. When the optional supplemental timing map is supplied, the MAL 5 ms/20 ms estimates are separate strata of one domain, each compared with the same domain's undefended cohort. Their observations are not paired by session number. These subgroup labels are not derived from PCAPs and are not required for core results.
 
+**Domain-resampling qualification:** the pinned `aggregate.py` reuses a domain's
+same within-domain draw when that domain is selected more than once in a
+replicate. Its `macro_ci95_domain_cluster_*` fields therefore do not implement
+independent within-domain draws for each selected occurrence and must not be
+presented as conventional two-stage intervals. The point estimates and the
+fixed-domain session intervals are unaffected. Exploratory alternative domain
+resampling methods are documented separately; neither guarantees coverage or
+corrects for nonrepresentative domains and dependent captures.
+
 ## Run
 
 Requires Python 3.11+ and NumPy 2.3.5. NumPy 2.3.5 was used for this development;
@@ -204,6 +213,12 @@ does not isolate traffic within a capture or establish causal effects.
 The [independent aggregation audit](independent-audit/README.md) recomputes
 primary point estimates and counts from the completed metrics database. It
 does not independently reparse packets or validate confidence intervals.
+
+For exploratory alternatives to the affected domain-resampling calculation,
+see [domain resampling](domain-bootstrap/README.md). The [day eligibility
+check](day-eligibility-check/README.md) checks whether a known packet-count
+criterion difference affects the final metrics snapshot; it does not repair
+the general UTC-day tool.
 
 For a complete-census, PCAP-only results narrative prepared for review, see the
 [report builder](report/README.md). It checks the manifest, input provenance,

@@ -12,6 +12,16 @@ and supplied and generated report text are included. Packet payloads,
 historical runtime or application-completion outcomes, classification results,
 credentials, and local machine paths are excluded.
 
+The pinned original aggregator's domain-cluster interval reuses the same
+within-domain session draw when the same domain is selected multiple times in
+a replicate. This is not an independent-occurrence two-stage bootstrap and can
+inflate the within-domain component. Do not present that interval as reviewed
+uncertainty. Point estimates and fixed-domain session-bootstrap intervals are
+unaffected by this specific issue; temporal and independence limits remain.
+UTC-day sensitivity is a separate method. The archive keeps the original
+aggregate CSV for transparency, with an adjacent `results/aggregate/README.md`
+warning, and adds a warning banner before the provisional generated draft.
+
 ## Preconditions and building
 
 Use Python 3.9 or later, the final handoff's `session-manifest.csv` and
@@ -54,13 +64,46 @@ run the published toolkit copy, or place the exact script in the toolkit's
 `clean-tuple-sensitivity/` subdirectory with the matching `aggregate.py` in
 the parent directory. The quality JSON records both script hashes.
 
+To include the exploratory domain-resampling sensitivity, also add both
+`--domain-bootstrap DOMAIN_BOOTSTRAP_RESULTS_DIR` and
+`--domain-bootstrap-script ../domain-bootstrap/domain_bootstrap.py`. The bundle
+keeps its completed CSV, provenance and exact script in
+`results/domain-bootstrap/`. It binds the script, final manifest and metric
+snapshot, input table hashes and primary macro estimates; it checks interval
+shape and replicate counts, not bootstrap draws or statistical coverage.
+Conditional finite-draw results require explicit review. Both domain-only and
+independent-occurrence two-stage results are exploratory; the selected domains
+may not represent a population, and two-stage resampling can overstate variance.
+The optional sensitivity does not replace fixed-domain session intervals.
+Archives made before this addition remain readable, and strict restore rejects
+an incomplete optional set or inconsistent provenance.
+Run `python3 -m unittest -v test_build_bundle test_restore_metrics` for the
+synthetic bundle tests. With NumPy installed, run
+`python3 test_domain_integration.py --domain-script ../domain-bootstrap/domain_bootstrap.py`
+to check the actual sensitivity generator's output schema against the exporter
+using synthetic cohorts only.
+
+To retain the snapshot-bound UTC-day packet-count eligibility check, add both
+`--day-eligibility DAY_PACKET_ELIGIBILITY.json` and
+`--day-eligibility-script ../day-eligibility-check/check_day_packet_count_eligibility.py`.
+The archive includes the result and supplied source under
+`results/day-eligibility/`, records the script hash, and checks the result's
+snapshot, total, category counts and pass/review-required status. It verifies the
+source hash matches the watcher-pinned checker version. The JSON does not itself
+record a source hash; matching archived source bytes does not prove which code
+generated the result. A pass addresses only the packet-count criterion and is not a
+general UTC-day or confidence-interval validation.
+
 Compute `SUPPLIED_REPORT_SHA256` independently from the exact report file and
 pass the lowercase hexadecimal value. The argument name identifies the report
 intended for review; a matching hash **only binds its bytes**. It does not prove
 that any person or agent reviewed the report, that the text is scientifically
 correct, or that its claims are supported. The ZIP includes both the supplied
-report and the report builder's canonical generated review draft for comparison.
-Human or agent review remains necessary before publication.
+report and a clearly marked provisional generator draft for comparison. The
+original generated draft follows the warning banner unchanged; its SHA-256 is
+recorded separately in provenance. Remove or replace its affected intervals,
+related prose and replicate-count labels in the reviewed report. Human or agent
+review remains necessary before publication.
 
 The program refuses to overwrite an output, and checks the pinned manifest,
 resources, aggregation, descriptive, figure, day-sensitivity, report-builder
@@ -93,9 +136,12 @@ or scientific validity.
 - `results/` includes primary, descriptive and exploratory day-cluster tables,
   quality/exclusion records and the independent full-census QA report. If
   supplied, `results/clean-tuple/` holds the clean-capture sensitivity and its
-  exact analysis source.
+  exact analysis source. If supplied, `results/domain-bootstrap/` contains
+  the exploratory domain-resampling sensitivity, provenance and source.
+  `results/day-eligibility/`, if supplied, has the packet-count check and source.
 - `figures/` contains the SVG/PDF figures and their input provenance.
-- `report/` contains the supplied report and the builder's unmodified draft.
+- `report/` contains the supplied report and the generator draft preceded by a
+  caveat banner. The unmodified original follows it and its hash is recorded.
 - `bundle-provenance.json` and `SHA256SUMS.txt` record code, input and member
   hashes. The checksum list covers every other archive member.
 
@@ -109,6 +155,9 @@ python3 restore_metrics.py --bundle FINAL_DERIVED_RESULTS.zip --output NEW_METRI
 The restore tool refuses to overwrite output, verifies ZIP CRC, strict member
 inventory and hashes, the pinned handoff, full-census QA and final snapshot,
 and checks every canonical row against its readable CSV row and final manifest.
+For newly produced bundles, strict ZIP verification also checks the domain-cluster
+caveat and the hash of the draft after its warning banner. Prior bundles remain
+readable for compatibility and do not acquire these newer warnings automatically.
 It creates an empty extractor-error table, matching manifest/schema metadata,
 and performs a SQLite integrity check. It does not recreate packet captures,
 classifications or historical application data. A failed restore removes only

@@ -1,6 +1,7 @@
 """Fabricated, non-study fixtures for the final bundle safeguards."""
 import csv
 import hashlib
+import io
 import json
 from pathlib import Path
 import sqlite3
@@ -107,6 +108,95 @@ class BundleTests(unittest.TestCase):
                    'extractor_errors': 0, 'identity_or_other_flags': {},
                    'aggregate_library_sha256': b.AGGREGATE_SHA, 'analysis_script_sha256': 'b' * 64}
         return detail, summaries, primary, quality, clean_q
+
+    def domain_fixture(self):
+        """Small synthetic complete domain sensitivity, with one conditional row."""
+        domain, summary, quality, output = [], [], {
+            'status': 'complete', 'manifest_sha256': self.manifest_sha,
+            'metric_rows_content_sha256': self.snapshot, 'accepted_metric_rows': 12,
+            'analysis_script_sha256': b.AGGREGATE_SHA}, []
+        for mode in b.MODES[1:]:
+            for metric in ('ip_bytes', 'observed_span'):
+                summary.append({'defense': mode, 'metric': metric, 'domains': 1,
+                                'provisional': 'False', 'macro_overhead_pct': 50})
+                domain.append({'defense': mode, 'metric': metric, 'domain': 'fixture.invalid'})
+                output.append({'defense': mode, 'metric': metric,
+                               'unit': 'bytes' if metric == 'ip_bytes' else 'seconds',
+                               'expected_domains': 1, 'eligible_domains': 1, 'unavailable_domains': '[]',
+                               'requested_replicates': 200, 'valid_replicates': 200,
+                               'undefined_replicates': 0, 'undefined_domain_occurrences': 0,
+                               'macro_overhead_pct': 50, 'domain_only_valid_replicates': 200,
+                               'two_stage_percentile_95_low_pct': 10, 'two_stage_percentile_95_high_pct': 90,
+                               'domain_only_percentile_95_low_pct': 20, 'domain_only_percentile_95_high_pct': 80,
+                               'status': 'complete'})
+        output[0].update(valid_replicates=199, undefined_replicates=1, undefined_domain_occurrences=2,
+                         status='conditional_on_finite_draws')
+        def table(rows):
+            stream = io.StringIO(newline='')
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator='\n')
+            writer.writeheader(); writer.writerows(rows)
+            return stream.getvalue().encode()
+        qbytes, sbytes, dbytes, obytes = json.dumps(quality).encode(), table(summary), table(domain), table(output)
+        script = b'# synthetic domain bootstrap source\n'
+        provenance = {'status': 'review_required', 'manifest_sha256': self.manifest_sha,
+                      'primary_aggregate_sha256': b.AGGREGATE_SHA, 'metric_rows_content_sha256': self.snapshot,
+                      'analysis_script_sha256': sha(script), 'primary_summary_sha256': sha(sbytes),
+                      'primary_quality_sha256': sha(qbytes), 'primary_domain_table_sha256': sha(dbytes),
+                      'primary_domain_rows_checked': 10, 'primary_domain_rows_unavailable': 0,
+                      'output_csv_sha256': sha(obytes), 'seed': 20261125, 'replicates': 200,
+                      'captured_records': 12, 'numpy_version': 'synthetic', 'python_version': 'synthetic',
+                      'random_generator': 'synthetic', 'method': 'synthetic', 'scope': 'synthetic'}
+        return quality, provenance, script, qbytes, sbytes, dbytes, obytes, output
+
+    def test_domain_bootstrap_binds_provenance_counts_and_primary_points(self):
+        quality, provenance, script, qbytes, sbytes, dbytes, obytes, rows = self.domain_fixture()
+        manifest = self.manifest_path.read_bytes()
+        b.validate_domain_bootstrap(provenance, quality, sha(script), obytes, qbytes, sbytes, dbytes, manifest)
+        for field, value in (('metric_rows_content_sha256', '0'*64), ('analysis_script_sha256', 'f'*64),
+                             ('primary_summary_sha256', '0'*64), ('primary_domain_rows_checked', 9),
+                             ('output_csv_sha256', '0'*64), ('status', 'complete')):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                b.validate_domain_bootstrap({**provenance, field: value}, quality, sha(script),
+                                            obytes, qbytes, sbytes, dbytes, manifest)
+        for field, value in (('macro_overhead_pct', 51), ('unit', 'bad'), ('valid_replicates', 201),
+                             ('undefined_domain_occurrences', 0), ('status', 'complete'),
+                             ('two_stage_percentile_95_high_pct', 0), ('eligible_domains', 0)):
+            altered = [dict(r) for r in rows]; altered[0][field] = value
+            stream = io.StringIO(newline=''); writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator='\n')
+            writer.writeheader(); writer.writerows(altered); data = stream.getvalue().encode()
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                b.validate_domain_bootstrap({**provenance, 'output_csv_sha256': sha(data)}, quality,
+                                            sha(script), data, qbytes, sbytes, dbytes, manifest)
+        with self.assertRaisesRegex(ValueError, 'provenance'):
+            b.validate_domain_bootstrap(provenance, quality, sha(script), obytes, qbytes, sbytes, dbytes,
+                                        manifest + b'changed')
+        # Even matching forged hashes must not hide a different identity grid.
+        wrong_manifest = manifest.replace(b'fixture.invalid', b'other.invalid', 1)
+        wrong_quality = {**quality, 'manifest_sha256': sha(wrong_manifest)}
+        wrong_qbytes = json.dumps(wrong_quality).encode()
+        wrong_provenance = {**provenance, 'manifest_sha256': sha(wrong_manifest),
+                            'primary_quality_sha256': sha(wrong_qbytes)}
+        with self.assertRaisesRegex(ValueError, 'manifest mismatch'):
+            b.validate_domain_bootstrap(wrong_provenance, wrong_quality, sha(script), obytes,
+                                        wrong_qbytes, sbytes, dbytes, wrong_manifest)
+        wrong_domain = dbytes.replace(b'fixture.invalid', b'other.invalid', 1)
+        with self.assertRaisesRegex(ValueError, 'primary domain coverage'):
+            b.validate_domain_bootstrap({**provenance, 'primary_domain_table_sha256': sha(wrong_domain)},
+                                        quality, sha(script), obytes, qbytes, sbytes, wrong_domain, manifest)
+
+    def test_day_packet_eligibility_snapshot_counts_and_status(self):
+        quality = {'accepted_metric_rows': 12, 'metric_rows_content_sha256': self.snapshot}
+        result = {'status': 'passed', 'records': 12, 'metric_rows_content_sha256': self.snapshot,
+                  'packet_count_categories': {'valid': 12}, 'scope': b.DAY_ELIGIBILITY_SCOPE}
+        b.validate_day_packet_eligibility(result, quality)
+        review = {**result, 'status': 'review_required', 'packet_count_categories': {'valid': 11, 'nonpositive': 1}}
+        b.validate_day_packet_eligibility(review, quality)
+        for changes in ({'status': 'passed', 'packet_count_categories': {'valid': 11, 'nonpositive': 1}},
+                        {'metric_rows_content_sha256': '0'*64}, {'records': 11},
+                        {'packet_count_categories': {'valid': 13}}, {'packet_count_categories': {'valid': True}},
+                        {'packet_count_categories': {'valid': 11, 'unknown': 1}}, {'scope': ''}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                b.validate_day_packet_eligibility({**result, **changes}, quality)
 
     def test_clean_sensitivity_provenance_and_arithmetic(self):
         detail, summaries, primary, quality, clean_q = self.clean_fixture()
@@ -222,14 +312,56 @@ class BundleTests(unittest.TestCase):
         b.verify_zip(args.output, strict=True)
         with zipfile.ZipFile(args.output) as z:
             self.assertIn(b'SYNTHETIC FIXTURE', z.read('README.md'))
-            self.assertEqual(json.loads(z.read('bundle-provenance.json'))['status'], 'synthetic_fixture')
+            provenance = json.loads(z.read('bundle-provenance.json'))
+            self.assertEqual(provenance['status'], 'synthetic_fixture')
             self.assertEqual(sha(z.read('measurements/session-metrics-canonical.jsonl')), self.snapshot)
             self.assertIn('results/independent-census-qa.json', z.namelist())
             self.assertFalse(any(n.endswith(('.pcap','.pcapng','.tar','.zst')) for n in z.namelist()))
             self.assertEqual(set(hashes) | {'SHA256SUMS.txt'}, set(z.namelist()))
+            self.assertEqual(z.read('results/aggregate/README.md'), b.AGGREGATE_WARNING.encode())
+            draft = z.read('report/canonical-review-draft.md')
+            banner = b.DRAFT_WARNING.encode()
+            self.assertTrue(draft.startswith(banner))
+            self.assertEqual(draft[len(banner):], b'# SYNTHETIC DRAFT')
+            self.assertEqual(provenance['canonical_generated_draft_sha256'], sha(draft[len(banner):]))
+            self.assertEqual(provenance['domain_cluster_caveat_version'], b.CAVEAT_VERSION)
+            content = {n: z.read(n) for n in z.namelist() if n != 'SHA256SUMS.txt'}
             for name in z.namelist():
                 if name.endswith(('.json','.jsonl','.csv','.md','.txt','.svg')):
                     self.assertNotRegex(z.read(name).decode('utf-8'), b.PERSONAL_PATH)
+
+        def write_mutation(name, altered):
+            path = self.root / (name + '.zip')
+            with zipfile.ZipFile(path, 'x') as z:
+                for member, data in altered.items(): z.writestr(member, data)
+                z.writestr('SHA256SUMS.txt', ''.join(sha(altered[n]) + '  ' + n + '\n' for n in sorted(altered)))
+            return path
+
+        # Recomputed outer checksums must not hide removal of the mandatory
+        # warning, a modified banner, or a changed generated-draft suffix.
+        for mutation in ('missing_caveat', 'changed_caveat', 'changed_banner', 'changed_draft'):
+            altered = dict(content)
+            if mutation == 'missing_caveat':
+                del altered['results/aggregate/README.md']
+            elif mutation == 'changed_caveat':
+                altered['results/aggregate/README.md'] = b'no warning\n'
+            elif mutation == 'changed_banner':
+                altered['report/canonical-review-draft.md'] = b'no warning\n' + draft[len(banner):]
+            else:
+                altered['report/canonical-review-draft.md'] = draft + b'changed\n'
+            with self.assertRaisesRegex(ValueError, 'Domain-cluster caveat'):
+                b.verify_zip(write_mutation(mutation, altered), strict=True)
+
+        # Prior-version bundles had no caveat member or banner; strict restore
+        # remains compatible while newly generated bundles include both.
+        legacy = dict(content)
+        del legacy['results/aggregate/README.md']
+        legacy['report/canonical-review-draft.md'] = draft[len(banner):]
+        legacy_provenance = dict(provenance)
+        del legacy_provenance['canonical_generated_draft_sha256']
+        del legacy_provenance['domain_cluster_caveat_version']
+        legacy['bundle-provenance.json'] = json.dumps(legacy_provenance).encode()
+        b.verify_zip(write_mutation('legacy', legacy), strict=True)
 
     def test_optional_clean_sensitivity_in_strict_archive_and_restore_verifier(self):
         detail, summary, primary, quality, clean_q = self.clean_fixture()
@@ -279,6 +411,73 @@ class BundleTests(unittest.TestCase):
                 z.writestr('SHA256SUMS.txt', ''.join(sha(altered[n]) + '  ' + n + '\n' for n in sorted(altered)))
             with self.assertRaisesRegex(ValueError, 'Clean tuple'):
                 b.verify_zip(out, strict=True)
+
+    def test_optional_domain_bootstrap_archive_checks_complete_bound_set(self):
+        quality, provenance, script, qbytes, sbytes, dbytes, obytes, _ = self.domain_fixture()
+        ag, de, fi, day, domain = [self.root / x for x in ('aggregate', 'descriptive', 'figures', 'day', 'domain')]
+        for p in (ag, de, fi, day, domain): p.mkdir()
+        for folder, names in ((ag, b.AGG_FILES), (de, b.DESC_FILES), (fi, b.FIG_FILES), (day, b.DAY_FILES)):
+            for name in names:
+                content = b'<svg>fixture</svg>' if name.endswith('.svg') else (b'%PDF fixture' if name.endswith('.pdf') else b'{}\n')
+                (folder / name).write_bytes(content)
+        (ag / 'quality.json').write_bytes(qbytes)
+        (ag / 'overall-overheads.csv').write_bytes(sbytes)
+        (ag / 'domain-overheads.csv').write_bytes(dbytes)
+        (domain / b.DOMAIN_FILES[0]).write_text(json.dumps(provenance))
+        (domain / b.DOMAIN_FILES[1]).write_bytes(obytes)
+        source = self.root / 'domain_bootstrap.py'; source.write_bytes(script)
+        day_result = self.root / 'day-packet-eligibility.json'
+        day_result.write_text(json.dumps({'status': 'passed', 'records': 12,
+                                         'metric_rows_content_sha256': self.snapshot,
+                                         'packet_count_categories': {'valid': 12}, 'scope': b.DAY_ELIGIBILITY_SCOPE}))
+        day_source = self.root / 'check_day_packet_count_eligibility.py'; day_source.write_text('# synthetic source\n')
+        resources = self.root / 'resources.csv'; resources.write_text('domain\nfixture.invalid\n')
+        census = self.root / 'census.json'; census.write_text('{"status":"synthetic"}\n')
+        report = b'# SYNTHETIC REPORT\n'
+        args = SimpleNamespace(output=self.root/'domain-synthetic.zip', manifest=self.manifest_path,
+                               resources=resources, aggregate=ag, descriptive=de, figures=fi, day=day,
+                               census_qa=census, reviewed_report_sha256=sha(report),
+                               domain_bootstrap=domain, domain_bootstrap_script=source,
+                               day_eligibility=day_result, day_eligibility_script=day_source)
+        result = b.verify_database(self.db, self.manifest, self.manifest_sha, self.snapshot)
+        fake_day_sha = sha(day_source.read_bytes())
+        b.assemble_zip(args, self.db, self.manifest, quality, result, report, '# SYNTHETIC DRAFT', synthetic=True,
+                       expected_day_eligibility_sha=fake_day_sha)
+        b.verify_zip(args.output, strict=True, expected_day_eligibility_sha=fake_day_sha)
+        with self.assertRaisesRegex(ValueError, 'UTC-day packet-count eligibility source hash mismatch'):
+            b.verify_zip(args.output, strict=True)
+        with zipfile.ZipFile(args.output) as z:
+            content = {n: z.read(n) for n in z.namelist() if n != 'SHA256SUMS.txt'}
+        self.assertEqual(content['results/domain-bootstrap/domain_bootstrap.py'], script)
+        for mutation in ('partial', 'all_removed', 'source', 'csv', 'primary',
+                         'day_partial', 'day_all_removed', 'day_source', 'day_snapshot', 'day_status'):
+            altered = dict(content)
+            if mutation == 'partial':
+                del altered['results/domain-bootstrap/domain-session-bootstrap.csv']
+            elif mutation == 'all_removed':
+                altered = {n: v for n, v in altered.items() if not n.startswith('results/domain-bootstrap/')}
+            elif mutation == 'source':
+                altered['results/domain-bootstrap/domain_bootstrap.py'] += b'# changed\n'
+            elif mutation == 'csv':
+                altered['results/domain-bootstrap/domain-session-bootstrap.csv'] += b'changed\n'
+            elif mutation == 'primary':
+                altered['results/aggregate/overall-overheads.csv'] += b'changed\n'
+            elif mutation == 'day_partial':
+                del altered['results/day-eligibility/day-packet-eligibility.json']
+            elif mutation == 'day_all_removed':
+                altered = {n: v for n, v in altered.items() if not n.startswith('results/day-eligibility/')}
+            elif mutation == 'day_source':
+                altered['results/day-eligibility/check_day_packet_count_eligibility.py'] += b'# changed\n'
+            else:
+                row = json.loads(altered['results/day-eligibility/day-packet-eligibility.json'])
+                row['metric_rows_content_sha256' if mutation == 'day_snapshot' else 'status'] = 'invalid'
+                altered['results/day-eligibility/day-packet-eligibility.json'] = json.dumps(row).encode()
+            out = self.root / ('domain-' + mutation + '.zip')
+            with zipfile.ZipFile(out, 'x') as z:
+                for name, data in altered.items(): z.writestr(name, data)
+                z.writestr('SHA256SUMS.txt', ''.join(sha(altered[n]) + '  ' + n + '\n' for n in sorted(altered)))
+            with self.assertRaisesRegex(ValueError, 'Exploratory domain bootstrap|UTC-day packet-count eligibility'):
+                b.verify_zip(out, strict=True, expected_day_eligibility_sha=fake_day_sha)
 
     def test_manifest_duplicate_and_nonportable_filename_rejected(self):
         path = self.root / 'invalid.csv'

@@ -32,6 +32,8 @@ FIGURE_SHA = 'e7354d9285fe4ee9a5b8228e601254a6cb39a36cf20fd86ad4cc26e3fa499244'
 DAY_SHA = '9ae4b14c64ad24b684c2507c127dd20a074c145539e4d51a65ea7aed54b25ca9'
 REPORT_SHA = 'fd7e47dbfdbe04ed68436a5800c88a28e5e6669f26d3fe9aaae6bd716a11a6d4'
 VERIFIER_SHA = '865964780a80b87be79f96a37216995dfb1cc99f0f6e9baa7e52c9739b840696'
+DAY_ELIGIBILITY_SHA = 'a7b4aecabd8c6e3cfe08884a9c12a4b9bcca639ae95c03439f04342755d16a35'
+DAY_ELIGIBILITY_SCOPE = 'Packet-count eligibility only; requires independent manifest/identity QA and does not fix the day tool.'
 SCHEMA = '2026-11-25-ip-frame-direction-v2'
 AGG_FILES = ('quality.json', 'overall-overheads.csv', 'domain-overheads.csv', 'extraction-errors.json')
 DESC_FILES = ('descriptive-provenance.json', 'session-distributions-by-cohort.csv',
@@ -44,6 +46,33 @@ FIG_FILES = ('figure-provenance.json', '01-overall-overheads.svg', '01-overall-o
              '02-domain-spread.svg', '02-domain-spread.pdf')
 CLEAN_FILES = ('clean-tuple-quality.json', 'domain-clean-tuple-sensitivity.csv',
                'overall-clean-tuple-sensitivity.csv')
+DOMAIN_FILES = ('domain-session-provenance.json', 'domain-session-bootstrap.csv')
+CAVEAT_VERSION = 'domain-cluster-reused-draw-v1'
+DRAFT_WARNING = '''> **PROVISIONAL GENERATOR DRAFT — NOT REVIEWED.** Its domain-cluster interval
+> columns use the original aggregator's reused within-domain session draw for
+> repeated domain selections. This is not an independent-occurrence two-stage
+> bootstrap and can inflate the within-domain contribution. Remove or replace
+> the affected intervals, related prose and replicate-count labels during review.
+> Point estimates and fixed-domain session
+> intervals are unaffected by this specific issue; their assumptions still apply.
+> The separate UTC-day sensitivity is a different analysis. The exact unmodified
+> generator output starts after this warning and is hashed in bundle provenance.
+
+'''
+AGGREGATE_WARNING = '''# Caveat for the original aggregate tables
+
+The pinned original aggregator reuses the same within-domain session draw when
+a domain is selected more than once in a resampling replicate. The
+`macro_ci95_domain_cluster_low` and `macro_ci95_domain_cluster_high` fields in
+`overall-overheads.csv` are therefore not conventional independent-occurrence
+two-stage bootstrap intervals and can inflate the within-domain contribution.
+Do not use these fields as the reviewed domain uncertainty results. Consult the
+supplied report and any supplementary sensitivity after independent review.
+The point estimates and fixed-domain session-bootstrap intervals are unaffected
+by this specific implementation issue, though their statistical assumptions and
+temporal limitations remain. UTC-day cluster sensitivity is a separate method.
+The unmodified raw tables are retained for transparency and reproducibility.
+'''
 METRIC_FIELDS = ('defense', 'domain', 'session', 'filename', 'drive_file_id', 'sha256', 'capture_bytes',
                  'capture_type', 'encapsulation', 'packet_count', 'packet_bytes', 'ip_bytes', 'ip_valid',
                  'udp443_direction_valid', 'udp443_up_ip_bytes', 'udp443_down_ip_bytes', 'other_ip_bytes',
@@ -394,6 +423,124 @@ def validate_clean_tables(detail, summaries, primary, domains, *, sessions=400):
                 raise ValueError('Clean tuple empty comparison has a difference')
 
 
+def validate_domain_bootstrap(prov, quality, script_sha, data, primary_quality, primary_summary, primary_domain, manifest_data):
+    """Bind optional exploratory domain bootstrap to the exact primary inputs.
+
+    This checks provenance, coverage, interval shape and point-estimate joins;
+    it does not rerun bootstrap draws or establish interval coverage.
+    """
+    digest = lambda x: hashlib.sha256(x).hexdigest()
+    if (prov.get('status') not in ('complete', 'review_required')
+            or prov.get('manifest_sha256') != quality.get('manifest_sha256')
+            or prov.get('metric_rows_content_sha256') != quality.get('metric_rows_content_sha256')
+            or prov.get('primary_aggregate_sha256') != quality.get('analysis_script_sha256')
+            or prov.get('captured_records') != quality.get('accepted_metric_rows')
+            or prov.get('analysis_script_sha256') != script_sha
+            or prov.get('primary_quality_sha256') != digest(primary_quality)
+            or prov.get('primary_summary_sha256') != digest(primary_summary)
+            or prov.get('primary_domain_table_sha256') != digest(primary_domain)
+            or prov.get('output_csv_sha256') != digest(data)
+            or quality.get('manifest_sha256') != digest(manifest_data)
+            or (quality.get('accepted_metric_rows') == 120000 and quality.get('manifest_sha256') != MANIFEST_SHA)
+            or type(prov.get('seed')) is not int or type(prov.get('replicates')) is not int
+            or prov['replicates'] < 100
+            or any(not isinstance(prov.get(k), str) or not prov[k].strip()
+                   for k in ('numpy_version', 'python_version', 'random_generator', 'method', 'scope'))):
+        raise ValueError('Exploratory domain bootstrap provenance mismatch')
+    def read(raw):
+        return list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'), newline='')))
+    primary_rows = [r for r in read(primary_summary) if r.get('metric') in ('ip_bytes', 'observed_span')]
+    bootstrap_rows = read(data)
+    expected = {(mode, metric) for mode in MODES[1:] for metric in ('ip_bytes', 'observed_span')}
+    def keyed(rows):
+        result = {}
+        for row in rows:
+            key = (row.get('defense'), row.get('metric'))
+            if key in result:
+                raise ValueError('Duplicate exploratory domain bootstrap row')
+            result[key] = row
+        return result
+    actual, primary = keyed(bootstrap_rows), keyed(primary_rows)
+    if set(actual) != expected or set(primary) != expected:
+        raise ValueError('Incomplete exploratory domain bootstrap or primary summary')
+    detail = [r for r in read(primary_domain) if r.get('metric') in ('ip_bytes', 'observed_span')]
+    detail_keys = [(r.get('defense'), r.get('metric'), r.get('domain')) for r in detail]
+    domain_names = {key[2] for key in detail_keys}
+    if (None in domain_names or '' in domain_names or not domain_names
+            or len(detail_keys) != len(set(detail_keys))
+            or set(detail_keys) != {(mode, metric, domain) for mode, metric in expected for domain in domain_names}
+            or (quality.get('accepted_metric_rows') == 120000 and len(domain_names) != 50)):
+        raise ValueError('Exploratory domain bootstrap primary domain coverage mismatch')
+    try:
+        identities = [(r['defense'], r['domain'], int(r['session'])) for r in read(manifest_data)]
+        sessions = {key[2] for key in identities}
+        if (not sessions or sessions != set(range(1, len(sessions) + 1))
+                or len(identities) != len(set(identities))
+                or len(identities) != quality.get('accepted_metric_rows')
+                or set(identities) != {(mode, domain, session) for mode in MODES for domain in domain_names for session in sessions}):
+            raise ValueError('Manifest identities differ from primary domain coverage')
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError('Exploratory domain bootstrap manifest mismatch: ' + str(exc)) from exc
+    domains = None
+    statuses = set()
+    for key, row in actual.items():
+        try:
+            p = primary[key]
+            n = int(row['expected_domains'])
+            if (n <= 0 or int(row['eligible_domains']) != n or json.loads(row['unavailable_domains']) != []
+                    or int(p['domains']) != n or p['provisional'].lower() != 'false'
+                    or row['unit'] != ('bytes' if key[1] == 'ip_bytes' else 'seconds')):
+                raise ValueError('Incomplete exploratory domain cohort')
+            if domains is None:
+                domains = n
+            if n != domains or n != len(domain_names):
+                raise ValueError('Inconsistent domain coverage')
+            point, ref = float(row['macro_overhead_pct']), float(p['macro_overhead_pct'])
+            if not math.isfinite(point) or not math.isfinite(ref) or not math.isclose(point, ref, rel_tol=1e-10, abs_tol=1e-8):
+                raise ValueError('Exploratory domain macro does not match primary summary')
+            req, valid = int(row['requested_replicates']), int(row['valid_replicates'])
+            undefined, occurrences = int(row['undefined_replicates']), int(row['undefined_domain_occurrences'])
+            domain_valid = int(row['domain_only_valid_replicates'])
+            if (req != prov['replicates'] or not 0 <= valid <= req or undefined != req - valid
+                    or not undefined <= occurrences <= req * n or domain_valid != req):
+                raise ValueError('Invalid exploratory domain bootstrap replicate counts')
+            expected_status = 'complete' if valid == req else 'conditional_on_finite_draws' if valid else 'no_valid_replicates'
+            if row['status'] != expected_status:
+                raise ValueError('Exploratory domain bootstrap row status mismatch')
+            statuses.add(expected_status)
+            for prefix, count in (('two_stage', valid), ('domain_only', domain_valid)):
+                lo, hi = row[prefix + '_percentile_95_low_pct'], row[prefix + '_percentile_95_high_pct']
+                if count == 0:
+                    if lo or hi:
+                        raise ValueError('Unavailable exploratory interval has bounds')
+                elif not (math.isfinite(float(lo)) and math.isfinite(float(hi)) and float(lo) <= float(hi)):
+                    raise ValueError('Invalid exploratory interval bounds')
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError('Invalid exploratory domain bootstrap table: ' + str(exc)) from exc
+    if (prov.get('primary_domain_rows_checked') != len(expected) * domains
+            or prov.get('primary_domain_rows_unavailable') != 0
+            or prov['status'] != ('complete' if statuses == {'complete'} else 'review_required')):
+        raise ValueError('Exploratory domain bootstrap coverage/status mismatch')
+
+
+def validate_day_packet_eligibility(result, quality):
+    """Check packet-count QA schema/snapshot, not the check's computation."""
+    categories = result.get('packet_count_categories')
+    allowed = {'valid', 'invalid_json', 'non_object', 'missing', 'null', 'boolean',
+               'non_numeric', 'nonfinite_or_overflow', 'nonpositive'}
+    total = quality.get('accepted_metric_rows')
+    if (not isinstance(categories, dict) or not set(categories) <= allowed
+            or any(type(v) is not int or v < 0 for v in categories.values())
+            or type(total) is not int or total <= 0 or sum(categories.values()) != total
+            or result.get('records') != total
+            or result.get('metric_rows_content_sha256') != quality.get('metric_rows_content_sha256')
+            or result.get('scope') != DAY_ELIGIBILITY_SCOPE):
+        raise ValueError('UTC-day packet-count eligibility result is invalid or mismatched')
+    expected_status = 'passed' if categories.get('valid', 0) == total else 'review_required'
+    if result.get('status') != expected_status:
+        raise ValueError('UTC-day packet-count eligibility status mismatch')
+
+
 def load_builder(path, expected_sha=REPORT_SHA):
     fixed_file(path, expected_sha)
     spec = importlib.util.spec_from_file_location('verified_study_report_builder', path)
@@ -465,6 +612,16 @@ captures are in the final [six-defense handoff](https://drive.google.com/drive/f
 All traffic and time values here came from that handoff's standalone PCAPs.
 No historical runtime or application-completion values were used.
 
+**Domain-cluster interval caveat:** The original aggregate's domain-cluster
+interval reuses a domain's same within-domain session draw when that domain is
+selected repeatedly in a replicate. It is not an independent-occurrence
+two-stage bootstrap and can inflate the within-domain component. The raw
+`results/aggregate/overall-overheads.csv` fields and the provisional generator
+draft retain those original intervals; see `results/aggregate/README.md` and
+the draft's warning. Review the supplied report and any exploratory sensitivity
+before using them. Point estimates and fixed-domain session-bootstrap
+intervals are unaffected by this particular issue. UTC-day analysis is separate.
+
 `measurements/session-metrics.csv` is a readable table by defense, domain and
 session. `measurements/session-metrics-canonical.jsonl` contains the exact
 ordered JSON array rows hashed by the public aggregator, including the original
@@ -485,10 +642,20 @@ sensitivity tables, provenance and the exact sensitivity script. It is not a
 correction for unrelated traffic or confounding. The archived script is a
 source record and is not runnable from its archive location: use the published
 toolkit copy, or place this exact script in its toolkit subdirectory with the
-matching `aggregate.py` one directory above. `figures/` provides SVG/PDF
+matching `aggregate.py` one directory above. Optional `results/domain-bootstrap/`
+contains exploratory domain-only and independent-occurrence two-stage
+sensitivities and their exact source. These require independent review, do not establish confidence
+coverage or representativeness, and two-stage resampling can overstate variance.
+Optional `results/day-eligibility/` preserves the snapshot-bound packet-count
+eligibility check and its source. Its status covers this one criterion only;
+it does not establish other UTC-day eligibility or interval validity. The check
+JSON does not identify its source hash; the archived source is checked against
+the watcher's pinned version, but matching bytes do not prove that code ran it.
+`figures/` provides SVG/PDF
 figures and input provenance. The report
-folder contains the supplied report and the canonical generated draft for
-comparison. Supplying a matching report hash binds the report bytes; it does
+folder contains the supplied report and the provisional generator draft, with a
+warning prepended and the original draft's hash recorded in bundle provenance.
+Supplying a matching report hash binds the report bytes; it does
 **not** establish that anyone reviewed the report or that its claims are true.
 An independent reviewer should check the report and figures against the source
 tables before publication. `SHA256SUMS.txt` hashes every other archive member.
@@ -509,7 +676,7 @@ cannot remove temporal confounding or establish independent days.
 '''
 
 
-def verify_zip(path, *, strict=False):
+def verify_zip(path, *, strict=False, expected_day_eligibility_sha=DAY_ELIGIBILITY_SHA):
     with zipfile.ZipFile(path) as z:
         if z.testzip() is not None:
             raise ValueError('ZIP CRC validation failed')
@@ -536,14 +703,36 @@ def verify_zip(path, *, strict=False):
             allowed_exclusions = {'results/aggregate/cohort-exclusions.csv',
                                   'results/aggregate/no-cohort-exclusions.txt'}
             clean_members = {'results/clean-tuple/' + n for n in CLEAN_FILES} | {'results/clean-tuple/clean_tuple_sensitivity.py'}
+            domain_members = {'results/domain-bootstrap/' + n for n in DOMAIN_FILES} | {'results/domain-bootstrap/domain_bootstrap.py'}
+            day_eligibility_members = {'results/day-eligibility/day-packet-eligibility.json',
+                                       'results/day-eligibility/check_day_packet_count_eligibility.py'}
+            caveat_member = {'results/aggregate/README.md'}
             present_clean = names & clean_members
+            present_domain = names & domain_members
+            present_day_eligibility = names & day_eligibility_members
             if present_clean and present_clean != clean_members:
                 raise ValueError('Clean tuple sensitivity is incomplete')
-            if len(names & allowed_exclusions) != 1 or names != expected | (names & allowed_exclusions) | present_clean:
+            if present_domain and present_domain != domain_members:
+                raise ValueError('Exploratory domain bootstrap is incomplete')
+            if present_day_eligibility and present_day_eligibility != day_eligibility_members:
+                raise ValueError('UTC-day packet-count eligibility evidence is incomplete')
+            if len(names & allowed_exclusions) != 1 or names != expected | (names & allowed_exclusions) | present_clean | present_domain | present_day_eligibility | (names & caveat_member):
                 raise ValueError('Bundle contains an unexpected or missing member')
             provenance = json.loads(z.read('bundle-provenance.json'))
             if ('clean_tuple_analysis_sha256' in provenance) != bool(present_clean):
                 raise ValueError('Clean tuple provenance and archive members disagree')
+            if ('domain_bootstrap_analysis_sha256' in provenance) != bool(present_domain):
+                raise ValueError('Exploratory domain bootstrap provenance and archive members disagree')
+            if ('day_packet_eligibility_script_sha256' in provenance) != bool(present_day_eligibility):
+                raise ValueError('UTC-day packet-count eligibility provenance and archive members disagree')
+            caveat_version = provenance.get('domain_cluster_caveat_version')
+            original_draft_sha = provenance.get('canonical_generated_draft_sha256')
+            if caveat_version is None and original_draft_sha is None:
+                if names & caveat_member:
+                    raise ValueError('Domain-cluster caveat member lacks provenance')
+            elif (caveat_version != CAVEAT_VERSION or not valid_sha(original_draft_sha)
+                  or not caveat_member <= names):
+                raise ValueError('Domain-cluster caveat provenance or member is invalid')
         for name, expected in listed.items():
             h = hashlib.sha256()
             with z.open(name) as f:
@@ -551,6 +740,31 @@ def verify_zip(path, *, strict=False):
                     h.update(block)
             if h.hexdigest() != expected:
                 raise ValueError('Bundle member hash mismatch: ' + name)
+        if strict and caveat_version is not None:
+            archived_draft = z.read('report/canonical-review-draft.md')
+            banner = DRAFT_WARNING.encode('utf-8')
+            if (z.read('results/aggregate/README.md') != AGGREGATE_WARNING.encode('utf-8')
+                    or not archived_draft.startswith(banner)
+                    or hashlib.sha256(archived_draft[len(banner):]).hexdigest() != original_draft_sha):
+                raise ValueError('Domain-cluster caveat or original draft hash mismatch')
+        if strict and present_domain:
+            script_sha = hashlib.sha256(z.read('results/domain-bootstrap/domain_bootstrap.py')).hexdigest()
+            if provenance.get('domain_bootstrap_analysis_sha256') != script_sha:
+                raise ValueError('Exploratory domain bootstrap source hash mismatch')
+            validate_domain_bootstrap(
+                json.loads(z.read('results/domain-bootstrap/domain-session-provenance.json')),
+                json.loads(z.read('results/aggregate/quality.json')), script_sha,
+                z.read('results/domain-bootstrap/domain-session-bootstrap.csv'),
+                z.read('results/aggregate/quality.json'), z.read('results/aggregate/overall-overheads.csv'),
+                z.read('results/aggregate/domain-overheads.csv'), z.read('inputs/session-manifest.csv'))
+        if strict and present_day_eligibility:
+            code_sha = hashlib.sha256(z.read('results/day-eligibility/check_day_packet_count_eligibility.py')).hexdigest()
+            if (provenance.get('day_packet_eligibility_script_sha256') != code_sha
+                    or code_sha != expected_day_eligibility_sha):
+                raise ValueError('UTC-day packet-count eligibility source hash mismatch')
+            validate_day_packet_eligibility(
+                json.loads(z.read('results/day-eligibility/day-packet-eligibility.json')),
+                json.loads(z.read('results/aggregate/quality.json')))
         if strict and present_clean:
             quality = json.loads(z.read('results/aggregate/quality.json'))
             clean_quality = json.loads(z.read('results/clean-tuple/clean-tuple-quality.json'))
@@ -573,7 +787,8 @@ def verify_zip(path, *, strict=False):
             validate_clean_tables(detail, summary, primary, domains, sessions=sessions)
 
 
-def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synthetic=False):
+def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synthetic=False,
+                 expected_day_eligibility_sha=DAY_ELIGIBILITY_SHA):
     """Write a previously validated snapshot. The synthetic flag is test-only."""
     args.output.parent.mkdir(parents=True, exist_ok=True)
     digests = {}
@@ -593,6 +808,7 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
                 if name.endswith('.svg') and 'SYNTHETIC FIXTURE' in checked_text(source).decode('utf-8-sig'):
                     raise ValueError('Synthetic figure cannot be exported')
                 add_file(z, digests, prefix + '/' + name, source, text=not name.endswith('.pdf'))
+        add_bytes(z, digests, 'results/aggregate/README.md', AGGREGATE_WARNING.encode('utf-8'))
         clean_dir = getattr(args, 'clean_tuple', None)
         clean_script = getattr(args, 'clean_tuple_script', None)
         if bool(clean_dir) != bool(clean_script):
@@ -601,6 +817,21 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
             for name in CLEAN_FILES:
                 add_file(z, digests, 'results/clean-tuple/' + name, Path(clean_dir) / name, text=True)
             add_file(z, digests, 'results/clean-tuple/clean_tuple_sensitivity.py', clean_script, text=True)
+        domain_dir = getattr(args, 'domain_bootstrap', None)
+        domain_script = getattr(args, 'domain_bootstrap_script', None)
+        if bool(domain_dir) != bool(domain_script):
+            raise ValueError('Supply both domain bootstrap directory and script')
+        if domain_dir:
+            for name in DOMAIN_FILES:
+                add_file(z, digests, 'results/domain-bootstrap/' + name, Path(domain_dir) / name, text=True)
+            add_file(z, digests, 'results/domain-bootstrap/domain_bootstrap.py', domain_script, text=True)
+        day_eligibility = getattr(args, 'day_eligibility', None)
+        day_eligibility_script = getattr(args, 'day_eligibility_script', None)
+        if bool(day_eligibility) != bool(day_eligibility_script):
+            raise ValueError('Supply both UTC-day packet-count eligibility result and script')
+        if day_eligibility:
+            add_file(z, digests, 'results/day-eligibility/day-packet-eligibility.json', day_eligibility, text=True)
+            add_file(z, digests, 'results/day-eligibility/check_day_packet_count_eligibility.py', day_eligibility_script, text=True)
         optional = Path(args.aggregate) / 'cohort-exclusions.csv'
         if optional.exists():
             add_file(z, digests, 'results/aggregate/cohort-exclusions.csv', optional, text=True)
@@ -608,7 +839,8 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
             add_bytes(z, digests, 'results/aggregate/no-cohort-exclusions.txt',
                       b'The aggregator did not emit a cohort-exclusions.csv file; consult quality.json.\n')
         add_bytes(z, digests, 'report/supplied-report.md', reviewed)
-        add_bytes(z, digests, 'report/canonical-review-draft.md', draft.encode('utf-8'))
+        draft_bytes = draft.encode('utf-8')
+        add_bytes(z, digests, 'report/canonical-review-draft.md', DRAFT_WARNING.encode('utf-8') + draft_bytes)
         add_file(z, digests, 'results/independent-census-qa.json', args.census_qa, text=True)
         provenance = {'status': 'synthetic_fixture' if synthetic else 'complete_hash_bound_inputs',
                       'manifest_sha256': MANIFEST_SHA, 'resources_sha256': RESOURCES_SHA,
@@ -617,15 +849,21 @@ def assemble_zip(args, con, manifest, quality, result, reviewed, draft, *, synth
                       'aggregate_code_sha256': AGGREGATE_SHA, 'descriptive_code_sha256': DESCRIBE_SHA,
                       'figure_code_sha256': FIGURE_SHA, 'day_cluster_code_sha256': DAY_SHA,
                       'report_builder_sha256': REPORT_SHA, 'independent_census_verifier_sha256': VERIFIER_SHA,
+                      'domain_cluster_caveat_version': CAVEAT_VERSION,
+                      'canonical_generated_draft_sha256': hashlib.sha256(draft_bytes).hexdigest(),
                       'exporter_code_sha256': sha_file(__file__), 'supplied_report_sha256': args.reviewed_report_sha256,
                       'review_note': 'A matching supplied report hash binds its bytes only; it does not prove any human or agent review or the correctness of its claims.',
                       'scope': 'Final-PCAP-derived measurements; no PCAP payloads, historical runtime values or classification.'}
         if clean_script:
             provenance['clean_tuple_analysis_sha256'] = sha_file(clean_script)
+        if domain_script:
+            provenance['domain_bootstrap_analysis_sha256'] = sha_file(domain_script)
+        if day_eligibility_script:
+            provenance['day_packet_eligibility_script_sha256'] = sha_file(day_eligibility_script)
         add_bytes(z, digests, 'bundle-provenance.json', (json.dumps(provenance, sort_keys=True, indent=2) + '\n').encode())
         sums = ''.join(digests[name] + '  ' + name + '\n' for name in sorted(digests)).encode()
         z.writestr('SHA256SUMS.txt', sums)
-    verify_zip(args.output, strict=True)
+    verify_zip(args.output, strict=True, expected_day_eligibility_sha=expected_day_eligibility_sha)
     return digests
 
 
@@ -638,6 +876,10 @@ def main(argv=None):
                    help='SHA-256 binds the supplied report bytes only; it does not prove review or correctness')
     p.add_argument('--clean-tuple', type=Path, help='Optional completed whole-capture clean tuple sensitivity directory')
     p.add_argument('--clean-tuple-script', type=Path, help='Exact source script used to create the optional sensitivity')
+    p.add_argument('--domain-bootstrap', type=Path, help='Optional completed exploratory domain bootstrap output directory')
+    p.add_argument('--domain-bootstrap-script', type=Path, help='Exact source script used for the optional domain bootstrap')
+    p.add_argument('--day-eligibility', type=Path, help='Optional completed UTC-day packet-count check JSON')
+    p.add_argument('--day-eligibility-script', type=Path, help='Pinned source archived for inspection; the check JSON does not bind its source bytes')
     args = p.parse_args(argv)
     if args.output.exists():
         raise ValueError('Refusing to overwrite output')
@@ -645,6 +887,10 @@ def main(argv=None):
         raise ValueError('Reviewed report SHA-256 must be lowercase hexadecimal')
     if bool(args.clean_tuple) != bool(args.clean_tuple_script):
         raise ValueError('Supply both --clean-tuple and --clean-tuple-script, or neither')
+    if bool(args.domain_bootstrap) != bool(args.domain_bootstrap_script):
+        raise ValueError('Supply both --domain-bootstrap and --domain-bootstrap-script, or neither')
+    if bool(args.day_eligibility) != bool(args.day_eligibility_script):
+        raise ValueError('Supply both --day-eligibility and --day-eligibility-script, or neither')
     fixed_file(args.resources, RESOURCES_SHA)
     fixed_file(args.reviewed_report, args.reviewed_report_sha256)
     reviewed = checked_text(args.reviewed_report)
@@ -665,6 +911,17 @@ def main(argv=None):
         validate_clean_tables(rows(Path(args.clean_tuple) / CLEAN_FILES[1]),
                               rows(Path(args.clean_tuple) / CLEAN_FILES[2]),
                               rows(Path(args.aggregate) / 'domain-overheads.csv'), domains)
+    if args.domain_bootstrap:
+        source = regular(args.domain_bootstrap_script)
+        folder = Path(args.domain_bootstrap)
+        validate_domain_bootstrap(
+            json_file(folder / DOMAIN_FILES[0]), quality, sha_file(source),
+            checked_text(folder / DOMAIN_FILES[1]), checked_text(Path(args.aggregate) / 'quality.json'),
+            checked_text(Path(args.aggregate) / 'overall-overheads.csv'),
+            checked_text(Path(args.aggregate) / 'domain-overheads.csv'), checked_text(args.manifest))
+    if args.day_eligibility:
+        fixed_file(args.day_eligibility_script, DAY_ELIGIBILITY_SHA)
+        validate_day_packet_eligibility(json_file(args.day_eligibility), quality)
     validate_census(args.census_qa, snapshot=quality['metric_rows_content_sha256'])
     builder = load_builder(args.report_builder)
     draft = builder.make_report(args.aggregate, args.descriptive, args.figures, manifest=args.manifest)
